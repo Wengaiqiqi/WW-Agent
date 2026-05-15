@@ -77,6 +77,10 @@ class MCPHost:
     def a2a_urls(self) -> dict[str, str]:
         return {k: v.a2a_url for k, v in self._clients.items() if v.a2a_url}
 
+    def list_handles(self):
+        """Return the list of internal client handles, for /agents display."""
+        return list(self._clients.values())
+
     async def shutdown_all(self) -> None:
         # On Windows, anyio's stdio_client can raise exceptions during cleanup due to
         # cancel scope conflicts. Since we're terminating all processes anyway, we suppress

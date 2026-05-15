@@ -180,6 +180,18 @@ async def run_prompt(prompt: str) -> int:
         await host.shutdown_all()
 
 
+def _handle_slash_agents(host, *, out=None) -> None:
+    """Render an /agents table to `out` (defaults to stdout)."""
+    import sys
+    out = out or sys.stdout
+    rows = []
+    for handle in host.list_handles():
+        c = handle.card
+        url = handle.a2a_url or "-"
+        rows.append(f"{c.id:16s} v{c.version:6s} a2a={url}")
+    out.write("\n".join(rows) + "\n")
+
+
 async def run_repl() -> int:
     mux = StreamMux()
     mux.emit(
