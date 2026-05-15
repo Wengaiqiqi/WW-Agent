@@ -11,7 +11,12 @@ def test_loop_action_enum_values():
 
 def test_loop_action_no_deps():
     import ast, inspect
-    source = inspect.getsource(LoopAction)
+    mod = __import__("orchestrator.repl_types", fromlist=["LoopAction"])
+    source = inspect.getsource(mod)
     tree = ast.parse(source)
-    imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
-    assert len(imports) == 0, "LoopAction module should have zero imports"
+    imports = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom) and n.module is not None
+        and (n.module == "orchestrator" or n.module.startswith("orchestrator."))
+    ]
+    assert len(imports) == 0, "LoopAction module should have zero intra-orchestrator imports"
