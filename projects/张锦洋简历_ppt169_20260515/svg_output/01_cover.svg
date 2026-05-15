@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="coverBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D47A1"/>
+      <stop offset="40%" stop-color="#1565C0"/>
+      <stop offset="100%" stop-color="#42A5F5"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="85%" cy="15%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bgGlow2" cx="15%" cy="80%" r="40%">
+      <stop offset="0%" stop-color="#42A5F5" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#0D47A1" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#42A5F5" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#42A5F5" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+
+  <!--背景-->
+  <rect x="0" y="0" width="1280" height="720" fill="url(#coverBg)"/>
+  <rect x="0" y="0" width="1280" height="720" fill="url(#bgGlow)"/>
+  <rect x="0" y="0" width="1280" height="720" fill="url(#bgGlow2)"/>
+
+  <!--装饰圆环-->
+  <circle cx="1100" cy="150" r="180" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="1"/>
+  <circle cx="1100" cy="150" r="120" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="1"/>
+  <circle cx="1100" cy="150" r="60" fill="none" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="2"/>
+
+  <circle cx="200" cy="580" r="100" fill="none" stroke="#42A5F5" stroke-opacity="0.12" stroke-width="1"/>
+  <circle cx="200" cy="580" r="60" fill="none" stroke="#42A5F5" stroke-opacity="0.08" stroke-width="1"/>
+
+  <!--装饰点阵-->
+  <circle cx="150" cy="160" r="3" fill="#FFFFFF" fill-opacity="0.25"/>
+  <circle cx="180" cy="140" r="2" fill="#FFFFFF" fill-opacity="0.18"/>
+  <circle cx="210" cy="170" r="2.5" fill="#FFFFFF" fill-opacity="0.2"/>
+  <circle cx="1150" cy="600" r="3" fill="#FFFFFF" fill-opacity="0.15"/>
+  <circle cx="1180" cy="630" r="2" fill="#FFFFFF" fill-opacity="0.12"/>
+  <circle cx="1120" cy="620" r="2.5" fill="#FFFFFF" fill-opacity="0.18"/>
+
+  <!--Name 大标题-->
+  <text x="640" y="280" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="72" font-weight="bold" fill="#FFFFFF" letter-spacing="16">张锦洋</text>
+
+  <!--分隔线-->
+  <rect x="540" y="310" width="200" height="3" rx="1.5" fill="url(#lineGrad)"/>
+
+  <!--Subtitle-->
+  <text x="640" y="370" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="28" font-weight="normal" fill="#FFFFFF" fill-opacity="0.9" letter-spacing="8">个人简历</text>
+
+  <!--Info line-->
+  <text x="640" y="480" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="18" font-weight="normal" fill="#FFFFFF" fill-opacity="0.65" letter-spacing="3">人工智能专业 · 本科在读 · 18991321768</text>
+
+  <!--底部装饰线-->
+  <rect x="580" y="620" width="120" height="2" rx="1" fill="#FFFFFF" fill-opacity="0.3"/>
+
+  <!--Sparkles icon placeholder-->
+  <use data-icon="tabler-filled/sparkles" x="1090" y="140" width="32" height="32" fill="#FFFFFF" fill-opacity="0.35"/>
+
+  <!--页码-->
+  <text x="640" y="680" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#FFFFFF" fill-opacity="0.4">01</text>
+</svg>

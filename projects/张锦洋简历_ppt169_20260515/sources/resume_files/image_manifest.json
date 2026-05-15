@@ -1,0 +1,24 @@
+[
+  {
+    "index": 1,
+    "filename": "image_001.jpg",
+    "original_filename": "image_001.jpg",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "pixel_width": 226,
+    "pixel_height": 323,
+    "pixel_ratio": 0.69969,
+    "relationship_id": "rId8",
+    "source_target": "media/image1.jpg",
+    "source_path": "word/media/image1.jpg",
+    "source_ext": ".jpg",
+    "source_sha256": "64c554e54f40c06d5aa53cf02213e4b6821a058399642f30ad82cfafc999cef7",
+    "source_kind": "drawing",
+    "display_width_emu": 766149,
+    "display_height_emu": 1094983,
+    "display_width_in": 0.8379,
+    "display_height_in": 1.1975,
+    "display_ratio": 0.69969
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(conda activate *)",
+      "Bash(pip install *)",
+      "Bash(conda init *)",
+      "Bash(gh pr *)",
+      "Bash(python *)",
+      "Skill(claude-hud:setup)",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" -m py_compile \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\config.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\cli.py\")",
+      "Bash(D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe *)",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" -c \"import sys; sys.path.insert\\(0, r'D:\\\\Claude Code\\\\langchain-agent-demo'\\); import config; ps = config.list_providers\\(\\); print\\(f'{len\\(ps\\)} providers:'\\); [print\\(f'  {n:24s} {len\\(config.PROVIDERS[n][\\\\\"models\\\\\"]\\):3d} models  proto={config.PROVIDERS[n][\\\\\"protocol\\\\\"]:9s}  key={config.PROVIDERS[n][\\\\\"api_key_env\\\\\"]}'\\) for n in ps]\")",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" -c \"import sys; sys.path.insert\\(0, r'D:\\\\Claude Code\\\\langchain-agent-demo'\\); from cli import interactive_select; print\\('helper imports OK:', interactive_select.__name__\\)\")",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" -m py_compile \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_patch.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_clarify.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_web.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_memory.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tools.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_registry.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\cli.py\")",
+      "Bash('D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe' -c ' *)",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" -m py_compile \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\cli.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\config.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tools.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_clarify.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_memory.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_patch.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_registry.py\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\tool_web.py\")",
+      "Bash(grep -n \"\\\\${SKILL_DIR}\\\\|skills/ppt-master\\\\|examples/\\\\|docs/\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\ppt-master\\\\skills\\\\ppt-master\\\\SKILL.md\")",
+      "Bash(mv \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\ppt-master\\\\skills\\\\ppt-master\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\agent\\\\skills\\\\ppt-master\")",
+      "Bash(mv \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\ppt-master\\\\projects\" \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\agent\\\\projects\")",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" skills/ppt-master/scripts/project_manager.py validate \"projects/张锦洋简历_ppt169_20260515\")",
+      "Bash(mkdir -p /tmp/ppt_smoke)",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" skills/ppt-master/scripts/source_to_md/doc_to_md.py \"projects/张锦洋简历_ppt169_20260515/sources/张某个人简历.docx\" -o /tmp/ppt_smoke/resume_reconverted.md)",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" skills/ppt-master/scripts/svg_quality_checker.py \"projects/张锦洋简历_ppt169_20260515\")",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" skills/ppt-master/scripts/finalize_svg.py \"projects/张锦洋简历_ppt169_20260515\")",
+      "Bash(\"D:\\\\Anaconda3\\\\envs\\\\LangChain\\\\python.exe\" skills/ppt-master/scripts/svg_to_pptx.py \"projects/张锦洋简历_ppt169_20260515\")",
+      "Bash(git -C \"D:\\\\Claude Code\\\\langchain-agent-demo\\\\agent\" rev-parse --is-inside-work-tree)",
+      "Bash(echo \"exit=$?\")",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+# Core dependencies
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# Skill: ppt-master
+-r skills/ppt-master/requirements.txt

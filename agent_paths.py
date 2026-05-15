@@ -1,0 +1,47 @@
+"""Filesystem paths for agent-owned state.
+
+The agent persists settings, credentials, memory, logs, and the live todo list
+under a dedicated directory so it does not collide with Claude Code (which
+owns ``.claude/``) or other IDE tools.
+
+Default location: ``.langchain-agent/`` relative to the current working
+directory. Override with the ``LANGCHAIN_AGENT_CONFIG_DIR`` env var when
+you want to put state somewhere else (e.g. ``$XDG_STATE_HOME/...``).
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+DEFAULT_DIR_NAME = ".langchain-agent"
+
+
+def config_dir() -> Path:
+    override = os.getenv("LANGCHAIN_AGENT_CONFIG_DIR", "").strip()
+    return Path(override) if override else Path(DEFAULT_DIR_NAME)
+
+
+def settings_path() -> Path:
+    return config_dir() / "settings.json"
+
+
+def credentials_path() -> Path:
+    return config_dir() / "credentials.json"
+
+
+def credentials_gitignore_path() -> Path:
+    return config_dir() / ".gitignore"
+
+
+def memories_dir() -> Path:
+    return config_dir() / "memories"
+
+
+def log_path() -> Path:
+    return config_dir() / "agent.log"
+
+
+def todos_path() -> Path:
+    return config_dir() / "todos.json"

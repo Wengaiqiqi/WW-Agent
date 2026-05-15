@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="titleAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1565C0" />
+      <stop offset="100%" stop-color="#42A5F5" />
+    </linearGradient>
+    <linearGradient id="awardGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1565C0" />
+      <stop offset="100%" stop-color="#42A5F5" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF" />
+  <circle cx="1100" cy="100" r="350" fill="#1565C0" fill-opacity="0.03" />
+
+  <!-- Header -->
+  <g id="header">
+    <rect x="0" y="0" width="1280" height="100" fill="#F4F6F9" />
+    <rect x="0" y="96" width="1280" height="4" fill="url(#titleAccent)" />
+    <text x="60" y="58" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="36" font-weight="bold" fill="#0D47A1">奖项荣誉（续）</text>
+    <text x="60" y="82" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">Awards Continued</text>
+  </g>
+
+  <!-- Vertical line track -->
+  <line x1="120" y1="140" x2="120" y2="650" stroke="#E0E0E0" stroke-width="2" />
+
+  <!-- Award 15 -->
+  <g id="award-15">
+    <circle cx="120" cy="175" r="10" fill="#1565C0" />
+    <circle cx="120" cy="175" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,145 H1208 A12,12 0 0 1 1220,157 V203 A12,12 0 0 1 1208,215 H170 A12,12 0 0 1 158,203 V157 A12,12 0 0 1 170,145 Z" />
+    <path fill="url(#awardGrad)" d="M167,145 H167 A3,3 0 0 1 170,148 V212 A3,3 0 0 1 167,215 H167 A3,3 0 0 1 164,212 V148 A3,3 0 0 1 167,145 Z" />
+    <circle cx="162" cy="167" r="3" fill="#1565C0" />
+    <text x="190" y="173" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">中国国际大学生创新大赛"建行杯"</text>
+    <path fill="#FFF3E0" d="M490,155 H582 A10,10 0 0 1 592,165 V165 A10,10 0 0 1 582,175 H490 A10,10 0 0 1 480,165 V165 A10,10 0 0 1 490,155 Z" />
+    <text x="536" y="170" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#E65100">广西银奖</text>
+    <text x="190" y="198" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">广西赛区选拔赛 · 2025年</text>
+  </g>
+
+  <!-- Award 9 -->
+  <g id="award-9">
+    <circle cx="120" cy="245" r="10" fill="#1565C0" />
+    <circle cx="120" cy="245" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,215 H1208 A12,12 0 0 1 1220,227 V273 A12,12 0 0 1 1208,285 H170 A12,12 0 0 1 158,273 V227 A12,12 0 0 1 170,215 Z" />
+    <path fill="url(#awardGrad)" d="M167,215 H167 A3,3 0 0 1 170,218 V282 A3,3 0 0 1 167,285 H167 A3,3 0 0 1 164,282 V218 A3,3 0 0 1 167,215 Z" />
+    <circle cx="162" cy="237" r="3" fill="#1565C0" />
+    <text x="190" y="243" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">睿抗机器人开发者大赛</text>
+    <path fill="#E8F5E9" d="M450,225 H542 A10,10 0 0 1 552,235 V235 A10,10 0 0 1 542,245 H450 A10,10 0 0 1 440,235 V235 A10,10 0 0 1 450,225 Z" />
+    <text x="496" y="240" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">省级三等奖</text>
+    <text x="190" y="268" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Award 10 -->
+  <g id="award-10">
+    <circle cx="120" cy="315" r="10" fill="#1565C0" />
+    <circle cx="120" cy="315" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,285 H1208 A12,12 0 0 1 1220,297 V343 A12,12 0 0 1 1208,355 H170 A12,12 0 0 1 158,343 V297 A12,12 0 0 1 170,285 Z" />
+    <path fill="url(#awardGrad)" d="M167,285 H167 A3,3 0 0 1 170,288 V352 A3,3 0 0 1 167,355 H167 A3,3 0 0 1 164,352 V288 A3,3 0 0 1 167,285 Z" />
+    <circle cx="162" cy="307" r="3" fill="#1565C0" />
+    <text x="190" y="313" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">第27届中国机器人及人工智能大赛</text>
+    <path fill="#E8F5E9" d="M490,295 H582 A10,10 0 0 1 592,305 V305 A10,10 0 0 1 582,315 H490 A10,10 0 0 1 480,305 V305 A10,10 0 0 1 490,295 Z" />
+    <text x="536" y="310" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">国家优秀奖</text>
+    <text x="190" y="338" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Award 11 -->
+  <g id="award-11">
+    <circle cx="120" cy="385" r="10" fill="#1565C0" />
+    <circle cx="120" cy="385" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,355 H1208 A12,12 0 0 1 1220,367 V413 A12,12 0 0 1 1208,425 H170 A12,12 0 0 1 158,413 V367 A12,12 0 0 1 170,355 Z" />
+    <path fill="url(#awardGrad)" d="M167,355 H167 A3,3 0 0 1 170,358 V422 A3,3 0 0 1 167,425 H167 A3,3 0 0 1 164,422 V358 A3,3 0 0 1 167,355 Z" />
+    <circle cx="162" cy="377" r="3" fill="#1565C0" />
+    <text x="190" y="383" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">Robocom 马术机器人越野赛</text>
+    <path fill="#E8F5E9" d="M470,365 H562 A10,10 0 0 1 572,375 V375 A10,10 0 0 1 562,385 H470 A10,10 0 0 1 460,375 V375 A10,10 0 0 1 470,365 Z" />
+    <text x="516" y="380" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">国家三等奖</text>
+    <text x="190" y="408" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Award 12 -->
+  <g id="award-12">
+    <circle cx="120" cy="455" r="10" fill="#1565C0" />
+    <circle cx="120" cy="455" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,425 H1208 A12,12 0 0 1 1220,437 V483 A12,12 0 0 1 1208,495 H170 A12,12 0 0 1 158,483 V437 A12,12 0 0 1 170,425 Z" />
+    <path fill="url(#awardGrad)" d="M167,425 H167 A3,3 0 0 1 170,428 V492 A3,3 0 0 1 167,495 H167 A3,3 0 0 1 164,492 V428 A3,3 0 0 1 167,425 Z" />
+    <circle cx="162" cy="447" r="3" fill="#1565C0" />
+    <text x="190" y="453" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">Robocom 马术机器人障碍赛</text>
+    <path fill="#E8F5E9" d="M470,435 H562 A10,10 0 0 1 572,445 V445 A10,10 0 0 1 562,455 H470 A10,10 0 0 1 460,445 V445 A10,10 0 0 1 470,435 Z" />
+    <text x="516" y="450" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">国家三等奖</text>
+    <text x="190" y="478" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Award 13 -->
+  <g id="award-13">
+    <circle cx="120" cy="525" r="10" fill="#1565C0" />
+    <circle cx="120" cy="525" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,495 H1208 A12,12 0 0 1 1220,507 V553 A12,12 0 0 1 1208,565 H170 A12,12 0 0 1 158,553 V507 A12,12 0 0 1 170,495 Z" />
+    <path fill="url(#awardGrad)" d="M167,495 H167 A3,3 0 0 1 170,498 V562 A3,3 0 0 1 167,565 H167 A3,3 0 0 1 164,562 V498 A3,3 0 0 1 167,495 Z" />
+    <circle cx="162" cy="517" r="3" fill="#1565C0" />
+    <text x="190" y="523" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">Robocom 马术机器人竞速赛</text>
+    <path fill="#E8F5E9" d="M470,505 H562 A10,10 0 0 1 572,515 V515 A10,10 0 0 1 562,525 H470 A10,10 0 0 1 460,515 V515 A10,10 0 0 1 470,505 Z" />
+    <text x="516" y="520" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">国家三等奖</text>
+    <text x="190" y="548" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Award 14 -->
+  <g id="award-14">
+    <circle cx="120" cy="595" r="10" fill="#1565C0" />
+    <circle cx="120" cy="595" r="18" fill="#1565C0" fill-opacity="0.12" />
+    <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M170,565 H1208 A12,12 0 0 1 1220,577 V623 A12,12 0 0 1 1208,635 H170 A12,12 0 0 1 158,623 V577 A12,12 0 0 1 170,565 Z" />
+    <path fill="url(#awardGrad)" d="M167,565 H167 A3,3 0 0 1 170,568 V632 A3,3 0 0 1 167,635 H167 A3,3 0 0 1 164,632 V568 A3,3 0 0 1 167,565 Z" />
+    <circle cx="162" cy="587" r="3" fill="#1565C0" />
+    <text x="190" y="593" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" font-weight="bold" fill="#212121">第7届国际青年人工智能大赛总决赛</text>
+    <path fill="#E8F5E9" d="M490,575 H582 A10,10 0 0 1 592,585 V585 A10,10 0 0 1 582,595 H490 A10,10 0 0 1 480,585 V585 A10,10 0 0 1 490,575 Z" />
+    <text x="536" y="590" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" font-weight="bold" fill="#2E7D32">国家三等奖</text>
+    <text x="190" y="618" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#616161">2025年</text>
+  </g>
+
+  <!-- Footer -->
+  <g id="footer">
+    <text x="1220" y="700" text-anchor="end" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">11 / 13</text>
+    <text x="60" y="700" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">张锦洋 · 个人简历</text>
+  </g>
+</svg>

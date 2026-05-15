@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="titleAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1565C0" />
+      <stop offset="100%" stop-color="#42A5F5" />
+    </linearGradient>
+  </defs>
+
+  
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF" />
+
+  
+  <circle cx="1200" cy="50" r="200" fill="#1565C0" fill-opacity="0.03" />
+
+  
+  <rect x="0" y="0" width="1280" height="100" fill="#F4F6F9" />
+  <rect x="0" y="96" width="1280" height="4" fill="url(#titleAccent)" />
+
+  
+  <text x="60" y="58" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="36" font-weight="bold" fill="#0D47A1">基本信息</text>
+  <text x="60" y="82" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">Personal Information</text>
+
+  
+  
+  <path fill="#F4F6F9" d="M72,130 H388 A12,12 0 0 1 400,142 V198 A12,12 0 0 1 388,210 H72 A12,12 0 0 1 60,198 V142 A12,12 0 0 1 72,130 Z" />
+  
+  <g transform="translate(82.0, 154.0) scale(1.3333333333333333)" fill="#1565C0">
+    <path d="M12 2a5 5 0 1 1 -5 5l.005 -.217a5 5 0 0 1 4.995 -4.783z" />
+    <path d="M14 14a5 5 0 0 1 5 5v1a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-1a5 5 0 0 1 5 -5h4z" />
+  </g>
+  <text x="130" y="165" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="20" font-weight="bold" fill="#212121">张锦洋</text>
+  <text x="130" y="190" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">男 · 22岁 · 本科 · 群众</text>
+
+  
+  <path fill="#F4F6F9" d="M72,225 H388 A12,12 0 0 1 400,237 V278 A12,12 0 0 1 388,290 H72 A12,12 0 0 1 60,278 V237 A12,12 0 0 1 72,225 Z" />
+  
+  <g transform="translate(82.0, 244.0) scale(1.1666666666666667)" fill="#1565C0">
+    <path d="M9.928 3.629l2 5a1 1 0 0 1 -.414 1.228l-1.67 1.003a9.9 9.9 0 0 0 3.296 3.297l1.003 -1.671a1 1 0 0 1 1.228 -.414l5 2a1 1 0 0 1 .629 .928v4c0 1.657 -1.343 3 -3.06 2.998c-8.579 -.521 -15.418 -7.36 -15.94 -15.998a3 3 0 0 1 3 -3h4a1 1 0 0 1 .928 .629" />
+    <path d="M18 9a1 1 0 0 1 -2 0a1 1 0 0 0 -1 -1a1 1 0 0 1 0 -2a3 3 0 0 1 3 3" />
+    <path d="M22 9a1 1 0 0 1 -2 0a5 5 0 0 0 -5 -5a1 1 0 0 1 0 -2a7 7 0 0 1 7 7" />
+  </g>
+  <text x="130" y="248" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">电话</text>
+  <text x="130" y="272" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="18" font-weight="bold" fill="#212121">18991321768</text>
+
+  
+  <path fill="#F4F6F9" d="M72,305 H388 A12,12 0 0 1 400,317 V358 A12,12 0 0 1 388,370 H72 A12,12 0 0 1 60,358 V317 A12,12 0 0 1 72,305 Z" />
+  
+  <g transform="translate(82.0, 324.0) scale(1.1666666666666667)" fill="#1565C0">
+    <path d="M22 7.535v9.465a3 3 0 0 1 -2.824 2.995l-.176 .005h-14a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-9.465l9.445 6.297l.116 .066a1 1 0 0 0 .878 0l.116 -.066l9.445 -6.297z" />
+    <path d="M19 4c1.08 0 2.027 .57 2.555 1.427l-9.555 6.37l-9.555 -6.37a2.999 2.999 0 0 1 2.354 -1.42l.201 -.007h14z" />
+  </g>
+  <text x="130" y="328" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">邮箱</text>
+  <text x="130" y="352" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="18" font-weight="bold" fill="#212121">3094084480@qq.com</text>
+
+  
+  <path fill="#F4F6F9" d="M72,385 H388 A12,12 0 0 1 400,397 V438 A12,12 0 0 1 388,450 H72 A12,12 0 0 1 60,438 V397 A12,12 0 0 1 72,385 Z" />
+  
+  <g transform="translate(82.0, 404.0) scale(1.1666666666666667)" fill="#1565C0">
+    <path d="M18.364 4.636a9 9 0 0 1 .203 12.519l-.203 .21l-4.243 4.242a3 3 0 0 1 -4.097 .135l-.144 -.135l-4.244 -4.243a9 9 0 0 1 12.728 -12.728zm-6.364 3.364a3 3 0 1 0 0 6a3 3 0 0 0 0 -6" />
+  </g>
+  <text x="130" y="408" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">地址</text>
+  <text x="130" y="432" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="18" font-weight="bold" fill="#212121">南宁</text>
+
+  
+  <path fill="#1565C0" fill-opacity="0.04" d="M476,130 H1204 A16,16 0 0 1 1220,146 V434 A16,16 0 0 1 1204,450 H476 A16,16 0 0 1 460,434 V146 A16,16 0 0 1 476,130 Z" />
+
+  <text x="840" y="250" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="64" font-weight="bold" fill="#1565C0" fill-opacity="0.15" letter-spacing="20">张锦洋</text>
+
+  <text x="840" y="320" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="22" fill="#0D47A1" fill-opacity="0.4" letter-spacing="4">人工智能专业 · 本科在读</text>
+
+  
+  <path fill="#1565C0" fill-opacity="0.08" d="M520,380 H640 A20,20 0 0 1 660,400 V400 A20,20 0 0 1 640,420 H520 A20,20 0 0 1 500,400 V400 A20,20 0 0 1 520,380 Z" />
+  <text x="580" y="406" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" font-weight="bold" fill="#1565C0">Python</text>
+
+  <path fill="#1565C0" fill-opacity="0.08" d="M700,380 H820 A20,20 0 0 1 840,400 V400 A20,20 0 0 1 820,420 H700 A20,20 0 0 1 680,400 V400 A20,20 0 0 1 700,380 Z" />
+  <text x="760" y="406" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" font-weight="bold" fill="#1565C0">C++</text>
+
+  <path fill="#1565C0" fill-opacity="0.08" d="M880,380 H1000 A20,20 0 0 1 1020,400 V400 A20,20 0 0 1 1000,420 H880 A20,20 0 0 1 860,400 V400 A20,20 0 0 1 880,380 Z" />
+  <text x="940" y="406" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" font-weight="bold" fill="#1565C0">ROS2</text>
+
+  <path fill="#1565C0" fill-opacity="0.08" d="M1060,380 H1180 A20,20 0 0 1 1200,400 V400 A20,20 0 0 1 1180,420 H1060 A20,20 0 0 1 1040,400 V400 A20,20 0 0 1 1060,380 Z" />
+  <text x="1120" y="406" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" font-weight="bold" fill="#1565C0">Linux</text>
+
+  
+  <path fill="#F4F6F9" d="M72,490 H1208 A12,12 0 0 1 1220,502 V618 A12,12 0 0 1 1208,630 H72 A12,12 0 0 1 60,618 V502 A12,12 0 0 1 72,490 Z" />
+  
+  <g transform="translate(90.0, 520.0) scale(1.5)" fill="#1565C0">
+    <path d="M19 13.431v2.569c0 2.398 -3.205 4 -7 4s-7 -1.602 -7 -4v-2.569l5.886 2.354a3 3 0 0 0 2.011 .078l.217 -.078zm2 -2.955l-8.629 3.452a1 1 0 0 1 -.742 0l-10 -4c-.839 -.335 -.839 -1.521 0 -1.856l10 -4a1 1 0 0 1 .245 -.064l.126 -.008l.126 .008a1 1 0 0 1 .245 .064l10.032 4.013l.108 .055l.099 .068l.088 .076l.075 .082l.035 .044l.073 .115l.052 .115l.034 .102l.025 .135l.006 .058l.002 6.065a1 1 0 0 1 -2 0z" />
+  </g>
+  <text x="145" y="535" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="22" font-weight="bold" fill="#212121">广西民族大学</text>
+  <text x="145" y="562" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" fill="#616161">人工智能专业 · 本科 · 2023.9 ~ 至今</text>
+  <text x="145" y="590" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#1565C0">在校生 · 主攻AI与机器人方向</text>
+
+  
+  <g transform="translate(1000.0, 525.0) scale(1.1666666666666667)" fill="#616161">
+    <path d="M16 2a1 1 0 0 1 .993 .883l.007 .117v1h1a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h1v-1a1 1 0 0 1 1.993 -.117l.007 .117v1h6v-1a1 1 0 0 1 1 -1zm3 7h-14v9.625c0 .705 .386 1.286 .883 1.366l.117 .009h12c.513 0 .936 -.53 .993 -1.215l.007 -.16v-9.625z" />
+    <path d="M12 12a1 1 0 0 1 .993 .883l.007 .117v3a1 1 0 0 1 -1.993 .117l-.007 -.117v-2a1 1 0 0 1 -.117 -1.993l.117 -.007h1z" />
+  </g>
+  <text x="1040" y="547" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">大二在读</text>
+
+  
+  <text x="1220" y="700" text-anchor="end" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">02 / 13</text>
+  <text x="60" y="700" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">张锦洋 · 个人简历</text>
+</svg>

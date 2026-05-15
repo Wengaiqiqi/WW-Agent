@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="titleAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1565C0" />
+      <stop offset="100%" stop-color="#42A5F5" />
+    </linearGradient>
+    <linearGradient id="cardAccent" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1565C0" />
+      <stop offset="100%" stop-color="#42A5F5" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF" />
+  <circle cx="1200" cy="600" r="250" fill="#1565C0" fill-opacity="0.03" />
+
+  
+  <rect x="0" y="0" width="1280" height="100" fill="#F4F6F9" />
+  <rect x="0" y="96" width="1280" height="4" fill="url(#titleAccent)" />
+  <text x="60" y="58" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="36" font-weight="bold" fill="#0D47A1">教育经历</text>
+  <text x="60" y="82" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="15" fill="#616161">Education</text>
+
+  
+  <line x1="320" y1="190" x2="320" y2="570" stroke="#E0E0E0" stroke-width="2" />
+  <circle cx="320" cy="280" r="12" fill="#1565C0" />
+  <circle cx="320" cy="280" r="20" fill="#1565C0" fill-opacity="0.15" />
+
+  
+  <path fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1" d="M396,160 H1124 A16,16 0 0 1 1140,176 V344 A16,16 0 0 1 1124,360 H396 A16,16 0 0 1 380,344 V176 A16,16 0 0 1 396,160 Z" />
+  <path fill="url(#cardAccent)" d="M383,160 H383 A3,3 0 0 1 386,163 V357 A3,3 0 0 1 383,360 H383 A3,3 0 0 1 380,357 V163 A3,3 0 0 1 383,160 Z" />
+
+  
+  <g transform="translate(420.0, 195.0) scale(1.6666666666666667)" fill="#1565C0">
+    <path d="M19 13.431v2.569c0 2.398 -3.205 4 -7 4s-7 -1.602 -7 -4v-2.569l5.886 2.354a3 3 0 0 0 2.011 .078l.217 -.078zm2 -2.955l-8.629 3.452a1 1 0 0 1 -.742 0l-10 -4c-.839 -.335 -.839 -1.521 0 -1.856l10 -4a1 1 0 0 1 .245 -.064l.126 -.008l.126 .008a1 1 0 0 1 .245 .064l10.032 4.013l.108 .055l.099 .068l.088 .076l.075 .082l.035 .044l.073 .115l.052 .115l.034 .102l.025 .135l.006 .058l.002 6.065a1 1 0 0 1 -2 0z" />
+  </g>
+  <text x="480" y="210" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="28" font-weight="bold" fill="#212121">广西民族大学</text>
+  <text x="480" y="240" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="20" fill="#1565C0">人工智能专业 | 本科</text>
+
+  
+  <g transform="translate(420.0, 275.0)" fill="#616161">
+    <path d="M16 2a1 1 0 0 1 .993 .883l.007 .117v1h1a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h1v-1a1 1 0 0 1 1.993 -.117l.007 .117v1h6v-1a1 1 0 0 1 1 -1zm3 7h-14v9.625c0 .705 .386 1.286 .883 1.366l.117 .009h12c.513 0 .936 -.53 .993 -1.215l.007 -.16v-9.625z" />
+    <path d="M12 12a1 1 0 0 1 .993 .883l.007 .117v3a1 1 0 0 1 -1.993 .117l-.007 -.117v-2a1 1 0 0 1 -.117 -1.993l.117 -.007h1z" />
+  </g>
+  <text x="460" y="295" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="18" fill="#616161">2023.9 ~ 至今 · 大二在读</text>
+
+  
+  <g transform="translate(420.0, 320.0)" fill="#616161">
+    <path d="M21.5 5.134a1 1 0 0 1 .493 .748l.007 .118v13a1 1 0 0 1 -1.5 .866a8 8 0 0 0 -7.5 -.266v-15.174a10 10 0 0 1 8.5 .708m-10.5 -.707l.001 15.174a8 8 0 0 0 -7.234 .117l-.327 .18l-.103 .044l-.049 .016l-.11 .026l-.061 .01l-.117 .006h-.042l-.11 -.012l-.077 -.014l-.108 -.032l-.126 -.056l-.095 -.056l-.089 -.067l-.06 -.056l-.073 -.082l-.064 -.089l-.022 -.036l-.032 -.06l-.044 -.103l-.016 -.049l-.026 -.11l-.01 -.061l-.004 -.049l-.002 -13.068a1 1 0 0 1 .5 -.866a10 10 0 0 1 8.5 -.707" />
+  </g>
+  <text x="460" y="340" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" fill="#212121">主修课程</text>
+
+  
+  <path fill="#1565C0" fill-opacity="0.08" d="M437,360 H533 A17,17 0 0 1 550,377 V377 A17,17 0 0 1 533,394 H437 A17,17 0 0 1 420,377 V377 A17,17 0 0 1 437,360 Z" />
+  <text x="485" y="384" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">人工智能</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M582,360 H678 A17,17 0 0 1 695,377 V377 A17,17 0 0 1 678,394 H582 A17,17 0 0 1 565,377 V377 A17,17 0 0 1 582,360 Z" />
+  <text x="630" y="384" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">机器学习</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M727,360 H823 A17,17 0 0 1 840,377 V377 A17,17 0 0 1 823,394 H727 A17,17 0 0 1 710,377 V377 A17,17 0 0 1 727,360 Z" />
+  <text x="775" y="384" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">深度学习</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M872,360 H968 A17,17 0 0 1 985,377 V377 A17,17 0 0 1 968,394 H872 A17,17 0 0 1 855,377 V377 A17,17 0 0 1 872,360 Z" />
+  <text x="920" y="384" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">自然语言处理</text>
+
+  <path fill="#1565C0" fill-opacity="0.08" d="M437,405 H533 A17,17 0 0 1 550,422 V422 A17,17 0 0 1 533,439 H437 A17,17 0 0 1 420,422 V422 A17,17 0 0 1 437,405 Z" />
+  <text x="485" y="429" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">计算机视觉</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M582,405 H678 A17,17 0 0 1 695,422 V422 A17,17 0 0 1 678,439 H582 A17,17 0 0 1 565,422 V422 A17,17 0 0 1 582,405 Z" />
+  <text x="630" y="429" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">数据结构与算法</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M727,405 H823 A17,17 0 0 1 840,422 V422 A17,17 0 0 1 823,439 H727 A17,17 0 0 1 710,422 V422 A17,17 0 0 1 727,405 Z" />
+  <text x="775" y="429" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">数据库原理</text>
+  <path fill="#1565C0" fill-opacity="0.08" d="M872,405 H968 A17,17 0 0 1 985,422 V422 A17,17 0 0 1 968,439 H872 A17,17 0 0 1 855,422 V422 A17,17 0 0 1 872,405 Z" />
+  <text x="920" y="429" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">操作系统</text>
+
+  <path fill="#1565C0" fill-opacity="0.08" d="M507,450 H603 A17,17 0 0 1 620,467 V467 A17,17 0 0 1 603,484 H507 A17,17 0 0 1 490,467 V467 A17,17 0 0 1 507,450 Z" />
+  <text x="555" y="474" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="14" fill="#1565C0">计算机网络</text>
+
+  
+  <path fill="#0D47A1" fill-opacity="0.05" d="M392,510 H1128 A12,12 0 0 1 1140,522 V563 A12,12 0 0 1 1128,575 H392 A12,12 0 0 1 380,563 V522 A12,12 0 0 1 392,510 Z" />
+  <text x="760" y="540" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="16" fill="#0D47A1">AI专业背景扎实，课程覆盖AI核心领域，具备从理论到实践的完整知识体系</text>
+  <text x="760" y="562" text-anchor="middle" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="13" fill="#9E9E9E">预计 2027 年毕业</text>
+
+  
+  <text x="1220" y="700" text-anchor="end" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">03 / 13</text>
+  <text x="60" y="700" font-family="&quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, Arial, sans-serif" font-size="12" fill="#9E9E9E">张锦洋 · 个人简历</text>
+</svg>
