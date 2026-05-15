@@ -23,3 +23,11 @@ class MockChatModel:
     def invoke(self, messages: list[dict]) -> _Result:
         self.call_history.append(messages)
         return _Result(content=next(self._responses))
+
+    @classmethod
+    def from_env(cls, env_var: str, default: str = "ok") -> "MockChatModel":
+        """Construct a MockChatModel whose response list is read from an env var.
+        The env var's value is split on '||' to yield individual responses."""
+        import os
+        raw = os.environ.get(env_var, default)
+        return cls(responses=raw.split("||"))

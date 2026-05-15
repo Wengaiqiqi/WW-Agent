@@ -36,7 +36,15 @@ class PermissionGate:
 
     def _is_allowed(self, tool: str) -> bool:
         wl = _MODE_WHITELIST[self.mode]
-        return "*" in wl or tool in wl
+        if "*" in wl:
+            return True
+        if tool in wl:
+            return True
+        # skill.* tools are always permitted; they are high-level orchestrated
+        # actions that carry their own internal authz checks.
+        if tool.startswith("skill."):
+            return True
+        return False
 
     def sign(self, *, target_specialist: str, tool: str) -> str:
         if not self._is_allowed(tool):

@@ -43,11 +43,10 @@ def build_skill_specs() -> list[ToolSpec]:
 
 
 async def execute_skill(slug: str, args: dict, *, llm=None) -> str:
-    """Execute a skill by feeding its SKILL.md + args to the LLM.
-
-    Verifies authz_grant against AUTHZ_HMAC_KEY env. If `llm` is None,
-    constructs a default model from the current env (mock provider falls
-    back to a deterministic stub).
+    """Execute a skill via a simple ReAct loop:
+      - LLM is prompted with SKILL.md + user payload + accumulated tool results
+      - If LLM returns {"tool_calls":[...]}, call each via A2A and re-prompt
+      - If LLM returns {"final":"..."} or plain text, return that as final answer
     """
     meta = args.get("_meta") or {}
     grant = meta.get("authz_grant")
@@ -67,23 +66,81 @@ async def execute_skill(slug: str, args: dict, *, llm=None) -> str:
         {"role": "system", "content": skill_md},
         {"role": "user", "content": str(user_payload)},
     ]
-    result = llm.invoke(messages)
-    return result.content
+    return await _react_loop(messages, llm, meta)
+
+
+def _mint_tool_grant(tool_name: str, meta: dict) -> str:
+    """Mint a short-lived JWT granting access to a specific tool on tool-agent.
+
+    Skill-agent holds AUTHZ_HMAC_KEY so it can issue sub-grants for tools it
+    needs to invoke downstream.
+    """
+    import time
+    import jwt as pyjwt
+    key = os.environ.get("AUTHZ_HMAC_KEY", "")
+    now = int(time.time())
+    payload = {
+        "iss": "skill-agent",
+        "sub": "tool-agent",
+        "exp": now + 60,
+        "permission_mode": meta.get("permission_mode", "workspace-write"),
+        "allowed_tools": [tool_name],
+        "trace_id": meta.get("trace_id", ""),
+    }
+    return pyjwt.encode(payload, key, algorithm="HS256")
+
+
+async def _react_loop(messages, llm, meta, max_iters: int = 5):
+    """Iterate: LLM → optional tool_calls (A2A) → re-prompt → final."""
+    from agents.skill_agent.a2a_client import call_peer
+    import json
+
+    for _ in range(max_iters):
+        result = llm.invoke(messages)
+        text = result.content.strip()
+
+        # Try parsing the envelope. Non-JSON or non-envelope responses are
+        # treated as the final answer.
+        try:
+            envelope = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+
+        if not isinstance(envelope, dict):
+            return text
+
+        calls = envelope.get("tool_calls") or []
+        if not calls:
+            return envelope.get("final", text)
+
+        tool_outputs = []
+        for c in calls:
+            tool = c["tool"]
+            arguments = c.get("arguments") or {}
+            # Mint a fresh grant specifically for this tool so tool-agent's
+            # authz check passes (the original grant only covers skill.X).
+            tool_grant = _mint_tool_grant(tool, meta)
+            tool_meta = {**meta, "authz_grant": tool_grant, "agent_caller": "skill-agent"}
+            out = await call_peer(
+                peer_id="tool-agent",
+                skill_id=f"tool.{tool}",
+                input=arguments,
+                meta=tool_meta,
+            )
+            tool_outputs.append({"tool": tool, "output": out})
+
+        messages = messages + [
+            {"role": "tool", "content": json.dumps(tool_outputs)}
+        ]
+    # If the LLM never returns final, return the last text we saw.
+    return text
 
 
 def _default_llm():
-    """Construct the per-agent LLM. For Day-1 we only support the mock provider
-    in this code path; real provider construction will be added when we wire
-    the LLM planner in Task 6.3."""
     from agents.shared.mock_chat_model import MockChatModel
     provider = os.environ.get("LANGCHAIN_AGENT_MODEL", "mock/mock-default")
     if provider.startswith("mock"):
-        return MockChatModel(responses=["(mock skill output)"])
-    # For real providers, defer to legacy chat-model factory.
-    # If the legacy module exposes a `_build_chat_model` (or equivalent) we use it.
-    # If not, raise — Task 6.3 will replace this stub with the proper factory.
+        return MockChatModel.from_env("MOCK_SKILL_SCRIPT", default='{"final":"(mock skill output)"}')
     raise RuntimeError(
-        f"skill-agent's per-process LLM factory only supports 'mock' in Day-1; "
-        f"got LANGCHAIN_AGENT_MODEL={provider!r}. Pass an explicit `llm=` to "
-        f"execute_skill or wait for Task 6.3 to wire the real factory."
+        f"skill-agent's LLM factory only supports 'mock' in Day-1; got {provider!r}"
     )

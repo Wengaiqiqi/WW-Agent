@@ -100,17 +100,20 @@ def _build_orchestrator_llm():
 
 
 def _stub_planner(state):
-    """Phase-5 deterministic planner used until Phase 6 plugs in an LLM.
-
-    Accepts user_input in the form 'CAPABILITY:ARG' and routes to that
-    capability with arguments {"path": ARG} (suitable for read_file)."""
+    """Phase-5 deterministic planner with two modes:
+    1. If MOCK_ORCH_SCRIPT env var is set, parse it as JSON and use as decision
+       (allows e2e tests to script the orchestrator's routing).
+    2. Otherwise, expect 'CAPABILITY:ARG' in user_input.
+    """
+    scripted = os.environ.get("MOCK_ORCH_SCRIPT")
+    if scripted:
+        return json.loads(scripted)
     text = state["user_input"]
     if ":" in text:
         cap, _, arg = text.partition(":")
         return {"capability": cap.strip(), "arguments": {"path": arg.strip()}}
     raise ValueError(
-        "Phase-5 stub planner: expected 'CAPABILITY:ARG' input "
-        "(LLM planner ships in Phase 6)"
+        "Phase-5 stub planner: expected 'CAPABILITY:ARG' input or MOCK_ORCH_SCRIPT env"
     )
 
 
