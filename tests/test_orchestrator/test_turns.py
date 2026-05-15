@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from io import StringIO
+
 import pytest
 
 from orchestrator.router import CapabilityRouter
-from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner
+from orchestrator.stream_mux import StreamMux
+from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner, run_prompt_once
 
 
 class _Text:
@@ -78,3 +81,50 @@ async def test_turn_runner_dispatches_and_normalizes_text():
     assert host.calls[0][1] == "read_file"
     assert host.calls[0][2]["path"] == "README.md"
     assert "authz_grant" in host.calls[0][2]["_meta"]
+
+
+@pytest.mark.asyncio
+async def test_turn_runner_returns_error_for_planner_exception():
+    router = CapabilityRouter()
+    router.register("tool-agent", ["read_file"])
+    host = _FakeHost()
+
+    def bad_planner(state):
+        raise ValueError("planner exploded")
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=bad_planner,
+    )
+
+    result = await runner.run("read README", trace_id="t1")
+
+    assert result.error == "planner exploded"
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_once_emits_orchestrator_error_for_turn_error():
+    router = CapabilityRouter()
+    router.register("tool-agent", ["read_file"])
+    host = _FakeHost()
+    out = StringIO()
+
+    def bad_planner(state):
+        raise ValueError("planner exploded")
+
+    code = await run_prompt_once(
+        prompt="read README",
+        host=host,
+        router=router,
+        hmac_key="secret",
+        planner=bad_planner,
+        permission_mode_provider=lambda: "workspace-write",
+        mux=StreamMux(out),
+    )
+
+    assert code == 1
+    assert "[orchestrator] error: planner exploded" in out.getvalue()

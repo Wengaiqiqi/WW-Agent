@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -110,7 +111,12 @@ class TurnRunner:
             hmac_key=self.hmac_key,
             mode=self.permission_mode_provider(),
         )
-        result = await graph.ainvoke({"user_input": user_input, "trace_id": trace_id})
+        try:
+            result = await graph.ainvoke({"user_input": user_input, "trace_id": trace_id})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return TurnResult(error=str(exc))
         if result.get("error"):
             return TurnResult(error=str(result["error"]))
         capability = result.get("capability", "")
@@ -136,7 +142,20 @@ async def run_prompt_once(
         permission_mode_provider=permission_mode_provider,
         planner=planner,
     )
-    result = await runner.run(prompt, trace_id="t1")
+    from orchestrator import telemetry
+
+    telemetry.reset_log()
+    stop = asyncio.Event()
+    tail_task = asyncio.create_task(telemetry.tail(mux, stop))
+    try:
+        result = await runner.run(prompt, trace_id="t1")
+        await asyncio.sleep(0.1)
+    finally:
+        stop.set()
+        try:
+            await asyncio.wait_for(tail_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            tail_task.cancel()
     if result.error:
         mux.emit(agent_id="orchestrator", trace_id="t1", chunk=f"error: {result.error}\n")
         return 1
