@@ -44,6 +44,7 @@ class MultiAgentSessionState:
         permission_mode = os.environ.get("LANGCHAIN_AGENT_PERMISSION_MODE", DEFAULT_PERMISSION_MODE)
         if permission_mode not in VALID_PERMISSION_MODES:
             permission_mode = DEFAULT_PERMISSION_MODE
+        os.environ["LANGCHAIN_AGENT_PERMISSION_MODE"] = permission_mode
         return cls(
             provider=active_cfg.provider,
             model=active_cfg.model,
