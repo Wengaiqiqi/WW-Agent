@@ -48,12 +48,17 @@ class MCPHost:
         session = await stack.enter_async_context(ClientSession(read, write))
         init_result = await session.initialize()
 
-        # Extract a2a_url if specialist included it in init result metadata.
-        # (Specialists will set this in Phase 7. For now the field stays None.)
+        # Read A2A URL sidecar file written by the specialist at startup.
+        from pathlib import Path
         a2a_url = None
-        meta = getattr(init_result, "_meta", None) or {}
-        if isinstance(meta, dict):
-            a2a_url = meta.get("a2a_url")
+        url_file = Path(".agent/runtime") / f"{card.id}.a2a-url"
+        # Poll briefly — the specialist writes the file before stdio MCP init starts,
+        # so it should already be there, but allow a small window.
+        for _ in range(20):  # 1 second
+            if url_file.exists():
+                a2a_url = url_file.read_text(encoding="utf-8").strip()
+                break
+            await asyncio.sleep(0.05)
 
         self._clients[card.id] = _ClientHandle(
             card=card, session=session, stack=stack, a2a_url=a2a_url,
