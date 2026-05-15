@@ -1,0 +1,14 @@
+{
+  "id": "tool-agent",
+  "display_name": "Tool Specialist",
+  "version": "1.0.0",
+  "entrypoint": {
+    "type": "python",
+    "module": "agents.tool_agent.main",
+    "args": []
+  },
+  "mcp": { "transport": "stdio" },
+  "a2a": { "transport": "http", "port_strategy": "ephemeral" },
+  "capabilities_hint": ["tool"],
+  "model_override": null
+}
