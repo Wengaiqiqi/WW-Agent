@@ -107,3 +107,41 @@ class MultiAgentSessionState:
         self.memory_snapshot = memory_snapshot
         suffix = self.compacted_turns + 1
         self.thread_id = f"multi-agent-session-{suffix}"
+
+    def render_planner_context(self, capabilities: list[str]) -> str:
+        instruction_sections = []
+        for file in self.instruction_files:
+            path = getattr(file, "path", "")
+            content = getattr(file, "content", "")
+            if content:
+                instruction_sections.append(f"## {path}\n{content}")
+
+        skill_lines = []
+        for skill in self.skills:
+            name = getattr(skill, "name", "")
+            title = getattr(skill, "title", "")
+            skill_lines.append(f"- {name}: {title}")
+
+        history_lines = []
+        for item in self.recent_history:
+            parts = [
+                f"User: {item['user']}",
+                f"Capability: {item['capability']}",
+                f"Owner: {item['owner']}",
+                f"Observation: {item['observation']}",
+            ]
+            if item.get("error"):
+                parts.append(f"Error: {item['error']}")
+            history_lines.append("\n".join(parts))
+
+        return "\n\n".join([
+            f"Provider: {self.provider}",
+            f"Model: {self.model}",
+            f"Protocol: {self.protocol}",
+            f"Permission mode: {self.permission_mode}",
+            "Capabilities:\n" + "\n".join(f"- {c}" for c in capabilities),
+            "Memory:\n" + (self.memory_snapshot or "<none>"),
+            "Project instructions:\n" + ("\n\n".join(instruction_sections) or "<none>"),
+            "Skills:\n" + ("\n".join(skill_lines) or "<none>"),
+            "Recent history:\n" + ("\n\n".join(history_lines) or "<none>"),
+        ])

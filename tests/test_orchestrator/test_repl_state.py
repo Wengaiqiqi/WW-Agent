@@ -166,3 +166,37 @@ def test_record_turn_tracks_tool_calls_errors_and_trims_history(tmp_path):
     assert len(state.recent_history) == MAX_HISTORY_ITEMS
     assert state.recent_history[0]["user"] == "user 1"
     assert state.recent_history[-1]["user"] == f"user {MAX_HISTORY_ITEMS}"
+
+
+def test_planner_context_aggregates_all_fields(tmp_path):
+    class _Instruction:
+        path = tmp_path / "AGENTS.md"
+        content = "Always be careful."
+
+    class _Skill:
+        name = "ppt-master"
+        title = "PowerPoint"
+        path = tmp_path / "skills" / "ppt-master"
+
+    state = MultiAgentSessionState.from_runtime(
+        active_cfg=_Cfg(),
+        skills=[_Skill()],
+        instruction_files=[_Instruction()],
+        memory_snapshot="Remember user prefers concise answers.",
+        workspace=tmp_path,
+    )
+    state.record_turn(
+        user_input="read README", capability="read_file",
+        owner="tool-agent", observation="README text", error=None,
+    )
+
+    context = state.render_planner_context(["read_file", "skill.ppt-master"])
+
+    assert "mock" in context
+    assert "mock-default" in context
+    assert "read_file" in context
+    assert "skill.ppt-master" in context
+    assert "Always be careful." in context
+    assert "Remember user prefers concise answers." in context
+    assert "ppt-master" in context
+    assert "README text" in context
