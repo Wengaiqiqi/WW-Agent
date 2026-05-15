@@ -1,6 +1,7 @@
 # orchestrator/main.py
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -28,6 +29,69 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         router.register(card.id, [t.name for t in tools])
 
 
+class LLMPlanner:
+    """Plans the next capability + arguments by asking the LLM."""
+
+    _SYSTEM = (
+        "You are the orchestrator's planning brain. The available capabilities are listed below. "
+        "Reply with ONLY a JSON object of the form "
+        '{"capability": "<name>", "arguments": {<args>}}. '
+        "No prose, no markdown fence."
+    )
+
+    def __init__(self, *, llm, available_capabilities: list[str]):
+        self._llm = llm
+        self._caps = available_capabilities
+
+    def __call__(self, state) -> dict:
+        prompt = (
+            f"Available capabilities: {self._caps}\n\n"
+            f"User: {state['user_input']}"
+        )
+        out = self._llm.invoke([
+            {"role": "system", "content": self._SYSTEM},
+            {"role": "user", "content": prompt},
+        ])
+        text = out.content.strip()
+        # Strip accidental code fences
+        if text.startswith("```"):
+            # Strip opening fence (with optional language tag) and closing fence
+            lines = text.split("\n")
+            # Drop first line (```json or ```)
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            # Drop trailing fence
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        return json.loads(text)
+
+
+def _build_orchestrator_llm():
+    """Build a chat model for the orchestrator's planner.
+
+    Day-1 strategy: defer to whatever LLM the legacy single_agent_loop builds.
+    """
+    # The legacy code constructs its chat model lazily inside CliApp; pulling
+    # that out is more invasive than this task warrants. For Day-1 the
+    # orchestrator's LLM path is only exercised when the user sets a real
+    # provider, which they're unlikely to do during automated tests.
+    #
+    # If a clean factory function exists in the legacy module, prefer it.
+    # Otherwise, fall back to env-var-driven construction here.
+    try:
+        from legacy.single_agent_loop import _build_chat_model as _factory  # type: ignore
+        return _factory()
+    except ImportError:
+        pass
+    # Fallback: construct ChatOpenAI from env (works for openai-compatible providers).
+    # Adjust if you need anthropic.
+    raise RuntimeError(
+        "orchestrator LLM factory not available; set LANGCHAIN_AGENT_MODEL=mock for tests "
+        "or add a chat-model factory to agents/shared/."
+    )
+
+
 def _stub_planner(state):
     """Phase-5 deterministic planner used until Phase 6 plugs in an LLM.
 
@@ -51,8 +115,19 @@ async def run_prompt(prompt: str) -> int:
     try:
         await _bootstrap(host, router)
         mode = os.environ.get("LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write")
+
+        # Planner selection:
+        #   - Mock provider OR no provider configured → deterministic stub planner.
+        #   - Real provider → LLMPlanner.
+        provider = os.environ.get("LANGCHAIN_AGENT_MODEL", "")
+        if provider.startswith("mock") or not provider:
+            planner = _stub_planner
+        else:
+            llm = _build_orchestrator_llm()
+            planner = LLMPlanner(llm=llm, available_capabilities=router.all_capabilities())
+
         graph = build_graph(
-            router=router, host=host, planner=_stub_planner,
+            router=router, host=host, planner=planner,
             hmac_key=hmac_key, mode=mode,
         )
         result = await graph.ainvoke({"user_input": prompt, "trace_id": "t1"})
