@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import os
 import sys
 import logging
@@ -72,9 +73,18 @@ class MCPHost:
         return {k: v.a2a_url for k, v in self._clients.items() if v.a2a_url}
 
     async def shutdown_all(self) -> None:
-        for cid, handle in list(self._clients.items()):
-            try:
-                await handle.stack.aclose()
-            except Exception:
-                log.exception("error closing client %s", cid)
-        self._clients.clear()
+        # On Windows, anyio's stdio_client can raise exceptions during cleanup due to
+        # cancel scope conflicts. Since we're terminating all processes anyway, we suppress
+        # these errors and let OS cleanup handle the subprocesses.
+        import sys
+        if sys.platform == "win32":
+            # On Windows, just clear clients without awaiting close
+            # The subprocess will be cleaned up by the OS
+            self._clients.clear()
+        else:
+            for cid, handle in list(self._clients.items()):
+                try:
+                    await asyncio.wait_for(handle.stack.aclose(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    log.debug("error closing client %s: %s", cid, type(e).__name__)
+            self._clients.clear()

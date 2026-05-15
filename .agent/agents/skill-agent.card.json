@@ -1,0 +1,14 @@
+{
+  "id": "skill-agent",
+  "display_name": "Skill Specialist",
+  "version": "1.0.0",
+  "entrypoint": {
+    "type": "python",
+    "module": "agents.skill_agent.main",
+    "args": []
+  },
+  "mcp": { "transport": "stdio" },
+  "a2a": { "transport": "http", "port_strategy": "ephemeral" },
+  "capabilities_hint": ["skill"],
+  "model_override": null
+}
