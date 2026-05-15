@@ -59,6 +59,41 @@ python cli.py prompt "What can you do?"
 - `/clear` - Clear the terminal
 - `/exit` or `/quit` - Exit the CLI
 
+## Multi-Agent Mode
+
+`python cli.py` (no `--single`) boots a small multi-agent network:
+
+- **orchestrator** — the CLI process; routes work to specialists and renders their output with `[orchestrator]` / `[skill]` / `[tool]` tags
+- **skill-agent** — subprocess that loads `skills/*/SKILL.md` and runs each skill via its own LLM turn
+- **tool-agent** — subprocess that exposes the `tool/*.py` functions
+
+Specialists communicate with the orchestrator over **MCP** (stdio JSON-RPC). When a skill needs a tool mid-execution, skill-agent calls tool-agent directly over **A2A** (HTTP localhost JSON-RPC), and the call is mirrored back to the orchestrator via a telemetry side-channel so the user still sees the `[tool]` line in the unified stream.
+
+### Single-agent fallback
+
+`python cli.py --single` runs the original single-process REPL (unchanged from previous versions). No subprocesses are spawned.
+
+### Runtime files
+
+The multi-agent system uses `.agent/` for runtime state:
+
+- `.agent/agents/<id>.card.json` — Agent Cards (registry entries)
+- `.agent/runtime/peers.json` — A2A peer URL table written at startup
+- `.agent/runtime/<id>.a2a-url` — per-specialist A2A URL sidecar
+- `.agent/runtime/telemetry.ndjson` — A2A-call telemetry consumed by orchestrator
+- `.agent/logs/` — specialist logs
+
+`.agent/` is intentionally separate from `.claude/`, which is reserved for the Claude Code dev tool.
+
+### Slash commands
+
+- `/agents` — list registered specialists with their PIDs and A2A URLs
+- (Full multi-agent REPL UX ships post-Day-1; for now, use `python cli.py prompt "..."` for non-interactive use)
+
+### Design
+
+For the full architecture (component responsibilities, protocol message shapes, permission model, testing strategy) see [docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md](docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md).
+
 ## Configuration
 
 ### Permission Modes
