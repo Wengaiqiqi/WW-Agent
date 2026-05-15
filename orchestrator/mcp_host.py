@@ -71,8 +71,37 @@ class MCPHost:
         return result.tools
 
     async def call_tool(self, agent_id: str, name: str, arguments: dict):
-        client = self._clients[agent_id]
-        return await client.session.call_tool(name, arguments=arguments)
+        client = self._clients.get(agent_id)
+        if client is None:
+            # Return a dict-shaped error so the graph node sees the failure.
+            return {
+                "content": [
+                    {"type": "text", "text": f"error: specialist {agent_id!r} unavailable"}
+                ],
+                "isError": True,
+            }
+        try:
+            return await client.session.call_tool(name, arguments=arguments)
+        except (BrokenPipeError, ConnectionError, EOFError, OSError) as exc:
+            log.exception("call_tool: specialist %s appears to have crashed", agent_id)
+            return {
+                "content": [
+                    {"type": "text", "text": f"error: specialist {agent_id!r} crashed: {exc}"}
+                ],
+                "isError": True,
+            }
+        except Exception as exc:
+            # Catch-all for MCP SDK-specific errors. Don't swallow CancelledError.
+            import asyncio
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            log.exception("call_tool: %s/%s failed with unexpected error", agent_id, name)
+            return {
+                "content": [
+                    {"type": "text", "text": f"error: specialist {agent_id!r} returned error: {exc}"}
+                ],
+                "isError": True,
+            }
 
     def a2a_urls(self) -> dict[str, str]:
         return {k: v.a2a_url for k, v in self._clients.items() if v.a2a_url}
