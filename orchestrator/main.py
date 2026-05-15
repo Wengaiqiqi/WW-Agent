@@ -137,7 +137,23 @@ async def run_prompt(prompt: str) -> int:
             router=router, host=host, planner=planner,
             hmac_key=hmac_key, mode=mode,
         )
-        result = await graph.ainvoke({"user_input": prompt, "trace_id": "t1"})
+
+        # Start telemetry tail so A2A peer invocations surface in the unified stream.
+        from orchestrator import telemetry
+        telemetry.reset_log()
+        stop = asyncio.Event()
+        tail_task = asyncio.create_task(telemetry.tail(mux, stop))
+        try:
+            result = await graph.ainvoke({"user_input": prompt, "trace_id": "t1"})
+            # Give the tail a moment to flush any in-flight events.
+            await asyncio.sleep(0.1)
+        finally:
+            stop.set()
+            try:
+                await asyncio.wait_for(tail_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                tail_task.cancel()
+
         if result.get("error"):
             mux.emit(
                 agent_id="orchestrator", trace_id="t1",

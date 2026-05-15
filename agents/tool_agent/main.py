@@ -23,6 +23,16 @@ async def amain() -> None:
         if not skill_id.startswith("tool."):
             return {"error": f"tool-agent does not expose {skill_id}"}
         tool_name = skill_id[len("tool."):]
+
+        # Record this A2A invocation so the orchestrator can see it in the unified
+        # stream, even though it bypasses the orchestrator → specialist MCP path.
+        from orchestrator.telemetry import emit_event
+        emit_event(
+            agent_id="tool-agent",
+            trace_id=meta.get("trace_id", "?"),
+            message=f"(via A2A from {meta.get('agent_caller', '?')}) {skill_id}",
+        )
+
         args = {**input, "_meta": meta}
         result = await execute_tool(tool_name, args)
         return {"result": result}
