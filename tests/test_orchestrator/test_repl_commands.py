@@ -141,3 +141,38 @@ def test_non_slash_input_returns_none(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
     result = handler.handle("hello world")
     assert result is None
+
+
+def test_model_command_shows_placeholder(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    assert handler.handle("/model openai") == LoopAction.CONTINUE
+    assert "--single" in buf.getvalue()
+
+
+def test_skills_renders_when_empty(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    assert handler.handle("/skills") == LoopAction.CONTINUE
+    assert "Installed Skills" in buf.getvalue()
+
+
+def test_instructions_renders_when_empty(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    assert handler.handle("/instructions") == LoopAction.CONTINUE
+    assert "Project Instructions" in buf.getvalue()
+
+
+def test_command_exception_is_caught(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    # Monkey-patch a command to raise, verifying Exception is caught
+    original = handler._cmd_help
+
+    def _broken():
+        raise ValueError("boom")
+
+    handler._cmd_help = _broken
+    try:
+        result = handler.handle("/help")
+        assert result == LoopAction.CONTINUE
+        assert "boom" in buf.getvalue()
+    finally:
+        handler._cmd_help = original
