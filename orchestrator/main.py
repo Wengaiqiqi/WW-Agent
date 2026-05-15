@@ -28,6 +28,13 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         tools = await host.list_tools(card.id)
         router.register(card.id, [t.name for t in tools])
 
+    # After all specialists are up, broadcast their A2A URLs.
+    from pathlib import Path
+    peers = host.a2a_urls()  # already returns {id: url} from Task 5.2
+    runtime_dir = Path(".agent/runtime")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
+
 
 class LLMPlanner:
     """Plans the next capability + arguments by asking the LLM."""
