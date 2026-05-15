@@ -5,7 +5,15 @@ htmlcov/
 .coverage
 .agent/runtime/
 .agent/logs/
-.claude/credentials.json
-.claude/agent.log
+.claude/
+projects/
+!projects/README.md
+temp/
 *.egg-info/
 .venv/
+dist/
+build/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
