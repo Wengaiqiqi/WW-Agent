@@ -12,10 +12,19 @@ workspace sandbox.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+from agents.shared.authz import verify_grant, AuthzError
 from agents.shared.mcp_server import ToolSpec
+
+
+def _hmac_key() -> str:
+    key = os.environ.get("AUTHZ_HMAC_KEY")
+    if not key:
+        raise RuntimeError("AUTHZ_HMAC_KEY env var not set; orchestrator must spawn this process")
+    return key
 
 # ---------------------------------------------------------------------------
 # Wrappers
@@ -203,9 +212,21 @@ async def execute_tool(name: str, args: dict) -> Any:
     """Dispatch ``args`` to the tool named ``name``.
 
     Raises ``ValueError`` if the tool is not registered.
+    Raises ``AuthzError`` if the JWT grant is missing, expired, or does not
+    list ``name`` in its ``allowed_tools`` claim.
     """
     entry = _TOOL_MAP.get(name)
     if entry is None:
         raise ValueError(f"unknown tool: {name}")
     handler, _schema, _desc = entry
-    return await handler(args)
+
+    # Extract and verify the authz grant from _meta.
+    meta = args.get("_meta") or {}
+    grant = meta.get("authz_grant")
+    if grant is None:
+        raise AuthzError("missing authz_grant in _meta")
+    verify_grant(grant, key=_hmac_key(), requested_tool=name)
+
+    # Strip _meta before forwarding to the underlying tool.
+    real_args = {k: v for k, v in args.items() if k != "_meta"}
+    return await handler(real_args)
