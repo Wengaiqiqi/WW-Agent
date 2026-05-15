@@ -432,6 +432,15 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         ],
     },
 
+    # ---------------- Testing ----------------
+    "mock": {
+        "label": "Mock LLM (for testing)",
+        "protocol": "mock",
+        "base_url": "",
+        "api_key_env": "MOCK_API_KEY",
+        "models": ["mock-default", "mock-skill", "mock-tool"],
+    },
+
     # ---------------- Aggregators ----------------
     "openrouter": {
         "label": "OpenRouter (aggregator)",
