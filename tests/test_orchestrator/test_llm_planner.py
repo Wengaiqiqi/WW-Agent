@@ -1,5 +1,5 @@
 # tests/test_orchestrator/test_llm_planner.py
-from orchestrator.main import LLMPlanner
+from orchestrator.turns import LLMPlanner
 from agents.shared.mock_chat_model import MockChatModel
 
 

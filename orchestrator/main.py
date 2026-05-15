@@ -12,7 +12,7 @@ from orchestrator.registry import load_cards
 from orchestrator.mcp_host import MCPHost
 from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
-from orchestrator.graph import build_graph
+from orchestrator.turns import LLMPlanner, _stub_planner, run_prompt_once
 
 log = logging.getLogger(__name__)
 
@@ -34,44 +34,6 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
     runtime_dir = Path(".agent/runtime")
     runtime_dir.mkdir(parents=True, exist_ok=True)
     (runtime_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
-
-
-class LLMPlanner:
-    """Plans the next capability + arguments by asking the LLM."""
-
-    _SYSTEM = (
-        "You are the orchestrator's planning brain. The available capabilities are listed below. "
-        "Reply with ONLY a JSON object of the form "
-        '{"capability": "<name>", "arguments": {<args>}}. '
-        "No prose, no markdown fence."
-    )
-
-    def __init__(self, *, llm, available_capabilities: list[str]):
-        self._llm = llm
-        self._caps = available_capabilities
-
-    def __call__(self, state) -> dict:
-        prompt = (
-            f"Available capabilities: {self._caps}\n\n"
-            f"User: {state['user_input']}"
-        )
-        out = self._llm.invoke([
-            {"role": "system", "content": self._SYSTEM},
-            {"role": "user", "content": prompt},
-        ])
-        text = out.content.strip()
-        # Strip accidental code fences
-        if text.startswith("```"):
-            # Strip opening fence (with optional language tag) and closing fence
-            lines = text.split("\n")
-            # Drop first line (```json or ```)
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            # Drop trailing fence
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        return json.loads(text)
 
 
 def _build_orchestrator_llm():
@@ -99,24 +61,6 @@ def _build_orchestrator_llm():
     )
 
 
-def _stub_planner(state):
-    """Phase-5 deterministic planner with two modes:
-    1. If MOCK_ORCH_SCRIPT env var is set, parse it as JSON and use as decision
-       (allows e2e tests to script the orchestrator's routing).
-    2. Otherwise, expect 'CAPABILITY:ARG' in user_input.
-    """
-    scripted = os.environ.get("MOCK_ORCH_SCRIPT")
-    if scripted:
-        return json.loads(scripted)
-    text = state["user_input"]
-    if ":" in text:
-        cap, _, arg = text.partition(":")
-        return {"capability": cap.strip(), "arguments": {"path": arg.strip()}}
-    raise ValueError(
-        "Phase-5 stub planner: expected 'CAPABILITY:ARG' input or MOCK_ORCH_SCRIPT env"
-    )
-
-
 async def run_prompt(prompt: str) -> int:
     hmac_key = secrets.token_urlsafe(32)
     host = MCPHost(hmac_key=hmac_key)
@@ -124,61 +68,23 @@ async def run_prompt(prompt: str) -> int:
     mux = StreamMux()
     try:
         await _bootstrap(host, router)
-        mode = os.environ.get("LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write")
-
-        # Planner selection:
-        #   - Mock provider OR no provider configured → deterministic stub planner.
-        #   - Real provider → LLMPlanner.
         provider = os.environ.get("LANGCHAIN_AGENT_MODEL", "")
         if provider.startswith("mock") or not provider:
             planner = _stub_planner
         else:
             llm = _build_orchestrator_llm()
             planner = LLMPlanner(llm=llm, available_capabilities=router.all_capabilities())
-
-        graph = build_graph(
-            router=router, host=host, planner=planner,
-            hmac_key=hmac_key, mode=mode,
+        return await run_prompt_once(
+            prompt=prompt,
+            host=host,
+            router=router,
+            hmac_key=hmac_key,
+            planner=planner,
+            permission_mode_provider=lambda: os.environ.get(
+                "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
+            ),
+            mux=mux,
         )
-
-        # Start telemetry tail so A2A peer invocations surface in the unified stream.
-        from orchestrator import telemetry
-        telemetry.reset_log()
-        stop = asyncio.Event()
-        tail_task = asyncio.create_task(telemetry.tail(mux, stop))
-        try:
-            result = await graph.ainvoke({"user_input": prompt, "trace_id": "t1"})
-            # Give the tail a moment to flush any in-flight events.
-            await asyncio.sleep(0.1)
-        finally:
-            stop.set()
-            try:
-                await asyncio.wait_for(tail_task, timeout=2.0)
-            except asyncio.TimeoutError:
-                tail_task.cancel()
-
-        if result.get("error"):
-            mux.emit(
-                agent_id="orchestrator", trace_id="t1",
-                chunk=f"error: {result['error']}\n",
-            )
-            return 1
-
-        cap = result.get("capability", "")
-        owner = router.resolve(cap) if cap else "orchestrator"
-        call_result = result.get("result")
-        # MCP returns a CallToolResult-like object with `.content` (a list of
-        # content blocks) and `.isError`. We render the text blocks.
-        contents = getattr(call_result, "content", None)
-        if contents is None and isinstance(call_result, dict):
-            contents = call_result.get("content")
-        for piece in (contents or []):
-            text = getattr(piece, "text", None)
-            if text is None and isinstance(piece, dict):
-                text = piece.get("text", "")
-            if text:
-                mux.emit(agent_id=owner, trace_id="t1", chunk=text + "\n")
-        return 0
     finally:
         await host.shutdown_all()
 
