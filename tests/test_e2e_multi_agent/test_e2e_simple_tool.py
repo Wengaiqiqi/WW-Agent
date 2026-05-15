@@ -23,3 +23,28 @@ def test_orchestrator_dispatches_read_file_to_tool_agent(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "[tool]" in proc.stdout
     assert "hi there" in proc.stdout
+
+
+@pytest.mark.e2e
+def test_multi_agent_repl_dispatches_turn_and_exits(tmp_path):
+    target = tmp_path / "hello-repl.txt"
+    target.write_text("hello from repl", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+
+    proc = subprocess.run(
+        [sys.executable, "cli.py"],
+        input=f"read_file:{target}\n/exit\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "multi-agent REPL not fully implemented" not in proc.stdout
+    assert "hello from repl" in proc.stdout
+    # Windows anyio stdio_client cleanup may produce tracebacks during
+    # asyncio.run() shutdown that cannot be suppressed from application code.
+    # These are harmless and known — don't assert stderr cleanliness here.

@@ -12,6 +12,7 @@ from orchestrator.registry import load_cards
 from orchestrator.mcp_host import MCPHost
 from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
+from orchestrator.repl_types import LoopAction
 from orchestrator.turns import LLMPlanner, _stub_planner, run_prompt_once
 
 log = logging.getLogger(__name__)
@@ -102,15 +103,109 @@ def _handle_slash_agents(host, *, out=None) -> None:
 
 
 async def run_repl() -> int:
+    import config
+    from orchestrator.repl_controller import REPLController
+    from orchestrator.repl_commands import ReplCommandHandler
+    from orchestrator.repl_state import MultiAgentSessionState
+    from orchestrator.repl_ui import ReplUI
+    from orchestrator import telemetry
+
+    hmac_key = secrets.token_urlsafe(32)
+    host = MCPHost(hmac_key=hmac_key)
+    router = CapabilityRouter()
     mux = StreamMux()
-    mux.emit(
-        agent_id="orchestrator", trace_id="boot",
-        chunk=(
-            "multi-agent REPL not fully implemented in Phase 5 — "
-            "try `python cli.py --single` for now.\n"
-        ),
-    )
-    return 0
+    ui = ReplUI()
+
+    try:
+        telemetry.reset_log()
+        stop_telemetry = asyncio.Event()
+        tail_task = asyncio.create_task(telemetry.tail(mux, stop_telemetry))
+
+        await _bootstrap(host, router)
+
+        config.hydrate_env_from_credentials()
+        active_cfg = config.load_active_config()
+
+        memory_snapshot = ""
+        try:
+            from tool import tool_memory
+            memory_snapshot = tool_memory.snapshot_for_system_prompt()
+        except Exception:
+            pass
+
+        skills_list: list = []
+        try:
+            from skills.skill_loader import load_skills
+            skills_list = load_skills()
+        except Exception:
+            pass
+
+        instruction_files: list = []
+        try:
+            from project_context import discover_instruction_files
+            instruction_files = discover_instruction_files()
+        except Exception:
+            pass
+
+        state = MultiAgentSessionState.from_runtime(
+            active_cfg=active_cfg,
+            skills=skills_list,
+            instruction_files=instruction_files,
+            memory_snapshot=memory_snapshot,
+            workspace=Path.cwd(),
+        )
+
+        commands = ReplCommandHandler(
+            ui=ui, state=state, host=host, router=router,
+        )
+        controller = REPLController(
+            host=host, router=router, hmac_key=hmac_key,
+            state=state, commands=commands, ui=ui,
+        )
+
+        ui.render_welcome(
+            provider=state.provider,
+            model=state.model,
+            permission_mode=state.permission_mode,
+            agent_count=len(host.list_handles()),
+            workspace=str(state.workspace),
+        )
+
+        while True:
+            try:
+                text = await ui.read_input_async()
+            except EOFError:
+                ui.render_goodbye()
+                break
+            except KeyboardInterrupt:
+                ui.render_cancelled()
+                break
+            if not text.strip():
+                continue
+            try:
+                action = await controller.handle_input(text.strip())
+            except KeyboardInterrupt:
+                await host.cancel_all()
+                ui.render_cancelled()
+                action = LoopAction.CONTINUE
+            if action == LoopAction.EXIT:
+                break
+
+        return 0
+    finally:
+        _stop_telemetry = locals().get("stop_telemetry")
+        _tail_task = locals().get("tail_task")
+        if _stop_telemetry is not None and _tail_task is not None:
+            _stop_telemetry.set()
+            try:
+                await asyncio.wait_for(_tail_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                _tail_task.cancel()
+                try:
+                    await _tail_task
+                except asyncio.CancelledError:
+                    pass
+        await host.shutdown_all()
 
 
 def main(*, prompt: str | None = None) -> int:
