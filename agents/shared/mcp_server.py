@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from mcp.server import Server
-from mcp.types import Tool
+from mcp.types import TextContent, Tool
 
 
 Handler = Callable[[dict], Awaitable[Any]]
@@ -75,7 +75,13 @@ def build_server(*, name: str, tools: list[ToolSpec]) -> tuple[_ServerProxy, Any
         spec = spec_map.get(tool_name)
         if spec is None:
             raise ValueError(f"unknown tool: {tool_name}")
-        return await spec.handler(arguments)
+        result = await spec.handler(arguments)
+        # The MCP SDK treats any iterable (including str) as a sequence of
+        # content blocks. A bare string would be iterated character by character.
+        # Wrap string results in a TextContent list so the SDK is happy.
+        if isinstance(result, str):
+            return [TextContent(type="text", text=result)]
+        return result
 
     proxy = _ServerProxy(server, tools)
 

@@ -27,19 +27,15 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Phase 2: only --single is fully wired. Default falls back to legacy with a notice.
-    # Phase 5 will replace this fallback with `orchestrator.main`.
-    if not args.single:
-        print(
-            "[cli] multi-agent orchestrator not yet wired in this build; "
-            "falling back to legacy single-agent loop.",
-            file=sys.stderr,
-        )
-
-    from legacy.single_agent_loop import run_repl, run_prompt
-    if args.command == "prompt":
-        return run_prompt(" ".join(args.prompt))
-    return run_repl()
+    if args.single:
+        from legacy.single_agent_loop import run_repl, run_prompt
+        if args.command == "prompt":
+            return run_prompt(" ".join(args.prompt))
+        return run_repl()
+    else:
+        from orchestrator.main import main as orch_main
+        prompt = " ".join(args.prompt) if args.command == "prompt" else None
+        return orch_main(prompt=prompt)
 
 
 if __name__ == "__main__":
