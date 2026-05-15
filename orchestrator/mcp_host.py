@@ -81,6 +81,22 @@ class MCPHost:
         """Return the list of internal client handles, for /agents display."""
         return list(self._clients.values())
 
+    async def cancel_all(self) -> None:
+        """Send MCP notifications/cancelled to every specialist.
+
+        The MCP SDK may expose this via `session.send_notification(method=...)` or
+        via a specific method; the call is best-effort. We swallow errors so a
+        crashed specialist doesn't prevent cancellation of the others."""
+        for cid, handle in self._clients.items():
+            try:
+                # Try the generic notification API first.
+                if hasattr(handle.session, "send_notification"):
+                    await handle.session.send_notification(
+                        method="notifications/cancelled", params={}
+                    )
+            except Exception as exc:
+                log.debug("cancel_all: error sending notification to %s: %s", cid, exc)
+
     async def shutdown_all(self) -> None:
         # On Windows, anyio's stdio_client can raise exceptions during cleanup due to
         # cancel scope conflicts. Since we're terminating all processes anyway, we suppress

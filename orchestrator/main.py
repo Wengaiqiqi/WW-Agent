@@ -205,6 +205,12 @@ async def run_repl() -> int:
 
 
 def main(*, prompt: str | None = None) -> int:
-    if prompt is not None:
-        return asyncio.run(run_prompt(prompt))
-    return asyncio.run(run_repl())
+    try:
+        if prompt is not None:
+            return asyncio.run(run_prompt(prompt))
+        return asyncio.run(run_repl())
+    except KeyboardInterrupt:
+        # User Ctrl+C'd. The asyncio context manager already triggered the
+        # shutdown path via CancelledError; nothing more to do.
+        print("\n[orchestrator] cancelled by user", file=__import__("sys").stderr)
+        return 130  # conventional shell exit code for SIGINT
