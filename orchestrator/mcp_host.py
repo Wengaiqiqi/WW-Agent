@@ -85,17 +85,21 @@ def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
     }
     env["AUTHZ_HMAC_KEY"] = hmac_key
     env["AGENT_ID"] = agent_id
-    # The orchestrator's PermissionGate (orchestrator/permission_gate.py) is
-    # the authoritative wall: it decides which capabilities a planner may
-    # dispatch under the user's current permission mode, and signs a short-lived
-    # JWT grant naming exactly the allowed tool. Once a specialist receives
-    # that grant, its INTERNAL tool selection (e.g. tool-agent's ReAct loop
-    # reaching for run_python as a fallback) is already inside the trust
-    # boundary — gating it a second time with the legacy in-process authz
-    # would block the agent from completing the very task the user asked for.
-    # So we grant the subprocess full internal access; the orchestrator still
-    # owns the outer gate.
-    env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "danger-full-access"
+    # Permission model: the orchestrator's ``PermissionGate`` is the
+    # authoritative wall. It signs a short-lived JWT grant that names exactly
+    # the tool a specialist may invoke; ``tool_executor.execute_tool`` rejects
+    # anything not in that grant's ``allowed_tools``. The agent subprocess
+    # does not run ``tool/tools.py``'s ``@tool``-decorated functions (which is
+    # the only code path that reads ``LANGCHAIN_AGENT_PERMISSION_MODE``); all
+    # in-process tool dispatch goes through ``_wrap_*`` in tool_executor,
+    # which is JWT-gated.
+    #
+    # We still set the env so any *defensive* future import of ``tool/tools.py``
+    # in the subprocess context would fail closed at ``workspace-write`` —
+    # forcing ``run_command`` / ``run_python`` into a deny path that the
+    # operator can audit, rather than silently elevating because nobody set
+    # the env. This is "safe by absence", not "permissive by default".
+    env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
     return env
 
 

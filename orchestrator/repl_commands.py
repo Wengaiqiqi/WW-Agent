@@ -98,6 +98,20 @@ class ReplCommandHandler:
             lines.append("")
             lines.append("Switch with: [bold]/permissions <mode>[/bold]")
             lines.append("Example: [dim]/permissions danger-full-access[/dim]")
+            # Skills run under an *inner* whitelist that's more permissive
+            # than the outer one: under workspace-write or above, an active
+            # skill can mint a grant for any tool — including ``run_command``
+            # — because it's executing curated code under skills/<slug>/.
+            # Surface this so the user isn't surprised by a skill shelling
+            # out under what looks like a write-only mode.
+            if current != "read-only" and self.state.skills:
+                lines.append("")
+                lines.append(
+                    "[yellow]Note:[/yellow] active skills can invoke any "
+                    "tool-agent capability (including [bold]run_command[/bold] / "
+                    "[bold]run_python[/bold]) under this mode. Drop to "
+                    "read-only to disable skill execution entirely."
+                )
             self.ui.render_text(
                 title="Permission Mode",
                 text="\n".join(lines),

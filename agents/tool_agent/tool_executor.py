@@ -372,12 +372,25 @@ _TOOL_MAP: dict[str, tuple] = {
 }
 
 
-# Tools that the orchestrator's planner must NOT call directly. They stay
-# available to tool-agent's internal ReAct loop (via make_langchain_tools)
-# so the agent can choose to reach for them, but they are NOT registered
-# with MCP, so they never surface as a top-level orchestrator capability.
-# This keeps shell/python execution behind tool-agent's reflection loop and
-# out of reach of the orchestrator's permission whitelist directly.
+# Tools NOT registered as MCP capabilities on the orchestrator. The intent:
+# the planner cannot pick `run_python` / `run_command` as a top-level dispatch
+# capability (those would short-circuit the ReAct loop and dodge the cost-of-
+# reflection that motivates the multi-agent split in the first place).
+#
+# They remain reachable in two other ways, and that is by design:
+#
+# 1. tool-agent's own ReAct loop (``make_langchain_tools``) — the agent
+#    decides when to shell out, which is exactly the autonomy we want.
+# 2. skill-agent → A2A → tool-agent: ``_call_remote_tool`` mints a
+#    JWT-scoped grant via ``_mint_tool_grant``. Whether that grant is
+#    actually allowed is gated by ``_SKILL_INNER_WHITELIST[mode]`` — under
+#    ``workspace-write`` and ``danger-full-access`` that whitelist is ``*``,
+#    so vetted skills can run their domain scripts. Under ``read-only`` the
+#    outer ``_MODE_WHITELIST`` blocks skill dispatch upstream, so the inner
+#    whitelist never sees a request.
+#
+# Adding a tool here only removes the *direct planner dispatch* path, not
+# the *internal* paths. Document the actual blast radius before adding.
 _INTERNAL_ONLY: frozenset[str] = frozenset({"run_python", "run_command"})
 
 
