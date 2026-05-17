@@ -28,8 +28,10 @@ def load_active_config() -> ActiveConfig:
     """Resolve which model should be active.
 
     Order: ``LANGCHAIN_AGENT_MODEL`` env var (``provider`` or
-    ``provider/model``), then ``.claude/settings.json`` ``model`` block,
-    then ``DEFAULT_PROVIDER`` with its first model.
+    ``provider/model``), then the ``model`` block in the project's
+    settings.json (default ``.langchain-agent/settings.json``, overridable
+    via ``LANGCHAIN_AGENT_CONFIG_DIR``), then ``DEFAULT_PROVIDER`` with
+    its first model.
     """
     env_choice = os.getenv("LANGCHAIN_AGENT_MODEL", "").strip()
     if env_choice:

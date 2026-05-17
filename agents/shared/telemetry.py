@@ -38,7 +38,7 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
-def _redact_secrets(message: str) -> str:
+def redact_secrets(message: str) -> str:
     if not message:
         return message
     redacted = message
@@ -57,5 +57,5 @@ def emit_event(*, agent_id: str, trace_id: str, message: str) -> None:
         f.write(json.dumps({
             "agent_id": agent_id,
             "trace_id": trace_id,
-            "message": _redact_secrets(message),
+            "message": redact_secrets(message),
         }) + "\n")

@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# The default used when no env var is set AND no settings.json exists yet —
+# i.e. a fresh install where the user hasn't run the ``/model`` wizard. Set
+# to ``xiaomi`` because the original developer's primary endpoint is MiMo;
+# the wizard immediately re-prompts at first launch so this default is only
+# ever transient. Changing it is fine — only affects the first-run state.
 DEFAULT_PROVIDER = "xiaomi"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 4096

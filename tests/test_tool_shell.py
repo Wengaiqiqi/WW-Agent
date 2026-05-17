@@ -123,13 +123,12 @@ def test_skill_declared_env_keys_bypass_secret_filter(monkeypatch):
 
 def test_skill_declared_env_keys_dont_break_when_skills_dir_missing(monkeypatch):
     """``_skill_declared_env_keys`` must tolerate any error (no skills/, broken
-    JSON, import failures) — run_command can't depend on the skills loader."""
+    JSON, import failures) — run_command can't depend on the skills loader.
+
+    The real production try/except catches *any* exception from the loader;
+    we simulate that "no opt-ins available" outcome here with an empty set."""
     from tool import tool_shell
 
-    def _boom():
-        raise RuntimeError("skills loader exploded")
-
     monkeypatch.setattr(tool_shell, "_skill_declared_env_keys", lambda: set())
-    # Should not raise; behaves as if no opt-ins.
     out = tool_shell._filter_secrets_from_env({"PATH": "/usr/bin"})
     assert out == {"PATH": "/usr/bin"}

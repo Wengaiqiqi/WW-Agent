@@ -129,13 +129,20 @@ Run `/tools` for the live list. Highlights:
 | `web_crawl` | read | Same-host BFS (≤25 pages). No JS rendering |
 | `memory` | write | Cross-session `MEMORY.md` / `USER.md` under `.langchain-agent/memories/` |
 | `todo_write` | write | Structured task list under `.langchain-agent/todos.json` |
-| `clarify` | read | Agent-initiated question to user (arrow-key picker in TTY) |
+| `clarify`¹ | read | Agent-initiated question to user (arrow-key picker in TTY) |
 | `osv_check` | read | OSV malware/CVE lookup for `(package, ecosystem)` |
 | `home_assistant` | danger | Home Assistant REST API (`HASS_TOKEN` required). Blocks `shell_command` / `python_script` / `command_line` HA domains |
 | `x_search` | read | xAI's hosted X (Twitter) search (`XAI_API_KEY` required) |
 | `vision_analyze` | read | Image + prompt → vision-capable LLM (SSRF-checked for remote URLs) |
 | `mixture_of_agents` | read | Parallel reference models + aggregator (paper: arXiv:2406.04692) |
 | `calculator` / `current_datetime` / `sleep` / `config` / `tool_manifest` | various | Misc utilities |
+
+¹ `clarify` is currently wired only through the legacy single-agent loop
+(`--single`). The multi-agent tool-agent surface does not expose it because
+the UI callback registration happens in the legacy REPL only — calling
+`clarify` from multi-agent mode would return a "no UI callback" error.
+Pending follow-up: forward clarify requests from tool-agent through A2A
+back to the orchestrator's TUI.
 
 ### V4A patch format
 

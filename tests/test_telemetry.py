@@ -6,48 +6,48 @@ import json
 import pytest
 
 from orchestrator import telemetry
-from orchestrator.telemetry import _redact_secrets, emit_event
+from orchestrator.telemetry import redact_secrets, emit_event
 
 
 def test_redacts_openai_key():
-    out = _redact_secrets("response was Authorization: Bearer sk-proj-aBcD1234EfGh5678IjKl")
+    out = redact_secrets("response was Authorization: Bearer sk-proj-aBcD1234EfGh5678IjKl")
     assert "sk-proj-aBcD1234EfGh5678IjKl" not in out
     assert "REDACTED" in out
 
 
 def test_redacts_anthropic_key():
     msg = "request failed: sk-ant-api03-XXXXXXXXXXXXXXXXXX bad request"
-    assert "sk-ant-api03-XXXXXXXXXXXXXXXXXX" not in _redact_secrets(msg)
+    assert "sk-ant-api03-XXXXXXXXXXXXXXXXXX" not in redact_secrets(msg)
 
 
 def test_redacts_github_pat():
     msg = "git config token=ghp_aBcDefGhIjKlMnOpQrStUv12"
-    assert "ghp_aBcDefGhIjKlMnOpQrStUv12" not in _redact_secrets(msg)
+    assert "ghp_aBcDefGhIjKlMnOpQrStUv12" not in redact_secrets(msg)
 
 
 def test_redacts_aws_access_key():
     msg = "stack trace: AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE in environ"
-    out = _redact_secrets(msg)
+    out = redact_secrets(msg)
     assert "AKIAIOSFODNN7EXAMPLE" not in out
 
 
 def test_redacts_bearer_header():
     msg = "header: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def"
-    out = _redact_secrets(msg)
+    out = redact_secrets(msg)
     assert "eyJhbGciOiJIUzI1NiJ9.abc.def" not in out
     assert "Bearer ***REDACTED***" in out or "bearer ***REDACTED***" in out.lower()
 
 
 def test_redacts_envdump_style_key_assignments():
     msg = "env dump: OPENAI_API_KEY=sk-123456789012 GOOGLE_TOKEN=longsecret123"
-    out = _redact_secrets(msg)
+    out = redact_secrets(msg)
     assert "sk-123456789012" not in out
     assert "longsecret123" not in out
 
 
 def test_keeps_innocent_messages_intact():
     msg = "(via A2A from orchestrator) tool.task — completed in 1.2s"
-    assert _redact_secrets(msg) == msg
+    assert redact_secrets(msg) == msg
 
 
 def test_emit_event_redacts_on_write(tmp_path, monkeypatch):

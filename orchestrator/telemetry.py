@@ -7,7 +7,7 @@ from orchestrator.stream_mux import StreamMux
 # Redaction lives in agents.shared so an agent subprocess can call emit_event
 # without depending on orchestrator.* — we just re-use the same function here
 # to keep mask behavior consistent across the two write paths.
-from agents.shared.telemetry import _redact_secrets
+from agents.shared.telemetry import redact_secrets
 
 _PATH = Path(".agent/runtime/telemetry.ndjson")
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MiB — past this, rotate to .1
@@ -71,7 +71,7 @@ def emit_event(*, agent_id: str, trace_id: str, message: str) -> None:
 
     Appends one JSON line to telemetry.ndjson. The orchestrator's tail task
     will pick it up and surface it via the unified stream. Free-form
-    ``message`` is run through ``_redact_secrets`` before write — agents
+    ``message`` is run through ``redact_secrets`` before write — agents
     sometimes echo HTTP response bodies or env dumps that carry credentials
     they didn't intend to log."""
     _PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -80,5 +80,5 @@ def emit_event(*, agent_id: str, trace_id: str, message: str) -> None:
         f.write(json.dumps({
             "agent_id": agent_id,
             "trace_id": trace_id,
-            "message": _redact_secrets(message),
+            "message": redact_secrets(message),
         }) + "\n")
