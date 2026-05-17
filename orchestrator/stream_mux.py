@@ -3,6 +3,11 @@ import sys
 from typing import TextIO
 
 
+# Cosmetic short tags for the three built-in agents. Any agent not listed
+# here falls back to ``[{agent_id}]`` (see ``_AGENT_TAG.get`` below), so
+# adding a new specialist is functionally complete without touching this
+# dict — entries here are purely a "shorter on screen" UX choice for the
+# names users see most often.
 _AGENT_TAG = {
     "orchestrator": "[orchestrator]",
     "skill-agent": "[skill]",

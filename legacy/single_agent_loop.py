@@ -1,17 +1,27 @@
 """
-W&W Agent CLI.
+Legacy single-agent REPL — the original W&W Agent CLI before the
+multi-agent split.
 
-Inspired by the Claw Code CLI shape in the adjacent reference project:
-- interactive REPL
-- slash commands
-- session status
-- markdown rendering
-- visible tool calls
-- prompt history and completion
+Kept reachable via ``python cli.py --single`` for cases where the
+multi-agent overhead (extra processes, A2A streaming) isn't useful:
+short non-interactive prompts, restricted environments where spawning
+subprocesses fails, or comparing behaviour against the new orchestrator
+during development.
+
+Architecture sketch:
+- Interactive REPL with slash commands, session status, markdown rendering.
+- LangGraph ReAct agent built from ``tool/tools.py``'s ``@tool``-decorated
+  functions (NOT the wrapped tool-agent surface used by multi-agent mode).
+- System prompt is split into a stable prefix (base + memory + instructions
+  + skill catalog) and a per-turn active-skills block, so downstream prompt
+  caches stay valid across most turns.
+- Style rules (``LANGUAGE_RULE`` / ``CONCISE_RULE`` / ``NO_RAW_TOOL_MARKUP_RULE``)
+  come from the shared ``prompt_rules`` module so legacy stays aligned with
+  the multi-agent paths.
 
 Run:
-    python cli.py
-    python cli.py prompt "What can you do?"
+    python cli.py --single
+    python cli.py --single prompt "What can you do?"
 """
 
 from __future__ import annotations

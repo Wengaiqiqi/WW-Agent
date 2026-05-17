@@ -208,18 +208,35 @@ class MCPHost:
                 log.debug("cancel_all: error sending notification to %s: %s", cid, exc)
 
     async def shutdown_all(self) -> None:
-        # On Windows, anyio's stdio_client can raise exceptions during cleanup due to
-        # cancel scope conflicts. Since we're terminating all processes anyway, we suppress
-        # these errors and let OS cleanup handle the subprocesses.
+        """Close every MCP client session.
+
+        On POSIX, ``stack.aclose()`` drives the stdio_client teardown which
+        terminates the subprocess group cleanly. On Windows, anyio's
+        stdio_client can raise during cleanup because the cancel scope is
+        exited from a different task than it was entered (the orchestrator's
+        Ctrl+C dispatch is the typical trigger). Re-raising the cancel-scope
+        error would mask the real shutdown signal, so we swallow it and
+        always finish with a short ``aclose`` attempt so the subprocess
+        receives EOF on its stdin and exits, instead of relying purely on
+        OS cleanup (which doesn't kick in until the Python process itself
+        exits — a problem if the orchestrator is embedded).
+        """
         import sys
-        if sys.platform == "win32":
-            # On Windows, just clear clients without awaiting close
-            # The subprocess will be cleaned up by the OS
-            self._clients.clear()
-        else:
-            for cid, handle in list(self._clients.items()):
-                try:
-                    await asyncio.wait_for(handle.stack.aclose(), timeout=5.0)
-                except (asyncio.TimeoutError, Exception) as e:
-                    log.debug("error closing client %s: %s", cid, type(e).__name__)
-            self._clients.clear()
+        for cid, handle in list(self._clients.items()):
+            try:
+                await asyncio.wait_for(handle.stack.aclose(), timeout=5.0)
+            except asyncio.CancelledError:
+                # Shutdown path is allowed to be cancelled; don't propagate.
+                pass
+            except asyncio.TimeoutError:
+                log.warning("shutdown_all: client %s aclose timed out (>5s)", cid)
+            except RuntimeError as exc:
+                # The anyio cancel-scope wart on Windows lives here. Other
+                # RuntimeErrors are real and worth surfacing in the log.
+                if sys.platform == "win32" and "cancel scope" in str(exc):
+                    log.debug("shutdown_all: anyio cancel-scope wart on %s (ignored)", cid)
+                else:
+                    log.warning("shutdown_all: client %s raised %s", cid, exc)
+            except Exception as exc:
+                log.debug("shutdown_all: client %s raised %s", cid, type(exc).__name__)
+        self._clients.clear()

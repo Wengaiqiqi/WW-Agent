@@ -116,7 +116,16 @@ def x_search(
     enable_image_understanding: bool = False,
     enable_video_understanding: bool = False,
 ) -> dict[str, Any]:
-    """Search X (Twitter) via xAI's ``x_search`` Responses API tool."""
+    """Search X (Twitter) via xAI's ``x_search`` Responses API tool.
+
+    Synchronous: this function uses blocking ``urllib.request`` + blocking
+    ``time.sleep`` on retry. When called via LangChain's ``@tool`` surface
+    the runner schedules it on a worker thread (sync tools go through
+    ``run_in_executor``), so the event loop stays responsive — but the
+    worker thread *is* held for up to ``XAI_X_SEARCH_TIMEOUT`` seconds plus
+    retry sleeps. If you need true async (e.g. concurrent x_search calls
+    from a planner), wrap this in ``asyncio.to_thread`` at the call site.
+    """
     if not query or not query.strip():
         raise ValueError("query is required for x_search")
 

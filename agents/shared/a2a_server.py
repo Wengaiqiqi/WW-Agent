@@ -85,6 +85,12 @@ class A2AServer:
         # closing and uvicorn re-binding, another process can claim the port.
         # Rare in practice, but pytest's xdist parallel runners do hit it.
         # Retry the bind a few times with a fresh port pick before giving up.
+        #
+        # Each retry adds a small random sleep on top of the constant 2-second
+        # readiness budget so two A2A servers losing the same race don't keep
+        # losing it: without jitter, both fall into lockstep and both retry
+        # at the same instant against the same kernel allocator.
+        import random
         last_exc: Exception | None = None
         for attempt in range(5):
             config = uvicorn.Config(
@@ -105,13 +111,14 @@ class A2AServer:
             if self._server.started:
                 return
             # Task finished without `started=True` → bind failed (typically
-            # OSError EADDRINUSE). Capture, repick port, retry.
+            # OSError EADDRINUSE). Capture, repick port, retry with jitter.
             if self._task.done():
                 try:
                     self._task.result()
                 except Exception as exc:
                     last_exc = exc
             self._port = _pick_free_port()
+            await asyncio.sleep(random.uniform(0.05, 0.25))
         raise RuntimeError(
             f"A2A server failed to bind after 5 attempts (last error: {last_exc!r})"
         )

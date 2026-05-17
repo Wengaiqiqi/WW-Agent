@@ -33,6 +33,12 @@ def json_result(data: object) -> str:
 # AUTHZ_HMAC_KEY, MY_TOKEN, FOO_PASSWORD, AWS_ACCESS_KEY_ID, etc. The narrower
 # provider-name pattern catches per-provider conventions like XIAOMI_AK that
 # don't include a sensitive keyword in the name.
+#
+# Known false positives are rare but possible: any env var whose name
+# happens to start or end with ``_API_`` / ``_KEY_`` / etc. (e.g. an
+# ``ANALYTICS_API_HOST`` URL) gets stripped. Skill authors that legitimately
+# need such a variable should declare it in ``_meta.json`` under ``requiresEnv``
+# — the allowlist below honors that and the filter then lets it through.
 _SECRET_KEYWORD_RE = re.compile(
     r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|"
     r"AUTH|HMAC|PRIVATE|API|SESSION|COOKIE|BEARER|CERT)(?:_|$)"
