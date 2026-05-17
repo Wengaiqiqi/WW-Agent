@@ -136,74 +136,62 @@ SLASH_COMMANDS = {
 
 
 class Spinner:
-    FRAMES = ("|", "/", "-", "\\")
+    """Drop-in replacement for the old threaded Spinner.
+
+    The previous implementation ran a daemon thread that wrote raw ANSI
+    escape sequences (``\\033[36m{frame}\\033[0m``) directly to
+    ``sys.stdout``. When a Rich ``Live`` region was also rendering to the
+    same console, the two output streams fought each other and produced
+    visible escape codes and duplicated lines in the user's terminal.
+
+    This shim delegates to Rich's own ``Console.status()`` so the spinner
+    composes cleanly with Live regions and Rich panels. The public API
+    is unchanged (``start``, ``stop``, ``set_label``,
+    ``set_thinking_after_tool_minimum``) so call sites stay intact.
+    """
+
     MIN_TOOL_LABEL_SECONDS = MIN_TOOL_LABEL_SECONDS
 
     def __init__(self, label: str) -> None:
         self.label = label
-        self._stop = threading.Event()
+        self._status = None
         self._stopped = False
-        self._thread: threading.Thread | None = None
-        self._last_width = 0
-        self._current_frame = self.FRAMES[0]
-        self._lock = threading.Lock()
         self._tool_label_started_at: float | None = None
 
     def start(self) -> None:
+        if self._status is not None:
+            return
         self._stopped = False
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._animate, daemon=True)
-        self._thread.start()
-
-    def _animate(self) -> None:
-        for frame in itertools.cycle(self.FRAMES):
-            if self._stop.is_set():
-                break
-            with self._lock:
-                self._current_frame = frame
-                self._write_frame(frame)
-            time.sleep(0.08)
-
-    def _write_frame(self, frame: str) -> None:
-        text = f"\033[36m{frame}\033[0m {self.label}"
-        visible_width = 2 + len(self.label)
-        padding = " " * max(0, self._last_width - visible_width)
-        sys.stdout.write(f"\r{text}{padding}")
-        sys.stdout.flush()
-        self._last_width = visible_width
+        self._status = console.status(self.label, spinner="dots")
+        self._status.start()
 
     def set_label(self, label: str) -> None:
-        with self._lock:
-            if self._stopped:
-                return
-            self.label = label
-            if label.startswith("Calling tool:"):
-                self._tool_label_started_at = time.monotonic()
-            else:
-                self._tool_label_started_at = None
-            self._write_frame(self._current_frame)
+        if self._stopped:
+            return
+        self.label = label
+        if label.startswith("Calling tool:"):
+            self._tool_label_started_at = time.monotonic()
+        else:
+            self._tool_label_started_at = None
+        if self._status is not None:
+            self._status.update(status=label)
 
     def set_thinking_after_tool_minimum(self) -> None:
         remaining = 0.0
-        with self._lock:
-            if self._tool_label_started_at is not None:
-                elapsed = time.monotonic() - self._tool_label_started_at
-                remaining = max(0.0, self.MIN_TOOL_LABEL_SECONDS - elapsed)
+        if self._tool_label_started_at is not None:
+            elapsed = time.monotonic() - self._tool_label_started_at
+            remaining = max(0.0, self.MIN_TOOL_LABEL_SECONDS - elapsed)
         if remaining:
             time.sleep(remaining)
         self.set_label("Thinking...")
 
     def stop(self) -> None:
-        with self._lock:
-            if self._stopped:
-                return
-            self._stopped = True
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
-        with self._lock:
-            sys.stdout.write("\r" + (" " * max(self._last_width, 2 + len(self.label))) + "\r")
-            sys.stdout.flush()
+        if self._stopped:
+            return
+        self._stopped = True
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
 
 
 def can_use_interactive_picker() -> bool:
@@ -1534,7 +1522,7 @@ def _make_slash_completer(commands: dict[str, str]):
     return SlashCommandCompleter()
 
 
-def ask_boxed_input(history) -> str:
+def ask_boxed_input(history, *, label: str = "") -> str:
     """Read a single user submission inside a bordered input box (Claude Code style).
 
     Each call builds a fresh non-fullscreen ``prompt_toolkit.Application`` whose
@@ -1635,7 +1623,7 @@ def ask_boxed_input(history) -> str:
         height=_calc_input_height,
     )
 
-    framed = Frame(input_window, style="class:input-frame")
+    framed = Frame(input_window, style="class:input-frame", title=f" {label} " if label else None)
     body = HSplit([framed])
 
     layout = Layout(

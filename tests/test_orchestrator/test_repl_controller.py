@@ -44,8 +44,13 @@ class _FakeRouter:
     def resolve(self, capability):
         return "tool-agent"
 
+    def describe_tools(self):
+        return {}
+
 
 def _make_controller(tmp_path, **overrides):
+    import os
+    os.environ["LANGCHAIN_AGENT_MODEL"] = "mock"
     buf = io.StringIO()
     ui = ReplUI(
         console=Console(file=buf, force_terminal=False, width=120),
@@ -86,6 +91,29 @@ async def test_handle_input_executes_normal_turn(tmp_path):
     assert result == LoopAction.CONTINUE
     assert state.turns == 1
     assert host.calls
+
+
+@pytest.mark.asyncio
+async def test_streaming_conversational_response_renders_text(tmp_path):
+    """Prose answers stream into the TUI and land in session history."""
+    from agents.shared.mock_chat_model import MockChatModel
+    from orchestrator.turns import LLMPlanner
+
+    controller, ui, state, host, router, buf = _make_controller(tmp_path)
+    essay = "窗外的春风拂过书桌，鸟儿在树梢轻声歌唱。"
+    llm = MockChatModel(responses=[essay], chunk_size=4)
+    controller._planner = LLMPlanner(
+        llm=llm, available_capabilities=router.all_capabilities(),
+    )
+
+    result = await controller._execute_turn("写一个小短文")
+    assert result == LoopAction.CONTINUE
+    assert state.turns == 1
+    out = buf.getvalue()
+    assert "窗外" in out
+    assert "[multi-agent]:" in out
+    # Conversational path must not call any tool.
+    assert host.calls == []
 
 
 @pytest.mark.asyncio

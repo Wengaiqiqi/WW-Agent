@@ -4,12 +4,71 @@ import asyncio
 import logging
 import os
 import secrets
+import time
+
+from rich.markdown import Markdown
+from rich.live import Live
+from rich.text import Text
 
 from orchestrator.repl_types import LoopAction
 from orchestrator.repl_ui import ReplUI
 from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner
 
 log = logging.getLogger(__name__)
+
+# -- Rendering helpers (extracted from legacy/single_agent_loop.py CliApp) --
+
+TOOL_ARG_PRIMARY_KEY = {
+    "read_file": "path",
+    "write_file": "path",
+    "edit_file": "path",
+    "glob_search": "pattern",
+    "grep_search": "pattern",
+    "list_directory": "path",
+    "run_command": "command",
+    "web_search": "query",
+    "web_extract": "url",
+}
+
+
+def _format_tool_args(name: str, args: dict) -> str:
+    if not args:
+        return ""
+    key = TOOL_ARG_PRIMARY_KEY.get(name)
+    if key and key in args and args[key] is not None:
+        value = str(args[key])
+        first_line = value.strip().splitlines()[0] if value.strip() else ""
+        if len(first_line) > 80:
+            first_line = first_line[:77] + "…"
+        return first_line
+    pairs = []
+    for k, v in list(args.items())[:2]:
+        v_str = v if isinstance(v, str) else repr(v)
+        if len(v_str) > 40:
+            v_str = v_str[:37] + "…"
+        pairs.append(f"{k}={v_str}")
+    return ", ".join(pairs)
+
+
+def _build_tool_line(name: str, args: dict, *, active: bool) -> Text:
+    """Build the `⏺ tool_name  arg` line for a tool call.
+
+    ``active=True``: the tool is still running — bullet blinks.
+    ``active=False``: the tool returned — bullet stays static.
+
+    Used by the streaming Live region in ``_delegate_to_agent``: the same
+    function renders both states, so freezing a running call into its final
+    form is just an ``update()`` with ``active=False`` followed by ``stop()``.
+    """
+    summary = _format_tool_args(name, args)
+    t = Text()
+    # Rich's `blink` maps to ANSI SGR 5; terminals that ignore it fall back
+    # to a static bold-black bullet, which is still readable.
+    t.append("⏺ ", style="bold black blink" if active else "bold black")
+    t.append(name, style="bold")
+    if summary:
+        t.append(f"  {summary}", style="dim")
+    return t
 
 
 class REPLController:
@@ -39,73 +98,404 @@ class REPLController:
         return await self._execute_turn(text)
 
     async def _execute_turn(self, text: str) -> LoopAction:
-        await self._ensure_planner()
-
         trace_id = secrets.token_hex(4)
+        MAX_RETRIES = 3
+        error_context = ""
 
-        runner = TurnRunner(
-            host=self.host,
-            router=self.router,
-            hmac_key=self.hmac_key,
-            permission_mode_provider=lambda: self.state.permission_mode,
-            planner=self._planner,
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                await self._ensure_planner()
+                plan_input = {"user_input": text}
+                if error_context:
+                    plan_input["user_input"] = (
+                        f"{text}\n\n"
+                        f"[Previous attempt failed: {error_context}. "
+                        "Try a different approach or use different tools.]"
+                    )
+
+                # -- conversational path streams; tool-dispatch returns silently --
+                plan, streamed = await self._plan_with_streaming(plan_input)
+                capability = plan.get("capability", "")
+
+                if not capability:
+                    response = plan.get("response", "")
+                    self.state.record_turn(
+                        user_input=text, capability="", owner="orchestrator",
+                        observation=response, error=None,
+                    )
+                    if not streamed and response:
+                        # Non-streaming planner (e.g. stub) — render once at end.
+                        self.ui.render_markdown(response)
+                    self.ui.render_divider()
+                    return LoopAction.CONTINUE
+
+                # -- agent delegation path (tool.task → A2A streaming) --
+                if capability == "tool.task":
+                    task_text = plan.get("arguments", {}).get("task", text)
+                    try:
+                        result_text = await self._delegate_to_agent(
+                            "tool-agent", task_text, trace_id,
+                        )
+                    except Exception as exc:
+                        if attempt < MAX_RETRIES and self._planner is not _stub_planner:
+                            error_context = str(exc)
+                            self.ui.render_warning(
+                                f"Attempt {attempt} failed — re-planning..."
+                            )
+                            continue
+                        self.ui.render_error("Agent Error", str(exc))
+                        self.state.record_turn(
+                            user_input=text, capability=capability,
+                            owner="tool-agent", observation="", error=str(exc),
+                        )
+                        return LoopAction.CONTINUE
+
+                    # Streaming already displayed the answer — don't duplicate.
+                    self.state.record_turn(
+                        user_input=text, capability=capability,
+                        owner="tool-agent", observation=result_text, error=None,
+                    )
+                    self.ui.render_divider()
+                    return LoopAction.CONTINUE
+
+                # -- individual tool dispatch (existing MCP path) --
+                runner = TurnRunner(
+                    host=self.host,
+                    router=self.router,
+                    hmac_key=self.hmac_key,
+                    permission_mode_provider=lambda: self.state.permission_mode,
+                    planner=self._planner,
+                )
+                result = await runner.run(text, trace_id=trace_id)
+
+            except asyncio.CancelledError:
+                await self.host.cancel_all()
+                self.ui.render_cancelled()
+                return LoopAction.CONTINUE
+            except Exception as exc:
+                if self._is_fatal(exc):
+                    self.ui.render_error("Fatal Error", str(exc))
+                    return LoopAction.EXIT
+                self.ui.render_error("Turn Error", str(exc))
+                self.state.record_turn(
+                    user_input=text, capability="", owner="",
+                    observation="", error=str(exc),
+                )
+                return LoopAction.CONTINUE
+
+            self.state.record_turn(
+                user_input=text,
+                capability=result.capability,
+                owner=result.owner,
+                observation=result.text,
+                error=result.error,
+            )
+
+            if result.error:
+                self.ui.render_error("Turn Error", result.error)
+            elif result.text:
+                self.ui.render_markdown(result.text)
+            self.ui.render_divider()
+            return LoopAction.CONTINUE
+
+        # Exhausted retries
+        self.ui.render_error("Max Retries", "Tool-agent failed after all attempts.")
+        self.state.record_turn(
+            user_input=text, capability="tool.task", owner="tool-agent",
+            observation="", error="Max retries exhausted",
         )
+        return LoopAction.CONTINUE
+
+    async def _plan_with_streaming(self, plan_input: dict) -> tuple[dict, bool]:
+        """Run the planner, streaming conversational text to the TUI as it arrives.
+
+        Returns ``(decision, streamed)`` where ``streamed`` is True iff text
+        was rendered live (caller must not re-render the response).
+
+        A ``Loading...`` spinner is shown while waiting for the planner's first
+        token (LLM TTFB) and torn down the moment text or a decision arrives,
+        so the same Rich-primitive invariant from ``_delegate_to_agent`` holds:
+        at most one of {status, live} owns the bottom of the screen.
+        """
+        astream = getattr(self._planner, "astream_plan", None)
+        if astream is None:
+            status = self.ui.console.status("[dim]Loading...[/dim]", spinner="dots")
+            status.start()
+            try:
+                return self._planner(plan_input), False
+            finally:
+                status.stop()
+
+        live: Live | None = None
+        text_buffer = ""
+        decision: dict = {}
+
+        status = self.ui.console.status("[dim]Loading...[/dim]", spinner="dots")
+        status.start()
+        status_active = True
+
+        def _stop_status() -> None:
+            nonlocal status_active
+            if status_active:
+                status.stop()
+                status_active = False
 
         try:
-            result = await runner.run(text, trace_id=trace_id)
-        except asyncio.CancelledError:
-            await self.host.cancel_all()
-            self.ui.render_cancelled()
-            return LoopAction.CONTINUE
-        except Exception as exc:
-            if self._is_fatal(exc):
-                self.ui.render_error("Fatal Error", str(exc))
-                return LoopAction.EXIT
-            self.ui.render_error("Turn Error", str(exc))
-            self.state.record_turn(
-                user_input=text, capability="", owner="",
-                observation="", error=str(exc),
-            )
-            return LoopAction.CONTINUE
+            async for event in astream(plan_input):
+                etype = event.get("type", "")
+                if etype == "text":
+                    chunk = event.get("chunk", "")
+                    if not chunk:
+                        continue
+                    text_buffer += chunk
+                    if live is None:
+                        _stop_status()
+                        self.ui.render_agent_label("multi-agent")
+                        live = Live(
+                            Markdown(text_buffer),
+                            console=self.ui.console,
+                            refresh_per_second=12,
+                            # Default ``ellipsis`` truncates the rendered Markdown
+                            # the instant it grows past the terminal height: the
+                            # bottom of the region shows ``...`` and streaming
+                            # appears to freeze. Only when ``live.stop()`` runs
+                            # does Rich dump the full buffer as a normal print,
+                            # producing the "complete answer suddenly pops out
+                            # below" symptom. ``visible`` lets the content
+                            # overflow naturally so the terminal scrolls in real
+                            # time as more tokens arrive.
+                            vertical_overflow="visible",
+                        )
+                        live.start()
+                    else:
+                        live.update(Markdown(text_buffer))
+                elif etype == "decision":
+                    decision = event.get("decision", {}) or {}
+        finally:
+            _stop_status()
+            if live is not None:
+                live.stop()
+                self.ui.console.print()
 
-        self.state.record_turn(
-            user_input=text,
-            capability=result.capability,
-            owner=result.owner,
-            observation=result.text,
-            error=result.error,
-        )
+        return decision, bool(text_buffer)
 
-        if result.error:
-            self.ui.render_error("Turn Error", result.error)
-        elif result.text:
-            self.ui.render_text(
-                title=result.owner or "orchestrator",
-                text=result.text,
-            )
-        self.ui.render_divider()
-        return LoopAction.CONTINUE
+    async def _delegate_to_agent(
+        self, agent_id: str, task: str, trace_id: str,
+    ) -> str:
+        """Stream an A2A task to a peer agent and render progress in the TUI.
+
+        Rendering invariants:
+        - At any time, AT MOST ONE Rich primitive owns the bottom of the screen
+          (a Live region OR a Status spinner — never both). This prevents the
+          escape-code fight that produced the layout chaos in earlier runs.
+        - `text_buffer` is local to each contiguous prose segment. Once a tool
+          call or thinking break ends the segment, the buffer resets so the
+          next Live region starts fresh instead of replaying old narration.
+        """
+        from orchestrator.a2a_client import delegate_task
+
+        self.ui.set_agent_context(agent_id)
+
+        final_text = ""
+        live: Live | None = None
+        status = None
+        status_started_at = 0.0
+        status_min_show = 0.0
+        text_buffer = ""
+        label_printed = False
+        # Tool-call Live region: blinks while the tool is executing, freezes
+        # to a static bullet on tool_result. We keep the (name, args) of the
+        # currently-running call so the freeze step can repaint the final
+        # frame without re-deriving anything.
+        tool_live: Live | None = None
+        tool_pending: tuple[str, dict] | None = None
+
+        def _ensure_label() -> None:
+            nonlocal label_printed
+            if not label_printed:
+                self.ui.render_agent_label(agent_id)
+                label_printed = True
+
+        def _stop_live() -> None:
+            nonlocal live, text_buffer
+            if live is not None:
+                live.stop()
+                live = None
+                text_buffer = ""
+
+        def _freeze_tool_live() -> None:
+            """Tear down the blinking tool line, leaving a static frame on screen.
+
+            Repaint the live region with ``active=False`` first so the final
+            frame Rich leaves behind no longer animates. If nothing is running
+            (no pending tool), this is a no-op.
+            """
+            nonlocal tool_live, tool_pending
+            if tool_live is None:
+                return
+            if tool_pending is not None:
+                name, args = tool_pending
+                tool_live.update(_build_tool_line(name, args, active=False))
+            tool_live.stop()
+            tool_live = None
+            tool_pending = None
+
+        async def _stop_status(*, hold: bool = True) -> None:
+            """Stop the current status spinner.
+
+            ``hold=True`` enforces the per-status ``min_show`` floor: if the
+            spinner has been visible for less than its requested minimum, we
+            sleep just enough to reach it before stopping. ``hold=False`` is
+            for the finally-cleanup path where we want to tear down promptly
+            (e.g. after Ctrl+C / error) instead of blocking on a UX timer.
+            """
+            nonlocal status
+            if status is None:
+                return
+            if hold and status_min_show > 0:
+                elapsed = time.monotonic() - status_started_at
+                remaining = status_min_show - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            status.stop()
+            status = None
+
+        async def _show_status(label: str, *, min_show: float = 0.0) -> None:
+            """Replace the current status with a new label.
+
+            ``min_show`` is the floor in seconds for how long this status must
+            stay visible. The floor is enforced lazily — the next ``_show_status``
+            or ``_stop_status(hold=True)`` will await the remainder. Use it for
+            states that are diagnostically important to the user even when the
+            underlying transition would otherwise flash by (e.g. confirming a
+            delegation actually reached the peer agent).
+            """
+            nonlocal status, status_started_at, status_min_show
+            await _stop_status(hold=True)
+            status = self.ui.console.status(f"[dim]{label}[/dim]", spinner="dots")
+            status.start()
+            status_started_at = time.monotonic()
+            status_min_show = min_show
+
+        try:
+            # min_show=1.0: keep `Delegating to tool-agent...` visible for at
+            # least one second even if the peer's first `thinking` event comes
+            # back faster. The user has explicitly asked to see this state —
+            # it's their proof that the orchestrator made it to the right peer.
+            await _show_status(f"Delegating to {agent_id}...", min_show=1.0)
+            async for event in delegate_task(
+                peer_id=agent_id, task=task,
+                meta={"trace_id": trace_id, "agent_caller": "orchestrator"},
+            ):
+                etype = event.get("type", "")
+
+                if etype == "thinking":
+                    _stop_live()
+                    await _show_status("Thinking...")
+
+                elif etype == "tool_call":
+                    _stop_live()
+                    # If the previous tool never produced a result event (rare
+                    # — e.g. agent loop crashed mid-call), freeze its line so
+                    # we don't leave a blinking ghost on screen.
+                    _freeze_tool_live()
+                    await _stop_status()
+                    _ensure_label()
+                    name = event.get("name", "unknown")
+                    args = event.get("args", {})
+                    self.ui.console.print()
+                    tool_pending = (name, args)
+                    tool_live = Live(
+                        _build_tool_line(name, args, active=True),
+                        console=self.ui.console,
+                        # 4 fps keeps blink visible without flicker; Rich
+                        # also relies on this to repaint the blink frames
+                        # when the terminal does not honor ANSI SGR 5.
+                        refresh_per_second=4,
+                    )
+                    tool_live.start()
+                    # No "Calling X..." status spinner: the blinking bullet
+                    # on the tool line already communicates "in progress",
+                    # and a second spinner at the bottom would duplicate it.
+
+                elif etype == "tool_result":
+                    # Freeze the blinking bullet on the tool line; do NOT
+                    # render the tool's return preview — the user asked for
+                    # a compact view that only shows what was called.
+                    _freeze_tool_live()
+                    await _show_status("Thinking...")
+
+                elif etype == "text":
+                    chunk = event.get("chunk", "")
+                    if not chunk:
+                        continue
+                    text_buffer += chunk
+                    if live is None:
+                        await _stop_status()
+                        _ensure_label()
+                        live = Live(
+                            Markdown(text_buffer),
+                            console=self.ui.console,
+                            refresh_per_second=10,
+                            # See the equivalent block in _plan_with_streaming
+                            # for the rationale. tl;dr: default ``ellipsis``
+                            # freezes the stream the moment markdown height
+                            # exceeds the terminal; ``visible`` lets it scroll.
+                            vertical_overflow="visible",
+                        )
+                        live.start()
+                    else:
+                        live.update(Markdown(text_buffer))
+
+                elif etype == "done":
+                    final_text = event.get("text", "")
+                    break
+
+                elif etype == "error":
+                    raise RuntimeError(event.get("message", "Unknown agent error"))
+
+                elif etype == "warning":
+                    # Non-fatal — surfaced by the SSE client when a malformed
+                    # peer event was dropped. Keep streaming going; just let
+                    # the user know one event was lost so they don't blame the
+                    # spinner for "freezing" silently.
+                    _stop_live()
+                    msg = event.get("message", "unknown warning")
+                    self.ui.console.print(f"[dim yellow]⚠ {msg}[/dim yellow]")
+
+        finally:
+            _stop_live()
+            _freeze_tool_live()
+            # hold=False so cancellation / errors don't park us on a UX timer.
+            await _stop_status(hold=False)
+            self.ui.set_agent_context("multi-agent")
+
+        return final_text
 
     async def _ensure_planner(self) -> None:
         if self._planner is not None:
             return
         provider = os.environ.get("LANGCHAIN_AGENT_MODEL", "")
-        if provider.startswith("mock") or not provider:
+        if provider.startswith("mock"):
             self._planner = _stub_planner
             return
         try:
             llm = _build_planner_llm()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to build planner LLM: {exc}. "
-                f"Use /config or /model to fix, or set LANGCHAIN_AGENT_MODEL=mock."
-            ) from exc
+        except Exception:
+            log.warning(
+                "Failed to build planner LLM, falling back to stub planner. "
+                "Use /config or /model to fix, or set LANGCHAIN_AGENT_MODEL=mock.",
+                exc_info=True,
+            )
+            self._planner = _stub_planner
+            return
         self._planner = LLMPlanner(
             llm=llm,
             available_capabilities=self.router.all_capabilities(),
             context_provider=lambda: self.state.render_planner_context(
                 self.router.all_capabilities()
             ),
+            tool_schemas=self.router.describe_tools(),
         )
 
     def _is_fatal(self, error: Exception) -> bool:

@@ -30,3 +30,19 @@ async def test_graph_routes_to_correct_specialist():
     # _meta.authz_grant was injected
     assert "_meta" in host.calls[0][2]
     assert "authz_grant" in host.calls[0][2]["_meta"]
+
+
+@pytest.mark.asyncio
+async def test_graph_short_circuits_when_planner_returns_no_capability():
+    router = CapabilityRouter()
+    host = _FakeMCPHost()
+
+    def chat_planner(state: OrchestratorState) -> dict:
+        return {"capability": "", "response": "你好，我是助手！"}
+
+    graph = build_graph(router=router, host=host, planner=chat_planner, hmac_key="k", mode="read-only")
+    out = await graph.ainvoke({"user_input": "你好", "trace_id": "t1"})
+
+    assert out.get("capability") == ""
+    assert out["response"] == "你好，我是助手！"
+    assert host.calls == []

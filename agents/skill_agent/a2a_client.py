@@ -22,7 +22,11 @@ async def call_peer(*, peer_id: str, skill_id: str, input: dict, meta: dict) -> 
     url = peers.get(peer_id)
     if url is None:
         raise RuntimeError(f"no A2A url known for peer {peer_id!r}")
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # trust_env=False: A2A is loopback-only between agent processes. If the
+    # user has HTTP_PROXY pointing at a local proxy (Clash/V2Ray etc.), httpx
+    # would route this call through it and deadlock — see the matching note
+    # in orchestrator/a2a_client.py.
+    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
         resp = await client.post(f"{url}/a2a", json={
             "jsonrpc": "2.0",
             "id": meta.get("trace_id", "task"),

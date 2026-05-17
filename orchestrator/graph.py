@@ -10,6 +10,7 @@ class OrchestratorState(TypedDict, total=False):
     trace_id: str
     capability: str
     arguments: dict
+    response: str
     result: Any
     error: str
 
@@ -46,10 +47,15 @@ def build_graph(*, router: CapabilityRouter, host, planner: Planner, hmac_key: s
         result = await host.call_tool(agent_id, state["capability"], args)
         return {**state, "result": result}
 
+    def _route_after_plan(state: OrchestratorState) -> str:
+        if state.get("capability"):
+            return "dispatch"
+        return END
+
     g = StateGraph(OrchestratorState)
     g.add_node("plan", _plan)
     g.add_node("dispatch", _dispatch)
     g.set_entry_point("plan")
-    g.add_edge("plan", "dispatch")
+    g.add_conditional_edges("plan", _route_after_plan, {"dispatch": "dispatch", END: END})
     g.add_edge("dispatch", END)
     return g.compile()

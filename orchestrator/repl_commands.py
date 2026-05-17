@@ -21,6 +21,8 @@ class ReplCommandHandler:
                 return LoopAction.EXIT
             if command == "/help":
                 return self._cmd_help()
+            if command == "/status":
+                return self._cmd_status()
             if command == "/agents":
                 return self._cmd_agents()
             if command == "/tools":
@@ -39,13 +41,13 @@ class ReplCommandHandler:
                 return self._cmd_clear()
             if command == "/compact":
                 return self._cmd_compact()
-            self.ui.render_error(
+            self.ui.render_command_error(
                 "Unknown command",
-                f"{command}\nType /help for available commands.",
+                f"{command} — type /help for available commands.",
             )
             return LoopAction.CONTINUE
         except Exception as exc:
-            self.ui.render_error(f"Command error: {command}", str(exc))
+            self.ui.render_command_error(f"Command error: {command}", str(exc))
             return LoopAction.CONTINUE
 
     def _cmd_help(self) -> LoopAction:
@@ -80,11 +82,25 @@ class ReplCommandHandler:
         return LoopAction.CONTINUE
 
     def _cmd_permissions(self, line: str) -> LoopAction:
+        from orchestrator.repl_state import VALID_PERMISSION_MODES
+
         parts = line.split(maxsplit=1)
+        # Stable display order: safest → most permissive.
+        ordered = ["read-only", "workspace-write", "danger-full-access"]
+        modes = ordered + [m for m in VALID_PERMISSION_MODES if m not in ordered]
+
         if len(parts) == 1:
+            current = self.state.permission_mode
+            lines = [f"Current: [bold]{current}[/bold]", "", "Available modes:"]
+            for mode in modes:
+                marker = "→" if mode == current else " "
+                lines.append(f"  {marker} {mode}")
+            lines.append("")
+            lines.append("Switch with: [bold]/permissions <mode>[/bold]")
+            lines.append("Example: [dim]/permissions danger-full-access[/dim]")
             self.ui.render_text(
                 title="Permission Mode",
-                text=f"Current: {self.state.permission_mode}",
+                text="\n".join(lines),
             )
             return LoopAction.CONTINUE
         requested = parts[1].strip()
@@ -94,9 +110,9 @@ class ReplCommandHandler:
                 text=f"Set to: {requested}", style="green",
             )
         else:
-            self.ui.render_error(
+            self.ui.render_command_error(
                 "Invalid permission mode",
-                "Use: read-only, workspace-write, or danger-full-access.",
+                f"Got: {requested!r}\nValid modes: {', '.join(modes)}",
             )
         return LoopAction.CONTINUE
 
@@ -117,9 +133,31 @@ class ReplCommandHandler:
         return LoopAction.CONTINUE
 
     def _cmd_model(self, line: str) -> LoopAction:
-        self.ui.render_error(
-            "Model Configuration",
-            "Use python cli.py --single /model until the multi-agent wizard is implemented.",
+        self.ui.render_text(
+            title="Model Configuration",
+            text="Use python cli.py --single /model until the multi-agent wizard is implemented.",
+            style="yellow",
+        )
+        return LoopAction.CONTINUE
+
+    def _cmd_status(self) -> LoopAction:
+        rows = [
+            ["provider", self.state.provider],
+            ["model", self.state.model],
+            ["protocol", self.state.protocol],
+            ["thread", self.state.thread_id],
+            ["turns", str(self.state.turns)],
+            ["tool calls", str(self.state.tool_calls)],
+            ["agents", str(len(self.host.list_handles()))],
+            ["capabilities", str(len(self.router.all_capabilities()))],
+            ["skills", str(len(self.state.skills))],
+            ["instructions", str(len(self.state.instruction_files))],
+            ["permission mode", self.state.permission_mode],
+            ["compacted turns", str(self.state.compacted_turns)],
+            ["last error", self.state.last_error or "<none>"],
+        ]
+        self.ui.render_table(
+            title="Session Status", columns=["Field", "Value"], rows=rows,
         )
         return LoopAction.CONTINUE
 

@@ -117,6 +117,47 @@ async def _wrap_glob_search(args: dict) -> Any:
     )
 
 
+async def _wrap_run_python(args: dict) -> Any:
+    import time as _time
+    from pathlib import Path as _Path
+    from tool.tool_shell import run_python_code
+
+    code = args["code"]
+    timeout = int(args.get("timeout", 180))
+    log_path = _Path(".agent/runtime/tool-agent-runpython.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Log ENTRY immediately so we can tell "never called" from "called but hung".
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            f"\n=== ENTER {_time.strftime('%Y-%m-%d %H:%M:%S')} timeout={timeout}s ===\n"
+            f"--- code ---\n{code}\n"
+        )
+    t0 = _time.monotonic()
+    # Default 180s to match run_command — reading .docx/.pdf/.xlsx via
+    # python-docx / pypdf / openpyxl easily exceeds 30s on cold start
+    # because lxml and friends are loaded at import time.
+    result = run_python_code(code=code, timeout=timeout)
+    elapsed = _time.monotonic() - t0
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            f"--- EXIT elapsed={elapsed:.1f}s ---\n{result}\n"
+        )
+    return result
+
+
+async def _wrap_run_command(args: dict) -> Any:
+    from tool.tool_shell import run_shell_command
+
+    # Default 180s so `pip install <pkg>` actually completes on slow networks
+    # — the LLM rarely sets a timeout explicitly, and the previous 30s default
+    # turned every retry-after-pip-install into a guaranteed timeout error.
+    return run_shell_command(
+        command=args["command"],
+        timeout=int(args.get("timeout", 180)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool map
 # ---------------------------------------------------------------------------
@@ -192,7 +233,62 @@ _TOOL_MAP: dict[str, tuple] = {
         },
         "Find files matching a glob pattern.",
     ),
+    "run_python": (
+        _wrap_run_python,
+        {
+            "type": "object",
+            "required": ["code"],
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": (
+                        "Python source to execute via `python -c`. Use this when "
+                        "the built-in file tools cannot handle the format — for "
+                        "example, reading .docx with python-docx, .pdf with "
+                        "pypdf, or .xlsx with openpyxl. Print results to stdout."
+                    ),
+                },
+                "timeout": {"type": "integer", "description": "Seconds before the subprocess is killed (default 180)."},
+            },
+        },
+        "Execute Python code in a subprocess; returns JSON with stdout/stderr/exitCode.",
+    ),
+    "run_command": (
+        _wrap_run_command,
+        {
+            "type": "object",
+            "required": ["command"],
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command to execute. Use this as a fallback when "
+                        "the built-in file tools cannot complete the task — e.g. "
+                        "running CLI utilities, inspecting binary file headers, "
+                        "or piping with grep/awk."
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": (
+                        "Seconds before the subprocess is killed. Default 180. "
+                        "Bump for pip installs over slow networks."
+                    ),
+                },
+            },
+        },
+        "Execute a shell command; returns JSON with stdout/stderr/exitCode.",
+    ),
 }
+
+
+# Tools that the orchestrator's planner must NOT call directly. They stay
+# available to tool-agent's internal ReAct loop (via make_langchain_tools)
+# so the agent can choose to reach for them, but they are NOT registered
+# with MCP, so they never surface as a top-level orchestrator capability.
+# This keeps shell/python execution behind tool-agent's reflection loop and
+# out of reach of the orchestrator's permission whitelist directly.
+_INTERNAL_ONLY: frozenset[str] = frozenset({"run_python", "run_command"})
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +297,43 @@ _TOOL_MAP: dict[str, tuple] = {
 
 
 def build_tool_specs() -> list[ToolSpec]:
-    """Return the list of ToolSpec objects for all registered tools."""
+    """Return ToolSpec objects for tools the orchestrator may dispatch via MCP."""
     return [
         ToolSpec(name=name, description=desc, input_schema=schema, handler=handler)
         for name, (handler, schema, desc) in _TOOL_MAP.items()
+        if name not in _INTERNAL_ONLY
     ]
+
+
+def _make_tool_coroutine(handler, name: str):
+    """Create an async callable that forwards keyword args to the dict-based handler."""
+
+    async def _tool_coroutine(**kwargs: Any) -> Any:
+        return await handler(kwargs)
+
+    _tool_coroutine.__name__ = name
+    return _tool_coroutine
+
+
+def make_langchain_tools() -> list:
+    """Return the 5 tool handlers as LangChain-compatible StructuredTool objects.
+
+    Used by ToolAgentLoop's create_react_agent so tool-agent can call tools
+    in-process (no MCP/A2A round-trip through itself).
+    """
+    from langchain_core.tools import StructuredTool
+
+    result: list = []
+    for name, (handler, schema, desc) in _TOOL_MAP.items():
+        coro = _make_tool_coroutine(handler, name)
+        tool = StructuredTool(
+            name=name,
+            description=desc,
+            args_schema=schema,
+            coroutine=coro,
+        )
+        result.append(tool)
+    return result
 
 
 async def execute_tool(name: str, args: dict) -> Any:

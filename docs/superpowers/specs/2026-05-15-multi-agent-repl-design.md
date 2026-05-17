@@ -1,6 +1,6 @@
 # Multi-Agent REPL Design
 
-Date: 2026-05-15
+Date: 2026-05-15 (updated 2026-05-15 — refined interface, data flow, error handling, lifecycle)
 
 ## Goal
 
@@ -9,316 +9,264 @@ current Phase 5 placeholder. The REPL should feel close to the legacy terminal
 experience while using the new orchestrator, MCP specialists, A2A telemetry, and
 capability routing as its runtime.
 
-The first complete version should support natural language input, common slash
-commands, legacy-like session continuity, and polished terminal rendering. The
-legacy `--single` path remains unchanged.
-
 ## Non-Goals
 
 - Do not refactor legacy `CliApp` into shared runtime modules in this pass.
-- Do not make `skill-agent` or `tool-agent` responsible for long-lived chat
-  history.
+- Do not make `skill-agent` or `tool-agent` responsible for long-lived chat history.
 - Do not implement `/agents reload` in the first version.
 - Do not require exact ANSI snapshot matching in tests.
 
 ## Chosen Approach
 
-Use an independent multi-agent REPL with a small terminal UI adapter layer.
-
-Legacy code is a reference for behavior and visual style, not a runtime
-dependency. The multi-agent path may reuse lower-level modules such as
-`config.py`, `skills.skill_loader`, `project_context.py`, and `tool.tool_memory`,
-but it should not instantiate or call `legacy.single_agent_loop.CliApp`.
+Use `REPLController` + `ReplCommandHandler` + `ReplUI`, coordinated through a
+thin `run_repl()` in `main.py`. Legacy code is a reference, not a runtime
+dependency.
 
 ## Module Boundaries
 
-`orchestrator/main.py`
+### `orchestrator/repl_types.py` (NEW)
 
-- Stays thin.
-- Dispatches `main(prompt=None)` to either one-shot prompt execution or the REPL.
-- Does not hold REPL command, rendering, or session state details.
+Shared small module with zero intra-orchestrator imports:
 
-`orchestrator/turns.py`
+```python
+from enum import Enum, auto
 
-- Owns one-turn orchestration.
-- Shared by `python cli.py prompt ...` and interactive REPL mode.
-- Bootstrapped with `MCPHost`, `CapabilityRouter`, permission mode, planner
-  configuration, session context, and a renderer callback.
-- Returns a structured turn result containing capability, owner agent, rendered
-  text blocks, errors, and telemetry observations.
+class LoopAction(Enum):
+    CONTINUE = auto()
+    EXIT = auto()
+```
 
-`orchestrator/repl.py`
+Used by both `REPLController` and `ReplCommandHandler` without circular imports.
 
-- Owns the interactive REPL loop.
-- Starts and shuts down specialists.
-- Reads user input through `repl_ui`.
-- Delegates slash commands to `repl_commands`.
-- Delegates normal user turns to `turns`.
-- Updates `MultiAgentSessionState` after each turn.
+### `orchestrator/repl_controller.py` (NEW)
 
-`orchestrator/repl_ui.py`
+Core REPL orchestration. Depends on `repl_types`, `turns`, `repl_state`, `mcp_host`, `router`.
 
-- Owns terminal presentation.
-- Recreates the legacy terminal feel: boxed prompt, prompt history, slash
-  completion, welcome panel, spinners, Rich panels/tables, compact result panels,
-  error panels, and dim dividers.
-- Provides non-TTY fallbacks for automated tests.
-- Keeps ANSI-heavy details out of orchestration logic.
+```
+REPLController
+  ├── handle_input(text: str) -> LoopAction   (async)
+  ├── _execute_turn(text: str) -> LoopAction  (async)
+  ├── _ensure_planner() -> None               (async, lazy)
+  └── _is_fatal(error: Exception) -> bool
+```
 
-`orchestrator/repl_commands.py`
+Constructor: `REPLController(*, host, router, hmac_key, state, commands, ui)`
 
-- Owns multi-agent slash command handling.
-- Implements the selected common command set independently of legacy `CliApp`.
-- Uses lower-level config, skills, instruction, and tool modules where useful.
+- `handle_input`: if text starts with `/` → delegate to `commands.handle()`, else `_execute_turn`
+- `_ensure_planner`: lazy init; `context_provider=lambda: state.render_planner_context(router.all_capabilities())` — dynamic, not frozen at init time
+- `_is_fatal`: specialist network error, no capabilities, host unavailable → fatal; everything else recoverable
 
-`orchestrator/repl_state.py`
+### `orchestrator/repl_commands.py` (NEW)
 
-- Defines `MultiAgentSessionState`.
-- Tracks model config, permission mode, thread/session counters, recent history,
-  loaded skills, project instructions, memory snapshot, and last error.
+Slash command handler. Depends on `repl_types`, `repl_state`, `repl_ui`, `mcp_host`, `router`.
+
+```
+ReplCommandHandler(ui, state, host, router)
+  ├── handle(text: str) -> LoopAction
+  ├── _cmd_help(), _cmd_exit(), _cmd_quit()
+  ├── _cmd_agents(), _cmd_tools(), _cmd_permissions(args)
+  ├── _cmd_config(), _cmd_model(args), _cmd_skills()
+  ├── _cmd_instructions(), _cmd_clear(), _cmd_compact()
+```
+
+- Only `/exit` and `/quit` return `EXIT`; all others return `CONTINUE`
+- `hmac_key` not passed unless a specific command needs it
+- All `_cmd_*` catch `Exception` (not `BaseException` — don't swallow `KeyboardInterrupt`, `SystemExit`)
+
+### `orchestrator/repl_ui.py` (NEW)
+
+Terminal presentation. Depends on `rich` and `prompt_toolkit` (optional).
+
+```
+ReplUI(*, console=None, input_stream=None, output_stream=None)
+  ├── read_input() -> str            (sync, prompt_toolkit or fallback)
+  ├── read_input_async() -> str      (async, prompt_toolkit or fallback)
+  ├── read_input_async() -> str       (prompt_toolkit, with history + slash completion)
+  ├── render_welcome(state)           (provider/model/permission/workspace/agent count)
+  ├── render_goodbye()
+  ├── render_cancelled()
+  ├── render_table(rows, title)
+  ├── render_error(message)
+  ├── render_warning(message)
+  ├── render_panel(content, title)
+  ├── render_spinner(label)
+  └── render_divider()
+```
+
+Non-TTY fallback: `read_input_async()` falls back to `sys.stdin.readline()`.
+
+### `orchestrator/main.py` (MODIFIED)
+
+Stays thin: bootstrap → construct dependencies → loop → shutdown.
+
+- `run_repl()` replaces the Phase 5 placeholder
+- `run_prompt()` unchanged
+
+### `orchestrator/turns.py` (EXISTING, possibly minor additions)
+
+- `TurnRunner` — unchanged
+- Add `render_planner_context(capabilities)` to `MultiAgentSessionState` in `repl_state.py`
+
+### `orchestrator/repl_state.py` (EXISTING, minor additions)
+
+- Add `render_planner_context(capabilities: list[str]) -> str` method
+- Aggregates: provider, model, permission_mode, capabilities, skills, instruction_files, memory_snapshot, recent_history
 
 ## Slash Commands
 
-The first full version supports:
+| Command | Behavior |
+|---------|----------|
+| `/help` | Multi-agent command table |
+| `/exit`, `/quit` | Graceful shutdown → `LoopAction.EXIT` |
+| `/agents` | List specialist id, version, A2A URL, health, capability count |
+| `/tools` | Registered capabilities with owning agent |
+| `/permissions [mode]` | Read or update permission mode |
+| `/config` | Active config, permission mode, workspace, runtime dir, agent count |
+| `/model [provider]` | Legacy-like model selection wizard via config.py |
+| `/skills` | Catalog from `skills.skill_loader.load_skills()` |
+| `/instructions` | Project instruction files from `project_context` |
+| `/clear` | Clear terminal |
+| `/compact` | Fresh thread: reset recent_history, increment compacted_turns, reload memory_snapshot. If memory reload fails, keep old snapshot + print warning. |
 
-- `/help`
-- `/exit`
-- `/quit`
-- `/agents`
-- `/tools`
-- `/permissions [mode]`
-- `/config`
-- `/model [provider]`
-- `/skills`
-- `/instructions`
-- `/clear`
-- `/compact`
+Unknown commands: "Unknown command. Type /help for available commands."
 
-Command behavior:
+## Natural Language Turn Data Flow
 
-- `/help` renders a multi-agent command table in the legacy visual style.
-- `/exit` and `/quit` perform graceful specialist shutdown and exit the REPL.
-- `/agents` lists specialist id, version, A2A URL, health, and capability count.
-- `/tools` lists registered router capabilities with their owning agent.
-- `/permissions [mode]` reads or updates the REPL session permission mode. The
-  new mode is used for later turns in the same process.
-- `/config` shows active model config, permission mode, workspace, runtime
-  directory, and agent count.
-- `/model [provider]` recreates the legacy wizard experience while using
-  `config.py` provider registry, settings, and credentials helpers.
-- `/skills` lists the local skills catalog via `skills.skill_loader.load_skills()`.
-- `/instructions` lists discovered project instruction files via
-  `project_context.discover_instruction_files()`.
-- `/clear` clears the terminal.
-- `/compact` starts a fresh conversation thread for later turns, resets recent
-  context, increments compaction counters, and reloads the memory snapshot.
-
-Unknown slash commands render a legacy-style "Unknown command" message and point
-the user to `/help`.
-
-## Natural Language Turns
-
-Normal user input should feel like the legacy assistant:
-
-- Users type natural language by default.
-- The orchestrator planner chooses a capability and arguments.
-- The existing `capability:arg` parser remains as a deterministic development
-  and test escape hatch.
-- `MOCK_ORCH_SCRIPT` remains available for scripted tests.
-
-Planner prompt context should include:
-
-- Active provider/model/protocol.
-- Current permission mode.
-- Registered capabilities and owning agents.
-- Project instructions.
-- Memory snapshot from `tool_memory.snapshot_for_system_prompt()`.
-- Skills catalog.
-- Recent multi-agent REPL history.
-- Recent observations from tool/skill execution.
-
-The planner still returns strict JSON:
-
-```json
-{"capability": "<name>", "arguments": {}}
+```
+user input → REPLController.handle_input()
+  → _execute_turn(text)
+    1. trace_id = secrets.token_hex(4)
+    2. _ensure_planner()  (first call: build LLMPlanner with dynamic context_provider)
+    3. Pre-check: zero capabilities or all specialists unhealthy → fatal if normal turn
+       (slash commands like /config, /agents, /exit still work)
+    4. TurnRunner.run(user_input=text, trace_id=trace_id)
+         → graph.ainvoke → plan → dispatch → result
+    5. state.record_turn(...)  (always, even on error — planner learns from failures)
+    6. render output or error panel
+    7. return LoopAction.CONTINUE
 ```
 
-If the planner returns invalid JSON, the REPL shows an error panel and returns to
-the next input prompt.
+If `TurnRunner.run()` raises (instead of returning `TurnResult(error=...)`):
+- Catch, classify with `_is_fatal()`
+- recoverable → red error panel + `CONTINUE`
+- fatal → fatal error panel + `EXIT`
 
-## Session State and Memory
+### Planner Context
 
-`MultiAgentSessionState` tracks:
+`context_provider=lambda: state.render_planner_context(router.all_capabilities())`
 
-- `provider`
-- `model`
-- `protocol`
-- `base_url`
-- `api_key_env`
-- `permission_mode`
-- `thread_id`
-- `turns`
-- `tool_calls`
-- `compacted_turns`
-- `seen_messages`
-- `last_error`
-- `recent_history`
-- `memory_snapshot`
-- `instruction_files`
-- `skills`
+Fresh each turn, pulling latest: provider, model, protocol, permission_mode, capabilities, instructions, memory_snapshot, skills, recent_history (last 12 turns including failures).
 
-Continuity is maintained at the orchestrator layer. Specialists remain mostly
-stateless. The orchestrator stores recent user inputs, planner decisions,
-specialist observations, and assistant-facing summaries, then injects the useful
-parts into later planner prompts.
+## Error Handling
 
-For the first version of `/compact`, clearing recent history is acceptable. LLM
-summarization can be added later if needed.
+### Tiered Model
 
-## Terminal Rendering
+| Severity | Examples | Action |
+|----------|----------|--------|
+| Recoverable | routing miss, planner parse error, permission denied, tool error, single specialist crash | Red panel, `record_turn(error=...)`, `CONTINUE` |
+| Turn-blocking | Zero capabilities, all specialists unhealthy | Fatal for normal turns; slash commands still work |
+| Fatal | MCP host corruption, startup network failure | Clear error message, `EXIT` |
 
-`repl_ui.py` should closely match the legacy REPL's terminal feel.
+### Specific Rules
 
-Input:
+- `_ensure_planner()` failure (bad config, missing key): recoverable — render config error, `CONTINUE`, user can `/config`/`/model`/`/exit`
+- `asyncio.CancelledError`: user cancel during turn → recoverable, `host.cancel_all()`, `CONTINUE`; outer shutdown → let propagate
+- Slash commands catch `Exception`, not `BaseException` (don't swallow `KeyboardInterrupt`, `SystemExit`)
+- All `_cmd_*` methods must self-contain errors — never propagate to input loop
+- Ctrl+C at input prompt → `EXIT`
 
-- Boxed prompt.
-- `prompt_toolkit` history.
-- Slash command completion from the multi-agent command table.
-- Non-TTY fallback using `stdin.readline()`.
+## Lifecycle
 
-Startup:
+### Startup
 
-- Welcome panel with provider/model, permission mode, workspace, and started
-  agent count.
-- Clear indication that this is multi-agent mode.
+```
+try:
+  1. hmac_key = secrets.token_urlsafe(32)
+  2. host = MCPHost(hmac_key=hmac_key)
+  3. router = CapabilityRouter()
+  4. mux = StreamMux()
+  5. telemetry.reset_log()
+  6. stop_telemetry = asyncio.Event()
+  7. tail_task = asyncio.create_task(telemetry.tail(mux, stop_telemetry))
+  8. _bootstrap(host, router)           ← captured early so specialist startup logs aren't missed
+  9. config.hydrate_env_from_credentials()
+  10. active_cfg = config.load_active_config()
+  11. state = MultiAgentSessionState.from_runtime(
+        active_cfg=active_cfg, skills=..., instruction_files=...,
+        memory_snapshot=..., workspace=Path.cwd())
+  12. ui = ReplUI(mux=mux)
+  13. commands = ReplCommandHandler(ui=ui, state=state, host=host, router=router)
+  14. controller = REPLController(host=host, router=router, hmac_key=hmac_key,
+                                  state=state, commands=commands, ui=ui)
+  15. ui.render_welcome(state)
+  16. input loop
+finally:
+  shutdown (always runs)
+```
 
-Turn output:
+### Shutdown
 
-- Spinner while planning and while calling specialists.
-- Spinner labels like `Calling tool-agent: read_file` and
-  `Calling skill-agent: skill.ppt-master`.
-- Specialist output formatted through the UI layer, not emitted as raw log lines.
-- Optional dim metadata labels such as `[tool]` and `[skill]`.
-- Compact result panels for tool or skill outputs.
-- Dim divider after each completed turn.
+Independent cleanup, both protected:
 
-Tables and panels:
+```
+  stop_telemetry.set()
+  try:
+      await asyncio.wait_for(tail_task, timeout=2.0)
+  except asyncio.TimeoutError:
+      tail_task.cancel()
+      try: await tail_task
+      except asyncio.CancelledError: pass
 
-- `/help`, `/status` if added later, `/config`, `/tools`, `/skills`,
-  `/instructions`, and `/agents` use Rich tables or panels with legacy-like
-  colors, density, and borders.
+  await host.shutdown_all()   ← always runs, even if telemetry cleanup fails
+```
 
-Errors:
+### Ctrl+C Strategy
 
-- Planner parse errors, unknown capabilities, permission denials, specialist
-  crashes, and unexpected exceptions render as red error panels.
-- Errors do not exit the REPL unless they happen during startup before any
-  usable specialist network exists.
+| Context | Behavior |
+|---------|----------|
+| Idle at input prompt | Exit REPL (`EXIT`) |
+| During turn execution | Cancel turn, `host.cancel_all()`, render "Cancelled", `CONTINUE` |
+| During slash command | Cancel, return to prompt |
 
-## Lifecycle and Failure Handling
+### Partial Bootstrap
 
-Startup:
-
-1. Read `.agent/agents/*.card.json`.
-2. Start each specialist through `MCPHost`.
-3. Collect `list_tools()` from each specialist.
-4. Register capabilities in `CapabilityRouter`.
-5. Write `.agent/runtime/peers.json`.
-6. Start telemetry tailing for A2A events.
-7. Render the welcome panel and enter the input loop.
-
-Turn execution:
-
-1. Allocate a unique `trace_id`.
-2. Build planner context from session state.
-3. Select capability and arguments.
-4. Sign permission grant with `PermissionGate`.
-5. Call the owning specialist via MCP.
-6. Collect result and telemetry observations.
-7. Render output.
-8. Update session history and counters.
-
-Ctrl+C:
-
-- Ctrl+C while input is focused exits the REPL.
-- Ctrl+C during a turn cancels the turn, calls `host.cancel_all()`, stops current
-  telemetry tailing, shows a cancelled panel, and returns to the input prompt.
-- Specialists should not be killed by ordinary cancellation.
-
-Specialist crash:
-
-- `host.call_tool()` returns a structured error rather than allowing the REPL to
-  crash.
-- `/agents` marks the specialist unhealthy.
-- A later call to the same agent may attempt one respawn. If respawn fails, show
-  a clear error and keep the REPL alive.
-
-Shutdown:
-
-- `/exit`, `/quit`, EOF, and clean application shutdown use the same path.
-- Stop telemetry tailing.
-- Close MCP sessions.
-- Suppress known Windows anyio stdio cleanup noise at the host boundary.
-- Do not delete `.agent/runtime` files; they are useful for diagnostics.
+If `_bootstrap()` starts some specialists then fails mid-way, `host.shutdown_all()` in the `finally` block cleans up already-spawned child processes.
 
 ## Testing Strategy
 
 Stage 1: REPL skeleton and shared turn runner
-
-- Add a regression test for `python cli.py` with stdin:
-  `read_file:<path>\n/exit\n`.
-- Assert tool output appears and no traceback is written.
-- Verify `python cli.py prompt ...` still works through the same turn runner.
+- Regression test: `python cli.py` with stdin `read_file:<path>\n/exit\n`
+- Verify `python cli.py prompt ...` still works
 
 Stage 2: UI adapter
-
-- Unit-test pure formatting helpers where possible.
-- E2E tests assert important text and behavior, not exact ANSI.
-- Verify non-TTY fallback for test subprocesses.
+- Unit-test formatting helpers
+- E2E: assert important text, not exact ANSI
+- Verify non-TTY fallback
 
 Stage 3: Slash commands
-
-- Unit-test command handlers with fake state, fake host, and string buffers.
-- Cover `/help`, `/agents`, `/tools`, `/permissions`, `/config`, `/skills`,
-  `/instructions`, `/compact`, and unknown commands.
-- Cover `/model` through narrower tests around provider/config selection helpers,
-  avoiding brittle interactive keystroke tests.
+- Unit-test command handlers with fake state, host, string buffer for ui
+- Cover all commands + unknown command
+- Narrower tests for `/model` helpers
 
 Stage 4: Session continuity
+- Recent observations enter planner context on next turn
+- `/compact` resets history and updates thread_id/counters
 
-- Test that recent observations enter planner context on the next turn.
-- Test `/compact` resets recent history and updates `thread_id`/counters.
-
-Stage 5: cancellation, crash, and shutdown
-
-- E2E Ctrl+C during a long turn returns to the REPL.
-- E2E specialist crash does not terminate the REPL.
-- E2E `/exit` exits without Windows anyio shutdown traceback.
-
-## Implementation Order
-
-1. Extract shared turn execution into `orchestrator/turns.py`.
-2. Add `repl_state.py`.
-3. Add `repl_ui.py` with non-TTY fallback first, then interactive prompt polish.
-4. Add `repl_commands.py` for the common command set.
-5. Replace the Phase 5 `run_repl()` placeholder with `orchestrator.repl.run_repl`.
-6. Add session context injection to planner prompts.
-7. Add cancellation/crash/shutdown hardening.
-8. Update README to remove the "Full multi-agent REPL UX ships post-Day-1"
-   caveat once the feature is complete.
+Stage 5: Cancellation, crash, and shutdown
+- Ctrl+C during long turn returns to prompt
+- Specialist crash does not terminate REPL
+- `/exit` exits without Windows anyio shutdown traceback
 
 ## Acceptance Criteria
 
-- `python cli.py` enters a multi-agent REPL rather than printing the Phase 5
-  placeholder.
-- Natural language input routes through the orchestrator planner.
-- `capability:arg` still works for deterministic tests.
-- The selected common slash commands work in multi-agent mode.
-- The terminal looks and feels close to the legacy REPL for both input and
-  output.
-- Recent conversation context influences later planner decisions.
-- `/compact` starts a fresh conversation thread.
-- Ctrl+C during a turn cancels that turn without killing specialists.
-- Specialist crash reports clearly and returns to the prompt.
-- `/exit` shuts down cleanly, including on Windows.
-- `python cli.py --single` remains unchanged.
+- `python cli.py` enters multi-agent REPL (no Phase 5 placeholder)
+- Natural language input routes through orchestrator planner
+- `capability:arg` still works for deterministic tests
+- All slash commands work in multi-agent mode
+- Terminal looks/feels close to legacy REPL
+- Recent conversation context influences later planner decisions
+- `/compact` starts fresh thread
+- Ctrl+C during turn cancels that turn, does not kill specialists
+- Specialist crash reports clearly, returns to prompt
+- `/exit` shuts down cleanly (including Windows)
+- `python cli.py --single` unchanged

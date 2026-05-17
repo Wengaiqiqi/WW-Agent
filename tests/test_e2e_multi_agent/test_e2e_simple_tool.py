@@ -11,14 +11,16 @@ def test_orchestrator_dispatches_read_file_to_tool_agent(tmp_path):
     target.write_text("hi there", encoding="utf-8")
 
     env = os.environ.copy()
+    env["LANGCHAIN_AGENT_MODEL"] = "mock"
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+    env["PYTHONIOENCODING"] = "utf-8"
 
     # Phase-5 stub planner parses 'CAPABILITY:ARG'
     prompt = f"read_file:{target}"
 
     proc = subprocess.run(
         [sys.executable, "cli.py", "prompt", prompt],
-        capture_output=True, text=True, env=env, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     assert "[tool]" in proc.stdout
@@ -31,13 +33,15 @@ def test_multi_agent_repl_dispatches_turn_and_exits(tmp_path):
     target.write_text("hello from repl", encoding="utf-8")
 
     env = os.environ.copy()
+    env["LANGCHAIN_AGENT_MODEL"] = "mock"
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+    env["PYTHONIOENCODING"] = "utf-8"
 
     proc = subprocess.run(
         [sys.executable, "cli.py"],
         input=f"read_file:{target}\n/exit\n",
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         env=env,
         timeout=60,
     )

@@ -107,6 +107,58 @@ async def test_turn_runner_returns_error_for_planner_exception():
 
 
 @pytest.mark.asyncio
+async def test_turn_runner_returns_conversational_response():
+    router = CapabilityRouter()
+    router.register("tool-agent", ["read_file"])
+    host = _FakeHost()
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=lambda state: {"capability": "", "response": "你好！有什么可以帮你的？"},
+    )
+
+    result = await runner.run("你好", trace_id="t1")
+
+    assert result.error is None
+    assert result.capability == ""
+    assert result.owner == "orchestrator"
+    assert "你好" in result.text
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_turn_runner_synthesizes_tool_result():
+    router = CapabilityRouter()
+    router.register("tool-agent", ["read_file"])
+    host = _FakeHost()
+
+    class _SynthesizingPlanner:
+        def __call__(self, state):
+            return {"capability": "read_file", "arguments": {"path": "x"}}
+
+        def synthesize(self, user_input, capability, tool_result):
+            return f"Successfully read the file. Content: 你好世界"
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=_SynthesizingPlanner(),
+    )
+
+    result = await runner.run("read x", trace_id="t1")
+
+    assert result.error is None
+    assert result.owner == "orchestrator"
+    assert "你好世界" in result.text
+    assert host.calls == [("tool-agent", "read_file", {"path": "x", "_meta": host.calls[0][2]["_meta"]})]
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_once_emits_orchestrator_error_for_turn_error():
     router = CapabilityRouter()
     router.register("tool-agent", ["read_file"])

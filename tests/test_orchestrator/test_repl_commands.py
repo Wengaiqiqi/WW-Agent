@@ -114,6 +114,18 @@ def test_config_renders_table(tmp_path):
     assert "mock-model" in text
 
 
+def test_status_renders_session_summary(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    assert handler.handle("/status") == LoopAction.CONTINUE
+    text = buf.getvalue()
+    # Heading + a few key fields drawn from state / host / router.
+    assert "Session Status" in text
+    assert "mock-model" in text          # state.model
+    assert "tool-agent" not in text      # /status does not list agent IDs
+    assert "workspace-write" in text     # permission mode
+    assert "thread" in text
+
+
 def test_clear_returns_continue(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
     assert handler.handle("/clear") == LoopAction.CONTINUE

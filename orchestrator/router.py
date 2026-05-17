@@ -1,4 +1,5 @@
 from __future__ import annotations
+from copy import deepcopy
 from dataclasses import dataclass
 
 
@@ -17,11 +18,18 @@ class CapabilityRouter:
 
     def __init__(self):
         self._table: dict[str, list[_Entry]] = {}
+        self._tool_info: dict[str, dict] = {}
 
-    def register(self, agent_id: str, capabilities: list[str], *, priority: int = 0):
+    def register(
+        self, agent_id: str, capabilities: list[str], *,
+        priority: int = 0,
+        tool_metas: dict[str, dict] | None = None,
+    ):
         for cap in capabilities:
             self._table.setdefault(cap, []).append(_Entry(agent_id, priority))
             self._table[cap].sort(key=lambda e: -e.priority)
+        if tool_metas:
+            self._tool_info.update(tool_metas)
 
     def resolve(self, capability: str) -> str:
         entries = self._table.get(capability)
@@ -31,3 +39,6 @@ class CapabilityRouter:
 
     def all_capabilities(self) -> list[str]:
         return sorted(self._table.keys())
+
+    def describe_tools(self) -> dict[str, dict]:
+        return deepcopy(self._tool_info)

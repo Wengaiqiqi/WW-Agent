@@ -27,7 +27,14 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
     for card in cards:
         await host.spawn(card)
         tools = await host.list_tools(card.id)
-        router.register(card.id, [t.name for t in tools])
+        tool_metas = {
+            t.name: {
+                "description": getattr(t, "description", ""),
+                "inputSchema": getattr(t, "inputSchema", {}),
+            }
+            for t in tools
+        }
+        router.register(card.id, [t.name for t in tools], tool_metas=tool_metas)
 
     # After all specialists are up, broadcast their A2A URLs.
     from pathlib import Path
@@ -36,30 +43,34 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     (runtime_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
 
+    # Register agent-level task capabilities (A2A delegation, not MCP).
+    if "tool-agent" in {c.id for c in cards}:
+        router.register("tool-agent", ["tool.task"], priority=10, tool_metas={
+            "tool.task": {
+                "description": (
+                    "Delegate a file-system task to the tool-agent. "
+                    "The agent will read, write, search, and list files autonomously."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["task"],
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Clear description of the file-system task.",
+                        },
+                    },
+                },
+            },
+        })
+
 
 def _build_orchestrator_llm():
-    """Build a chat model for the orchestrator's planner.
+    """Build a chat model for the orchestrator's planner (one-shot mode)."""
+    from config import build_llm, hydrate_env_from_credentials, load_active_config
 
-    Day-1 strategy: defer to whatever LLM the legacy single_agent_loop builds.
-    """
-    # The legacy code constructs its chat model lazily inside CliApp; pulling
-    # that out is more invasive than this task warrants. For Day-1 the
-    # orchestrator's LLM path is only exercised when the user sets a real
-    # provider, which they're unlikely to do during automated tests.
-    #
-    # If a clean factory function exists in the legacy module, prefer it.
-    # Otherwise, fall back to env-var-driven construction here.
-    try:
-        from legacy.single_agent_loop import _build_chat_model as _factory  # type: ignore
-        return _factory()
-    except ImportError:
-        pass
-    # Fallback: construct ChatOpenAI from env (works for openai-compatible providers).
-    # Adjust if you need anthropic.
-    raise RuntimeError(
-        "orchestrator LLM factory not available; set LANGCHAIN_AGENT_MODEL=mock for tests "
-        "or add a chat-model factory to agents/shared/."
-    )
+    hydrate_env_from_credentials()
+    return build_llm(load_active_config())
 
 
 async def run_prompt(prompt: str) -> int:
@@ -74,7 +85,11 @@ async def run_prompt(prompt: str) -> int:
             planner = _stub_planner
         else:
             llm = _build_orchestrator_llm()
-            planner = LLMPlanner(llm=llm, available_capabilities=router.all_capabilities())
+            planner = LLMPlanner(
+                llm=llm,
+                available_capabilities=router.all_capabilities(),
+                tool_schemas=router.describe_tools(),
+            )
         return await run_prompt_once(
             prompt=prompt,
             host=host,
@@ -166,8 +181,12 @@ async def run_repl() -> int:
         ui.render_welcome(
             provider=state.provider,
             model=state.model,
+            protocol=state.protocol,
             permission_mode=state.permission_mode,
             agent_count=len(host.list_handles()),
+            tool_count=len(router.all_capabilities()),
+            skill_count=len(skills_list),
+            instruction_count=len(instruction_files),
             workspace=str(state.workspace),
         )
 
