@@ -434,7 +434,8 @@ class ActiveConfig:
     streaming: bool = DEFAULT_STREAMING
 
     def to_settings_dict(self) -> dict[str, Any]:
-        """Subset persisted to ``.claude/settings.json``."""
+        """Subset persisted to the project's settings.json (default
+        ``.langchain-agent/settings.json``; see ``agent_paths.settings_path``)."""
         return {
             "provider": self.provider,
             "model": self.model,

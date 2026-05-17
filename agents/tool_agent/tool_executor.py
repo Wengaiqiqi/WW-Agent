@@ -117,6 +117,29 @@ async def _wrap_glob_search(args: dict) -> Any:
     )
 
 
+# Diagnostic log for run_python calls. Capped + rotated so a long-running
+# session can't fill the disk — the file is purely for "is the call hung?"
+# investigation, not an audit trail.
+_RUNPYTHON_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB; matches telemetry's cap
+
+
+def _rotate_runpython_log(log_path) -> None:
+    """Move runpython.log → runpython.log.1 if oversized (one backup only).
+
+    Best-effort: any OSError (Windows file-in-use, permission denied) is
+    silently swallowed so the log overhead never fails the actual run_python
+    call the user is waiting on.
+    """
+    try:
+        if log_path.exists() and log_path.stat().st_size > _RUNPYTHON_LOG_MAX_BYTES:
+            rotated = log_path.with_suffix(".log.1")
+            if rotated.exists():
+                rotated.unlink()
+            log_path.rename(rotated)
+    except OSError:
+        pass
+
+
 async def _wrap_run_python(args: dict) -> Any:
     import time as _time
     from pathlib import Path as _Path
@@ -126,6 +149,7 @@ async def _wrap_run_python(args: dict) -> Any:
     timeout = int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT))
     log_path = _Path(".agent/runtime/tool-agent-runpython.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_runpython_log(log_path)
 
     # Log ENTRY immediately so we can tell "never called" from "called but hung".
     with log_path.open("a", encoding="utf-8") as fh:

@@ -133,13 +133,23 @@ class MCPHost:
         from pathlib import Path
         a2a_url = None
         url_file = Path(".agent/runtime") / f"{card.id}.a2a-url"
-        # Poll briefly — the specialist writes the file before stdio MCP init starts,
-        # so it should already be there, but allow a small window.
-        for _ in range(20):  # 1 second
+        # Poll for up to 5 seconds. Tool-agent imports langchain + langgraph
+        # before binding its A2A port; on a cold pip cache or slow disk the
+        # import chain can take 3+ seconds, well past the previous 1s budget.
+        # Missing the URL silently demoted A2A streaming to "specialist
+        # unreachable" on slow machines — better to wait a bit and let the
+        # subprocess catch up.
+        for _ in range(100):  # 5 seconds at 50ms ticks
             if url_file.exists():
                 a2a_url = url_file.read_text(encoding="utf-8").strip()
                 break
             await asyncio.sleep(0.05)
+        if a2a_url is None:
+            log.warning(
+                "%s did not write its A2A URL within 5s; streaming "
+                "delegation will fail until the file appears.",
+                card.id,
+            )
 
         self._clients[card.id] = _ClientHandle(
             card=card, session=session, stack=stack, a2a_url=a2a_url,

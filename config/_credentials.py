@@ -4,6 +4,12 @@ Lives at ``.langchain-agent/credentials.json`` (overridable via
 ``LANGCHAIN_AGENT_CONFIG_DIR``). On save we chmod 0o600 and append the file to
 a sibling .gitignore so it doesn't get committed by accident.
 
+**Windows caveat**: ``os.chmod(path, 0o600)`` succeeds on Windows but does
+not actually change ACLs — POSIX file modes have no direct equivalent. The
+NTFS file inherits its parent directory's ACL, which on a typical user
+profile is already "current user only". For a multi-user shared host you
+should set the NTFS ACL on the config directory yourself.
+
 ``hydrate_env_from_credentials`` is the bridge between this on-disk format and
 the SDK's expectation that ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` etc. are
 present in process env — called at startup before any LLM is constructed.
