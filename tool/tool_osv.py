@@ -25,8 +25,14 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-OSV_ENDPOINT = os.getenv("OSV_ENDPOINT", "https://api.osv.dev/v1/query")
+_DEFAULT_OSV_ENDPOINT = "https://api.osv.dev/v1/query"
 _TIMEOUT = 10  # seconds
+
+
+def _osv_endpoint() -> str:
+    """Resolve at call time so a runtime ``setenv`` (e.g. pointing at a
+    test stub) takes effect without re-importing the module."""
+    return os.getenv("OSV_ENDPOINT", _DEFAULT_OSV_ENDPOINT)
 
 
 def osv_lookup(
@@ -47,7 +53,7 @@ def osv_lookup(
 
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        OSV_ENDPOINT,
+        _osv_endpoint(),
         data=data,
         headers={
             "Content-Type": "application/json",
