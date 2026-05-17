@@ -26,7 +26,7 @@ def test_replui_is_not_tty():
 
 def test_command_list_has_all_expected_commands():
     assert set(COMMANDS) == {
-        "/help", "/exit", "/quit", "/agents", "/tools",
+        "/help", "/exit", "/quit", "/status", "/agents", "/tools",
         "/permissions", "/config", "/model", "/skills",
         "/instructions", "/clear", "/compact",
     }
@@ -53,7 +53,7 @@ def test_render_error_shows_title_and_message():
 def test_render_welcome_shows_provider_model_permission_agents():
     ui, buf = _make_ui()
     ui.render_welcome(
-        provider="openai", model="gpt-4o",
+        provider="openai", model="gpt-4o", protocol="json-rpc",
         permission_mode="workspace-write", agent_count=2,
         workspace="/home/project",
     )
