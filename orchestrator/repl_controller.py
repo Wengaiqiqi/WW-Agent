@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -129,12 +130,65 @@ class REPLController:
                     self.ui.render_divider()
                     return LoopAction.CONTINUE
 
-                # -- agent delegation path (tool.task → A2A streaming) --
-                if capability == "tool.task":
-                    task_text = plan.get("arguments", {}).get("task", text)
+                # -- agent delegation path (tool.task / skill.* → A2A streaming) --
+                if capability == "tool.task" or capability.startswith("skill."):
+                    if capability == "tool.task":
+                        peer_id = "tool-agent"
+                        task_text = plan.get("arguments", {}).get("task", text)
+                        extra_meta: dict = {}
+                    else:
+                        peer_id = "skill-agent"
+                        # Skills don't take a separate `task` argument — the
+                        # raw user text plus structured planner arguments
+                        # form the skill payload. The slug rides in meta so
+                        # skill-agent's stream handler knows which SKILL.md
+                        # to load.
+                        slug = capability[len("skill."):]
+                        arguments = plan.get("arguments", {}) or {}
+                        if arguments:
+                            task_text = (
+                                f"{text}\n\n[Planner arguments] "
+                                + json.dumps(arguments, ensure_ascii=False)
+                            )
+                        else:
+                            task_text = text
+                        # Mint an authz_grant just like the MCP graph path
+                        # does in orchestrator/graph.py. Without this,
+                        # skill-agent's verify_grant rejects the request with
+                        # "missing authz_grant", which used to bubble up as
+                        # a turn error and silently demote the next attempt
+                        # to tool.task.
+                        from orchestrator.permission_gate import (
+                            PermissionGate,
+                            PermissionDenied,
+                        )
+                        gate = PermissionGate(
+                            mode=self.state.permission_mode,
+                            hmac_key=self.hmac_key,
+                            trace_id=trace_id,
+                        )
+                        try:
+                            grant = gate.sign(
+                                target_specialist="skill-agent",
+                                tool=capability,
+                            )
+                        except PermissionDenied as exc:
+                            self.ui.render_error(
+                                "Permission Denied", str(exc)
+                            )
+                            self.state.record_turn(
+                                user_input=text, capability=capability,
+                                owner="skill-agent", observation="",
+                                error=str(exc),
+                            )
+                            return LoopAction.CONTINUE
+                        extra_meta = {
+                            "skill_slug": slug,
+                            "authz_grant": grant,
+                        }
                     try:
                         result_text = await self._delegate_to_agent(
-                            "tool-agent", task_text, trace_id,
+                            peer_id, task_text, trace_id, extra_meta=extra_meta,
                         )
                     except Exception as exc:
                         if attempt < MAX_RETRIES and self._planner is not _stub_planner:
@@ -146,14 +200,14 @@ class REPLController:
                         self.ui.render_error("Agent Error", str(exc))
                         self.state.record_turn(
                             user_input=text, capability=capability,
-                            owner="tool-agent", observation="", error=str(exc),
+                            owner=peer_id, observation="", error=str(exc),
                         )
                         return LoopAction.CONTINUE
 
                     # Streaming already displayed the answer — don't duplicate.
                     self.state.record_turn(
                         user_input=text, capability=capability,
-                        owner="tool-agent", observation=result_text, error=None,
+                        owner=peer_id, observation=result_text, error=None,
                     )
                     self.ui.render_divider()
                     return LoopAction.CONTINUE
@@ -226,8 +280,11 @@ class REPLController:
             finally:
                 status.stop()
 
-        live: Live | None = None
+        # Prose streaming uses direct ``console.print`` — see the equivalent
+        # block in ``_delegate_to_agent`` for the rationale (Live + overflow
+        # stacks each frame instead of redrawing in place on long answers).
         text_buffer = ""
+        text_active = False
         decision: dict = {}
 
         status = self.ui.console.status("[dim]Loading...[/dim]", spinner="dots")
@@ -248,39 +305,23 @@ class REPLController:
                     if not chunk:
                         continue
                     text_buffer += chunk
-                    if live is None:
+                    if not text_active:
                         _stop_status()
                         self.ui.render_agent_label("multi-agent")
-                        live = Live(
-                            Markdown(text_buffer),
-                            console=self.ui.console,
-                            refresh_per_second=12,
-                            # Default ``ellipsis`` truncates the rendered Markdown
-                            # the instant it grows past the terminal height: the
-                            # bottom of the region shows ``...`` and streaming
-                            # appears to freeze. Only when ``live.stop()`` runs
-                            # does Rich dump the full buffer as a normal print,
-                            # producing the "complete answer suddenly pops out
-                            # below" symptom. ``visible`` lets the content
-                            # overflow naturally so the terminal scrolls in real
-                            # time as more tokens arrive.
-                            vertical_overflow="visible",
-                        )
-                        live.start()
-                    else:
-                        live.update(Markdown(text_buffer))
+                        text_active = True
+                    self.ui.console.print(chunk, end="", soft_wrap=True, highlight=False)
                 elif etype == "decision":
                     decision = event.get("decision", {}) or {}
         finally:
             _stop_status()
-            if live is not None:
-                live.stop()
+            if text_active:
                 self.ui.console.print()
 
         return decision, bool(text_buffer)
 
     async def _delegate_to_agent(
         self, agent_id: str, task: str, trace_id: str,
+        *, extra_meta: dict | None = None,
     ) -> str:
         """Stream an A2A task to a peer agent and render progress in the TUI.
 
@@ -297,11 +338,18 @@ class REPLController:
         self.ui.set_agent_context(agent_id)
 
         final_text = ""
-        live: Live | None = None
+        # Prose streaming uses direct ``console.print(chunk, end="")`` rather
+        # than a Live region. Rich's Live + vertical_overflow="visible" stops
+        # redrawing in place the moment content exceeds terminal height — each
+        # frame is appended instead, producing the "answer printed 10 times,
+        # each block one row longer" symptom on long responses. Direct prints
+        # always behave correctly regardless of length.
+        text_buffer = ""        # accumulated text — recorded in turn history
+        text_active = False     # True while we're in the middle of a streamed
+        #                          prose block; reset on tool_call / thinking
         status = None
         status_started_at = 0.0
         status_min_show = 0.0
-        text_buffer = ""
         label_printed = False
         # Tool-call Live region: blinks while the tool is executing, freezes
         # to a static bullet on tool_result. We keep the (name, args) of the
@@ -316,12 +364,24 @@ class REPLController:
                 self.ui.render_agent_label(agent_id)
                 label_printed = True
 
-        def _stop_live() -> None:
-            nonlocal live, text_buffer
-            if live is not None:
-                live.stop()
-                live = None
-                text_buffer = ""
+        def _end_text_block() -> None:
+            """Close the current prose stream cleanly.
+
+            Called when the agent transitions out of text mode (next thinking
+            tick, next tool_call, or end of turn). Prints a trailing newline
+            so a following tool-call header doesn't run into the last text
+            line. ``text_buffer`` is preserved for turn-history recording.
+            """
+            nonlocal text_active
+            if text_active:
+                self.ui.console.print()
+                text_active = False
+
+        # Backwards-compat alias used by the rest of this function. Older
+        # call sites are still expecting `_stop_live()` semantics ("tear down
+        # whatever owns the prose region"), which now just means closing the
+        # text block.
+        _stop_live = _end_text_block
 
         def _freeze_tool_live() -> None:
             """Tear down the blinking tool line, leaving a static frame on screen.
@@ -383,9 +443,18 @@ class REPLController:
             # back faster. The user has explicitly asked to see this state —
             # it's their proof that the orchestrator made it to the right peer.
             await _show_status(f"Delegating to {agent_id}...", min_show=1.0)
+            # ``permission_mode`` is propagated so skill-agent's
+            # ``_mint_tool_grant`` can sign sub-grants for the peer tool-agent
+            # using the user's actual mode, not the workspace-write default.
+            meta: dict = {
+                "trace_id": trace_id,
+                "agent_caller": "orchestrator",
+                "permission_mode": self.state.permission_mode,
+            }
+            if extra_meta:
+                meta.update(extra_meta)
             async for event in delegate_task(
-                peer_id=agent_id, task=task,
-                meta={"trace_id": trace_id, "agent_caller": "orchestrator"},
+                peer_id=agent_id, task=task, meta=meta,
             ):
                 etype = event.get("type", "")
 
@@ -430,22 +499,16 @@ class REPLController:
                     if not chunk:
                         continue
                     text_buffer += chunk
-                    if live is None:
+                    if not text_active:
                         await _stop_status()
                         _ensure_label()
-                        live = Live(
-                            Markdown(text_buffer),
-                            console=self.ui.console,
-                            refresh_per_second=10,
-                            # See the equivalent block in _plan_with_streaming
-                            # for the rationale. tl;dr: default ``ellipsis``
-                            # freezes the stream the moment markdown height
-                            # exceeds the terminal; ``visible`` lets it scroll.
-                            vertical_overflow="visible",
-                        )
-                        live.start()
-                    else:
-                        live.update(Markdown(text_buffer))
+                        text_active = True
+                    # Direct, in-order print of the delta. ``end=""`` keeps the
+                    # next chunk on the same line; we add a closing newline in
+                    # ``_end_text_block``. ``soft_wrap=True`` lets long lines
+                    # wrap at terminal width without Rich inserting hard line
+                    # breaks at the buffer boundary.
+                    self.ui.console.print(chunk, end="", soft_wrap=True, highlight=False)
 
                 elif etype == "done":
                     final_text = event.get("text", "")

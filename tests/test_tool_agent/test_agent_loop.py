@@ -167,11 +167,17 @@ async def test_run_treats_different_message_ids_independently():
     NOT be swallowed."""
     a1 = AIMessage(content="第一段。", id="msg-A")
     b1 = AIMessage(content="第一段。", id="msg-B")  # same content, new id
+    # The terminal AIMessage in a real langgraph stream arrives via a `values`
+    # snapshot at the end. Without it, terminal_answer_seen stays False and
+    # the inconclusive-turn diagnostic gets appended. Include it so the
+    # streamed text accurately reflects "two distinct messages, both reach
+    # the UI, turn ended cleanly".
+    terminal = AIMessage(content="第一段。", id="msg-B")
 
     agent = _FakeReactAgent(events=[
         ("messages", (a1, {})),
         ("messages", (b1, {})),
-        ("values", {"messages": [HumanMessage(content="t")]}),
+        ("values", {"messages": [HumanMessage(content="t"), terminal]}),
     ])
 
     loop = ToolAgentLoop(llm=None, tools=[])
@@ -199,3 +205,112 @@ async def test_run_surfaces_inner_exception_as_error_event():
     assert events[0] == {"type": "thinking"}
     assert events[-1]["type"] == "error"
     assert "upstream blew up" in events[-1]["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_dedupes_cumulative_chunks_across_rotating_message_ids():
+    """Regression: providers that emit CUMULATIVE chunks (each chunk carries
+    the full text-so-far) AND rotate ``msg.id`` between chunks were not caught
+    by the per-message tracker, so the orchestrator's TUI rendered the answer
+    once per chunk — the "成功获取... / 成功获取...── / 成功获取...──标题 / ..."
+    stack-print symptom from real DeepSeek/Qwen runs."""
+    c1 = AIMessage(content="成功获取。", id="msg-1")
+    c2 = AIMessage(content="成功获取。内容是 P1003。", id="msg-2")
+    c3 = AIMessage(content="成功获取。内容是 P1003。完毕。", id="msg-3")
+    # Final terminal AIMessage as it would arrive via `values` mode after the
+    # streaming chunks. Without it, terminal_answer_seen stays False and the
+    # inconclusive-turn diagnostic gets appended on top.
+    terminal = AIMessage(content="成功获取。内容是 P1003。完毕。", id="msg-3")
+
+    agent = _FakeReactAgent(events=[
+        ("messages", (c1, {})),
+        ("messages", (c2, {})),
+        ("messages", (c3, {})),
+        ("values", {"messages": [HumanMessage(content="t"), terminal]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [e async for e in loop.run("t")]
+    text_chunks = [e["chunk"] for e in events if e["type"] == "text"]
+
+    assert text_chunks == ["成功获取。", "内容是 P1003。", "完毕。"], text_chunks
+
+
+@pytest.mark.asyncio
+async def test_run_appends_diagnostic_when_no_terminal_answer_emitted():
+    """Regression: when the model keeps calling tools without ever writing a
+    plain text final answer, the turn previously ended in silence + divider.
+    Now we synthesize a short diagnostic so the user understands the turn
+    ended inconclusively rather than seeing a blank screen."""
+    # Real providers stream the text portion of a "narration + tool_call"
+    # AIMessage as a content-only chunk, with the tool_call arriving as a
+    # separate tool_call_chunks event. Mirror that here so stream_buffer
+    # actually accumulates the narration.
+    narration_text_chunk = AIMessage(
+        content="洛谷对直接抓取有反爬限制。我用搜索来获取题目信息。",
+        id="m1",
+    )
+    tool_call_message = AIMessage(
+        content="",
+        id="m1",
+        tool_calls=[{"id": "t1", "name": "web_extract", "args": {"url": "https://x"}}],
+    )
+    tool_result = ToolMessage(content="403 Forbidden", tool_call_id="t1", name="web_extract")
+    # Crucially: no terminal AIMessage with content+no_tool_calls ever appears.
+    agent = _FakeReactAgent(events=[
+        ("messages", (narration_text_chunk, {})),
+        ("values", {"messages": [HumanMessage(content="t"), tool_call_message]}),
+        ("values", {"messages": [HumanMessage(content="t"), tool_call_message, tool_result]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [e async for e in loop.run("t")]
+    done = [e for e in events if e["type"] == "done"]
+    assert done, f"expected a done event: {events}"
+    text = done[-1]["text"]
+    assert "洛谷对直接抓取有反爬限制" in text
+    # Diagnostic appended (look for any of the distinctive phrasings).
+    assert "didn't reach" in text or "rephrase" in text, text
+    # Critically: the diagnostic MUST also be emitted as a streamed text
+    # event. The orchestrator's `_delegate_to_agent` only paints text events
+    # to the screen; ``done.text`` alone is used for state recording, so a
+    # diagnostic that lives only in ``done`` is invisible to the user.
+    text_chunks = "".join(e["chunk"] for e in events if e["type"] == "text")
+    assert "didn't reach" in text_chunks or "rephrase" in text_chunks, text_chunks
+
+
+@pytest.mark.asyncio
+async def test_run_yields_done_when_exception_after_answer_already_streamed():
+    """Regression: when a late exception (recursion limit, transport hiccup)
+    fires AFTER the model has already streamed a coherent answer, surface
+    a clean ``done`` rather than ``error`` — otherwise the orchestrator's
+    retry path re-runs the whole task and the user sees the answer twice.
+
+    In a real langgraph stream, a `values` snapshot containing the terminal
+    AIMessage fires before the exception, so ``terminal_answer_seen`` is True
+    by the time we hit the except clause. Mirror that here.
+    """
+
+    terminal = AIMessage(content="The answer is 42.", id="m")
+
+    class _LateBoom:
+        def astream(self, *_a, **_k):
+            async def _gen():
+                yield ("messages", (terminal, {}))
+                yield ("values", {"messages": [HumanMessage(content="t"), terminal]})
+                raise RuntimeError("GraphRecursionError: limit hit at step 30")
+                yield  # pragma: no cover
+            return _gen()
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = _LateBoom()
+
+    events = [e async for e in loop.run("t")]
+    types = [e["type"] for e in events]
+    assert "error" not in types, f"late exception leaked as error: {events}"
+    assert types[-1] == "done", types
+    assert events[-1]["text"] == "The answer is 42."

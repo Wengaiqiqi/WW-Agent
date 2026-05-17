@@ -48,8 +48,11 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         router.register("tool-agent", ["tool.task"], priority=10, tool_metas={
             "tool.task": {
                 "description": (
-                    "Delegate a file-system task to the tool-agent. "
-                    "The agent will read, write, search, and list files autonomously."
+                    "Delegate a task to the tool-agent. It autonomously reads, writes, "
+                    "searches and lists files; fetches and extracts text from web pages "
+                    "(including a single URL the user pasted, or a small crawl); runs "
+                    "Python or shell commands; and chains tools to answer multi-step "
+                    "questions. Pass the WHOLE user instruction in `task` verbatim."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -57,7 +60,10 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
                     "properties": {
                         "task": {
                             "type": "string",
-                            "description": "Clear description of the file-system task.",
+                            "description": (
+                                "The user's full instruction, verbatim. Includes any "
+                                "URLs they want fetched / summarized / crawled."
+                            ),
                         },
                     },
                 },
@@ -227,11 +233,42 @@ async def run_repl() -> int:
         await host.shutdown_all()
 
 
+def _silence_shutdown_noise(loop, context) -> None:
+    """asyncio exception handler that hides one specific shutdown wart.
+
+    When the user Ctrl+C's, ``asyncio.run`` cancels all running tasks. The
+    MCP stdio_client we use to talk to specialists wraps its read/write
+    streams in an anyio task group. anyio enforces that a task group's
+    cancel scope is exited in the SAME task that entered it; the
+    cancellation here is delivered from a different task, so the cleanup
+    callback raises:
+
+        RuntimeError: Attempted to exit cancel scope in a different task
+        than it was entered in
+
+    There is nothing the user (or we) can do about it — the agent
+    subprocesses are about to be killed by the OS anyway. The default
+    asyncio handler prints a multi-line traceback for each affected task,
+    which buries the legitimate "Cancelled." message. Filter just that
+    specific RuntimeError; everything else falls through to the default
+    handler so real bugs still surface.
+    """
+    exc = context.get("exception")
+    if isinstance(exc, RuntimeError) and "Attempted to exit cancel scope" in str(exc):
+        return
+    loop.default_exception_handler(context)
+
+
 def main(*, prompt: str | None = None) -> int:
-    try:
+    async def _run() -> int:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(_silence_shutdown_noise)
         if prompt is not None:
-            return asyncio.run(run_prompt(prompt))
-        return asyncio.run(run_repl())
+            return await run_prompt(prompt)
+        return await run_repl()
+
+    try:
+        return asyncio.run(_run())
     except KeyboardInterrupt:
         # User Ctrl+C'd. The asyncio context manager already triggered the
         # shutdown path via CancelledError; nothing more to do.

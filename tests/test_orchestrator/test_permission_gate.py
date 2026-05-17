@@ -59,22 +59,40 @@ def test_skill_allowed_in_danger_mode():
     gate.sign(target_specialist="skill-agent", tool="skill.anything")
 
 
-def test_skill_cannot_mint_grant_for_disallowed_tool():
-    """A skill running under workspace-write must NOT be able to mint an inner
-    grant for run_command — escalation via _mint_tool_grant is the realistic
-    attack path that the gate's outer skill.* allowance previously enabled."""
+def test_skill_can_mint_grant_for_run_command_under_workspace_write():
+    """The inner skill-grant whitelist (``_SKILL_INNER_WHITELIST``) is more
+    permissive than the outer dispatch whitelist (``_MODE_WHITELIST``).
+
+    Rationale: the outer gate already refuses ``run_command`` as a direct
+    user dispatch under workspace-write — that protection still stands.
+    But the user explicitly invoked a curated skill (``skill.<slug>``),
+    and most real skills (e.g. ``skill.baidu-ecommerce-search``) need to
+    shell out to their own bundled scripts under ``skills/<slug>/``. If
+    the inner gate copied the outer whitelist, skills would be unusable
+    outside ``danger-full-access`` — the previous behaviour, which made
+    skills practically dead under the default mode.
+    """
     from agents.skill_agent.skill_executor import _mint_tool_grant
     import os
     os.environ["AUTHZ_HMAC_KEY"] = "k"
-    with pytest.raises(PermissionDenied, match="run_command"):
-        _mint_tool_grant("run_command", {"permission_mode": "workspace-write"})
+    # Must NOT raise — workspace-write skills can now shell out internally.
+    _mint_tool_grant("run_command", {"permission_mode": "workspace-write"})
 
 
-def test_skill_can_mint_grant_for_allowed_tool():
-    """workspace-write permits write_file, so a skill running under it should be
-    able to mint a sub-grant for write_file on tool-agent."""
+def test_skill_can_mint_grant_for_write_file_under_workspace_write():
+    """write_file is permitted by both the outer and inner gates."""
     from agents.skill_agent.skill_executor import _mint_tool_grant
     import os
     os.environ["AUTHZ_HMAC_KEY"] = "k"
-    # Should not raise.
     _mint_tool_grant("write_file", {"permission_mode": "workspace-write"})
+
+
+def test_skill_cannot_mint_grant_under_read_only_mode():
+    """Read-only blocks ALL inner skill tool minting — skills are disabled
+    entirely under read-only (the outer gate would also have refused the
+    skill.* dispatch upstream, but the inner check is defence in depth)."""
+    from agents.skill_agent.skill_executor import _mint_tool_grant
+    import os
+    os.environ["AUTHZ_HMAC_KEY"] = "k"
+    with pytest.raises(PermissionDenied, match="read-only"):
+        _mint_tool_grant("read_file", {"permission_mode": "read-only"})

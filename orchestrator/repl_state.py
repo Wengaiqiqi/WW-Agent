@@ -10,6 +10,13 @@ VALID_PERMISSION_MODES = {"read-only", "workspace-write", "danger-full-access"}
 DEFAULT_PERMISSION_MODE = "workspace-write"
 MAX_HISTORY_ITEMS = 12
 
+# Bytes budgets for the planner context block — protect the system prompt
+# from runaway growth as the session accumulates large tool observations.
+_MAX_OBSERVATION_CHARS = 600
+_RECENT_HISTORY_FULL = 3
+_MAX_MEMORY_CHARS = 4000
+_MAX_INSTRUCTION_CHARS = 6000
+
 
 @dataclass
 class MultiAgentSessionState:
@@ -109,12 +116,21 @@ class MultiAgentSessionState:
         self.thread_id = f"multi-agent-session-{suffix}"
 
     def render_planner_context(self, capabilities: list[str]) -> str:
-        instruction_sections = []
+        # Instructions — bounded by a shared budget across all files.
+        instruction_sections: list[str] = []
+        remaining_instr = _MAX_INSTRUCTION_CHARS
         for file in self.instruction_files:
+            if remaining_instr <= 0:
+                instruction_sections.append("…[more instruction files omitted]")
+                break
             path = getattr(file, "path", "")
             content = getattr(file, "content", "")
-            if content:
-                instruction_sections.append(f"## {path}\n{content}")
+            if not content:
+                continue
+            if len(content) > remaining_instr:
+                content = content[:remaining_instr] + "\n…[truncated]"
+            remaining_instr -= len(content)
+            instruction_sections.append(f"## {path}\n{content}")
 
         skill_lines = []
         for skill in self.skills:
@@ -122,17 +138,36 @@ class MultiAgentSessionState:
             title = getattr(skill, "title", "")
             skill_lines.append(f"- {name}: {title}")
 
-        history_lines = []
-        for item in self.recent_history:
+        # Recent history — keep the most recent _RECENT_HISTORY_FULL items
+        # with full observations, older items collapse to capability-only so
+        # earlier turns don't bloat the system prompt indefinitely.
+        history_lines: list[str] = []
+        total = len(self.recent_history)
+        cutoff = total - _RECENT_HISTORY_FULL
+        for idx, item in enumerate(self.recent_history):
+            if idx < cutoff:
+                history_lines.append(
+                    f"User: {item['user']}\nCapability: {item['capability']} (older — observation elided)"
+                )
+                continue
+            observation = item.get("observation") or ""
+            if len(observation) > _MAX_OBSERVATION_CHARS:
+                observation = observation[:_MAX_OBSERVATION_CHARS] + "\n…[truncated]"
             parts = [
                 f"User: {item['user']}",
                 f"Capability: {item['capability']}",
                 f"Owner: {item['owner']}",
-                f"Observation: {item['observation']}",
+                f"Observation: {observation}",
             ]
             if item.get("error"):
                 parts.append(f"Error: {item['error']}")
             history_lines.append("\n".join(parts))
+
+        # Memory snapshot can also accrete over time; cap it so a long
+        # MEMORY.md doesn't crowd out everything else.
+        memory = self.memory_snapshot or ""
+        if len(memory) > _MAX_MEMORY_CHARS:
+            memory = memory[:_MAX_MEMORY_CHARS] + "\n…[truncated; full memory available via the memory tool]"
 
         return "\n\n".join([
             f"Provider: {self.provider}",
@@ -140,7 +175,7 @@ class MultiAgentSessionState:
             f"Protocol: {self.protocol}",
             f"Permission mode: {self.permission_mode}",
             "Capabilities:\n" + "\n".join(f"- {c}" for c in capabilities),
-            "Memory:\n" + (self.memory_snapshot or "<none>"),
+            "Memory:\n" + (memory or "<none>"),
             "Project instructions:\n" + ("\n\n".join(instruction_sections) or "<none>"),
             "Skills:\n" + ("\n".join(skill_lines) or "<none>"),
             "Recent history:\n" + ("\n\n".join(history_lines) or "<none>"),

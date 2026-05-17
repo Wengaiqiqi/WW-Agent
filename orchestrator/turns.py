@@ -7,9 +7,12 @@ import os
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
+from pydantic import BaseModel, Field, ValidationError
+
 from orchestrator.graph import build_graph
 from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
+from prompt_rules import LANGUAGE_RULE
 
 log = logging.getLogger(__name__)
 
@@ -22,28 +25,88 @@ class TurnResult:
     error: str | None = None
 
 
+class _DecisionShape(BaseModel):
+    """Schema the planner LLM is asked to emit when dispatching.
+
+    ``response`` is allowed so a model that wraps its prose reply in JSON
+    (some local quants do this defensively) still parses cleanly — the
+    classifier treats ``capability == ""`` as a conversational reply.
+    """
+
+    capability: str = ""
+    arguments: dict = Field(default_factory=dict)
+    response: str = ""
+
+
 class LLMPlanner:
-    _SYSTEM = (
-        "You are the orchestrator's planning brain. The available capabilities are listed below.\n\n"
-        "DEFAULT TO tool.task FOR ANYTHING FILE-RELATED.\n"
-        "ANY task that involves the file system — reading, writing, searching, listing, "
-        "creating files, generating documents — must be delegated to the tool-agent by "
-        "replying with ONLY:\n"
-        '{"capability": "tool.task", "arguments": {"task": "<full task description>"}}\n\n'
-        "This includes multi-step jobs like 'write a 500-word essay and save it to "
-        "essay.txt' — pass the WHOLE instruction in `task`. Do NOT embed long content "
-        "(essays, code, stories) directly inside JSON arguments — JSON with newlines in "
-        "string values is fragile, and tool-agent can generate and write the content "
-        "itself with its full toolchain.\n\n"
-        "Use a specific individual capability ONLY when the user explicitly names a "
-        "single tool with concrete short args (e.g. 'calculate 2+2'). Reply with ONLY:\n"
-        '{"capability": "<name>", "arguments": {<short args>}}\n\n'
-        "For ALL other messages — greetings, questions, creative writing (essays, poems, "
-        "stories without a save target), explanations, general chat — DO NOT use JSON. "
-        "Reply directly in natural language; the system auto-wraps your reply as a "
-        "conversational response.\n\n"
-        "Always reply in the same language the user used."
-    )
+    _SYSTEM_TEMPLATE = """\
+You route a user message to the right capability.
+
+# Output protocol
+- If a capability matches: reply with ONLY a JSON object — no prose, no
+  markdown fences. Schema: {{"capability": "<name>", "arguments": {{<args>}}}}
+- Otherwise (greetings, explanations, creative writing without a save target,
+  general chat): reply directly in natural language. Do NOT wrap chat in JSON.
+
+# Routing rules (apply in this order — STOP at the first that matches)
+
+1. **Skills win when their description matches the request.** Look through
+   the Available capabilities list for any name starting with `skill.`. If
+   one of them describes the domain the user is asking about (shopping /
+   e-commerce / prices / brand rankings / orders for a shopping skill;
+   slides / decks / PPT for a PPT skill; etc.), pick that skill —
+   `{{"capability": "skill.<slug>", "arguments": {{<extracted args>}}}}`.
+   Skills wrap curated domain APIs that a generic tool-agent cannot
+   replicate — prefer them whenever the topic matches.
+2. **Single-purpose capabilities** when the user explicitly names a tool
+   with short concrete args (e.g. "calculate 17 * 23" → calculator).
+3. **Default to "{default_dispatch}"** for everything else that needs a
+   tool: file reading/writing/searching/listing, generating-and-saving,
+   FETCHING A URL, summarizing a web page the user pasted, scraping a
+   small set of pages, running a shell or Python command, or any
+   multi-step research. Put the user's full instruction verbatim in
+   `arguments.task`. Do NOT embed long content (essays, code, stories)
+   inside the JSON; pass the request and let the downstream agent
+   generate / fetch the content itself.
+4. **Prose** for greetings, explanations from your own knowledge,
+   creative writing without a save target, and general chat.
+
+Never tell the user "I can't access URLs" or "I can't browse the web" —
+the tool-agent has `web_extract` and `web_crawl`. Route the message to
+"{default_dispatch}" and let it fetch.
+
+If the user's permission_mode (shown in Session context) forbids the
+required action, refuse in prose and explain how to raise the mode — do
+NOT dispatch a capability that will be denied downstream.
+
+# Examples
+User: hello!
+Reply: Hi! How can I help today?
+
+User: 我想买风扇，给我全网最低价
+Reply: {{"capability": "skill.baidu-ecommerce-search", "arguments": {{"query": "全网最便宜的风扇"}}}}
+
+User: 帮我做一份汇报 PPT
+Reply: {{"capability": "skill.ppt-master", "arguments": {{"query": "做一份汇报 PPT"}}}}
+
+User: read README.md
+Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "Read README.md and summarize it."}}}}
+
+User: calculate 17 * 23
+Reply: {{"capability": "calculator", "arguments": {{"expression": "17 * 23"}}}}
+
+User: write a 200-word essay about cats and save it to cats.txt
+Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "Write a 200-word essay about cats and save it to cats.txt"}}}}
+
+User: 复述一下这个网站的内容 https://example.com/article
+Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "复述一下这个网站的内容 https://example.com/article"}}}}
+
+User: what's a transformer in ML?
+Reply: A transformer is a neural-network architecture that uses self-attention …
+
+# Style
+{language_rule}
+"""
 
     def __init__(
         self,
@@ -52,11 +115,19 @@ class LLMPlanner:
         available_capabilities: list[str],
         context_provider: Callable[[], str] | None = None,
         tool_schemas: dict[str, dict] | None = None,
+        default_dispatch_capability: str = "tool.task",
     ):
         self._llm = llm
         self._caps = available_capabilities
         self._context_provider = context_provider or (lambda: "")
         self._tool_schemas = tool_schemas or {}
+        self._default_dispatch = default_dispatch_capability
+        # Resolve the system prompt once — it depends only on constants and
+        # the default-dispatch capability name, both fixed for a session.
+        self._system_prompt = self._SYSTEM_TEMPLATE.format(
+            default_dispatch=default_dispatch_capability,
+            language_rule=LANGUAGE_RULE,
+        )
 
     def _build_messages(self, state) -> list[dict]:
         context = self._context_provider()
@@ -80,7 +151,7 @@ class LLMPlanner:
             f"User: {state['user_input']}"
         )
         return [
-            {"role": "system", "content": self._SYSTEM},
+            {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": prompt},
         ]
 
@@ -102,7 +173,8 @@ class LLMPlanner:
 
         Tolerant: if the LLM emits prose instead of JSON (common for creative
         writing / long-form answers), wrap it as a conversational response
-        rather than failing the turn.
+        rather than failing the turn. JSON that doesn't match the schema is
+        also treated as prose so the user never sees a parser error.
         """
         cleaned = LLMPlanner._strip_code_fences(text)
         if not cleaned:
@@ -112,9 +184,16 @@ class LLMPlanner:
         if not cleaned.startswith("{"):
             return {"capability": "", "response": cleaned}
         try:
-            return json.loads(cleaned)
+            raw = json.loads(cleaned)
         except json.JSONDecodeError:
             return {"capability": "", "response": cleaned}
+        if not isinstance(raw, dict):
+            return {"capability": "", "response": cleaned}
+        try:
+            decision = _DecisionShape.model_validate(raw)
+        except ValidationError:
+            return {"capability": "", "response": cleaned}
+        return decision.model_dump()
 
     def __call__(self, state) -> dict:
         out = self._llm.invoke(self._build_messages(state))
@@ -190,51 +269,59 @@ class LLMPlanner:
             }
             return
 
-        # JSON path — parse the accumulated buffer.
+        # JSON path — strict parse + Pydantic validate. If anything fails we
+        # fall back to default_dispatch instead of surfacing the broken JSON
+        # buffer to the UI (which the prose path would do).
         cleaned = LLMPlanner._strip_code_fences(buffer)
         try:
-            decision = json.loads(cleaned)
-            yield {"type": "decision", "decision": decision}
-            return
-        except json.JSONDecodeError:
+            raw = json.loads(cleaned)
+            if isinstance(raw, dict):
+                decision = _DecisionShape.model_validate(raw).model_dump()
+                if decision.get("capability") or decision.get("response"):
+                    yield {"type": "decision", "decision": decision}
+                    return
+        except (json.JSONDecodeError, ValidationError):
             pass
 
         # Malformed JSON (very common when the model tries to embed long
         # content like a 500-word essay inside an arguments string — literal
-        # newlines break json.loads). Don't surface the broken JSON to the
-        # user as prose. Instead, hand the whole original request to the
-        # tool-agent and let its ReAct loop figure out how to fulfill it.
+        # newlines break json.loads). Hand the whole original request to the
+        # default dispatch capability and let its loop figure it out.
         log.warning(
-            "Planner emitted malformed JSON (%d chars); falling back to tool.task",
+            "Planner emitted malformed JSON (%d chars); falling back to %s",
             len(buffer),
+            self._default_dispatch,
         )
         yield {
             "type": "decision",
             "decision": {
-                "capability": "tool.task",
+                "capability": self._default_dispatch,
                 "arguments": {"task": state.get("user_input", "")},
             },
         }
+
+    _SYNTHESIZE_SYSTEM = (
+        "You convert a tool result into a direct reply for the user.\n"
+        "Rules:\n"
+        "1. Lead with the answer or the single most important field. Don't "
+        "recap the question.\n"
+        "2. If the tool result contains an `error` field, the FIRST sentence "
+        "names the error and what to do next.\n"
+        "3. Never echo raw JSON. Quote specific values inline when useful "
+        "(e.g. \"the file has 142 lines\").\n"
+        "4. Keep it to ~3 sentences unless the user asked for detail.\n"
+        f"5. {LANGUAGE_RULE}"
+    )
 
     def synthesize(self, user_input: str, capability: str, tool_result: str) -> str:
         prompt = (
             f"User asked: {user_input}\n"
             f"Capability used: {capability}\n"
-            f"Tool result:\n{tool_result}\n\n"
-            "Synthesize a concise, natural response directly answering the user's question. "
-            "Summarize key information from the tool result. "
-            "Reply in the same language the user used. "
-            "Do NOT return raw JSON — return plain natural language."
+            f"Tool result:\n{tool_result}"
         )
         out = self._llm.invoke(
             [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful assistant. The user asked you to perform an action "
-                        "and you have the result. Synthesize it into a natural, direct reply."
-                    ),
-                },
+                {"role": "system", "content": self._SYNTHESIZE_SYSTEM},
                 {"role": "user", "content": prompt},
             ]
         )
