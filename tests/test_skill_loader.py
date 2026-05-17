@@ -155,6 +155,41 @@ class TestLoadSkills:
         assert len(skills) == 1
         assert skills[0].match_keywords == ("test", "demo")
 
+    def test_load_skills_with_requires_env(self, tmp_path):
+        skill_dir = tmp_path / "needs-token"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Needs Token")
+        (skill_dir / "_meta.json").write_text(
+            json.dumps({"requiresEnv": ["MY_TOKEN", "MY_OTHER"]})
+        )
+
+        skills = load_skills(tmp_path)
+        assert len(skills) == 1
+        assert skills[0].requires_env == ("MY_TOKEN", "MY_OTHER")
+
+    def test_collect_skill_env_keys_unions_across_skills(self, tmp_path):
+        """``collect_skill_env_keys`` is what the MCP host calls to decide
+        which user-env vars to forward to subprocesses. It must merge across
+        all installed skills, ignoring those without a requiresEnv field."""
+        from skills.skill_loader import collect_skill_env_keys
+
+        a = tmp_path / "skill-a"
+        a.mkdir()
+        (a / "SKILL.md").write_text("# A")
+        (a / "_meta.json").write_text(json.dumps({"requiresEnv": ["TOKEN_A"]}))
+
+        b = tmp_path / "skill-b"
+        b.mkdir()
+        (b / "SKILL.md").write_text("# B")
+        (b / "_meta.json").write_text(json.dumps({"requiresEnv": ["TOKEN_B", "TOKEN_A"]}))
+
+        c = tmp_path / "skill-c"
+        c.mkdir()
+        (c / "SKILL.md").write_text("# C with no meta")
+
+        keys = collect_skill_env_keys(tmp_path)
+        assert keys == {"TOKEN_A", "TOKEN_B"}
+
 
 class TestSelectSkillsForText:
     """Test skill selection based on text."""

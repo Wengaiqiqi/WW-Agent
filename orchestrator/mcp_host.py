@@ -57,10 +57,31 @@ def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
     behavior via env vars like ``MOCK_TOOL_AGENT_SCRIPT`` — those aren't
     secrets and they MUST reach the spawned agent for the tests to be
     meaningful.
+
+    **Skill-declared env passthrough**: each skill's ``_meta.json`` can
+    declare a ``requiresEnv`` list (e.g. ``["BAIDU_EC_SEARCH_TOKEN"]``).
+    The union of those keys is forwarded to subprocesses so skill scripts
+    (run by tool-agent's ``run_command`` on behalf of skill-agent) actually
+    see their required tokens. The whitelist principle still holds — only
+    explicitly-declared keys leak, never the user's whole environment.
     """
+    skill_env_keys: set[str] = set()
+    try:
+        # Local import: orchestrator and skills/ live in the same project,
+        # but mcp_host is otherwise skill-agnostic. Tolerate any failure
+        # so an unrelated skill_loader bug never blocks agent spawn.
+        from skills.skill_loader import collect_skill_env_keys
+        skill_env_keys = collect_skill_env_keys()
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("could not collect skill requiresEnv: %s", exc)
+
     env: dict[str, str] = {
         k: v for k, v in os.environ.items()
-        if k.upper() in _OS_PASSTHROUGH or k.upper().startswith("MOCK_")
+        if (
+            k.upper() in _OS_PASSTHROUGH
+            or k.upper().startswith("MOCK_")
+            or k in skill_env_keys
+        )
     }
     env["AUTHZ_HMAC_KEY"] = hmac_key
     env["AGENT_ID"] = agent_id

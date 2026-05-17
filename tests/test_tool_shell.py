@@ -91,3 +91,39 @@ def test_run_subprocess_does_not_leak_env(monkeypatch):
     result = _json.loads(raw)
     child_secrets = _json.loads(result["stdout"].strip())
     assert child_secrets == {}, f"child saw secrets: {child_secrets}"
+
+
+def test_skill_declared_env_keys_bypass_secret_filter(monkeypatch):
+    """Regression: a skill that declares ``requiresEnv: [\"BAIDU_EC_SEARCH_TOKEN\"]``
+    must have that token reach its bundled scripts. The secret filter's keyword
+    regex matches ``_TOKEN`` and would otherwise strip it before the
+    skill-spawned subprocess sees anything."""
+    from tool import tool_shell
+
+    monkeypatch.setattr(
+        tool_shell, "_skill_declared_env_keys",
+        lambda: {"BAIDU_EC_SEARCH_TOKEN"},
+    )
+
+    env = {
+        "PATH": "/usr/bin",
+        "BAIDU_EC_SEARCH_TOKEN": "live-token",
+        "OPENAI_API_KEY": "sk-secret",  # NOT declared → must still be stripped
+    }
+    out = tool_shell._filter_secrets_from_env(env)
+    assert out.get("BAIDU_EC_SEARCH_TOKEN") == "live-token"
+    assert "OPENAI_API_KEY" not in out
+
+
+def test_skill_declared_env_keys_dont_break_when_skills_dir_missing(monkeypatch):
+    """``_skill_declared_env_keys`` must tolerate any error (no skills/, broken
+    JSON, import failures) — run_command can't depend on the skills loader."""
+    from tool import tool_shell
+
+    def _boom():
+        raise RuntimeError("skills loader exploded")
+
+    monkeypatch.setattr(tool_shell, "_skill_declared_env_keys", lambda: set())
+    # Should not raise; behaves as if no opt-ins.
+    out = tool_shell._filter_secrets_from_env({"PATH": "/usr/bin"})
+    assert out == {"PATH": "/usr/bin"}

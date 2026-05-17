@@ -50,6 +50,26 @@ _LANGCHAIN_ALLOWLIST = {
 }
 
 
+def _skill_declared_env_keys() -> set[str]:
+    """Return the union of env-var names declared by every installed skill.
+
+    Skills opt their required credentials INTO the child-process env via a
+    ``requiresEnv`` array in their ``_meta.json``. Without this, the secret
+    filter below would strip e.g. ``BAIDU_EC_SEARCH_TOKEN`` (matches
+    ``_TOKEN`` in the keyword regex) on its way to the skill's own bundled
+    script, breaking the skill entirely.
+
+    The lookup is wrapped in try/except so a missing or broken
+    ``skills/`` directory never causes ``run_command`` to fail — we just
+    fall back to "no opt-ins" and behave like before.
+    """
+    try:
+        from skills.skill_loader import collect_skill_env_keys
+        return collect_skill_env_keys()
+    except Exception:
+        return set()
+
+
 def _filter_secrets_from_env(env: dict[str, str]) -> dict[str, str]:
     """Strip secret-looking entries from a child process env dict.
 
@@ -64,13 +84,24 @@ def _filter_secrets_from_env(env: dict[str, str]) -> dict[str, str]:
     safe to propagate. AUTHZ_HMAC_KEY (the orchestrator → agent grant signing
     key) is one of the most important things to strip, and ``HMAC`` /
     ``KEY`` in the keyword set catches it.
+
+    **Skill opt-in**: each skill's ``_meta.json`` can declare a
+    ``requiresEnv`` list (e.g. ``["BAIDU_EC_SEARCH_TOKEN"]``). Those names
+    bypass the keyword/prefix filters so the skill's bundled scripts actually
+    see their tokens. The whitelist principle still holds — only explicitly
+    declared keys leak, never every env var whose name happens to contain
+    ``TOKEN``.
     """
+    allowlist = _skill_declared_env_keys()
     cleaned: dict[str, str] = {}
     for name, value in env.items():
         upper = name.upper()
         if upper.startswith("LANGCHAIN_AGENT_"):
             if upper in _LANGCHAIN_ALLOWLIST:
                 cleaned[name] = value
+            continue
+        if name in allowlist:
+            cleaned[name] = value
             continue
         if _SECRET_KEYWORD_RE.search(name) or _PROVIDER_PREFIX_RE.search(name):
             continue

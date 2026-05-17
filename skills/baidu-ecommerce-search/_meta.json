@@ -25,5 +25,9 @@
     "参数",
     "怎么选",
     "有没有卖"
+  ],
+  "requiresEnv": [
+    "BAIDU_EC_SEARCH_TOKEN",
+    "BAIDU_EC_SEARCH_QPS"
   ]
 }

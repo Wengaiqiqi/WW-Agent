@@ -17,6 +17,7 @@ class Skill:
     content: str
     source: str = "project"
     match_keywords: tuple[str, ...] = ()
+    requires_env: tuple[str, ...] = ()
 
     @property
     def title(self) -> str:
@@ -62,19 +63,38 @@ class Skill:
         return False
 
 
-def _load_meta_keywords(skill_dir: Path) -> tuple[str, ...]:
-    """Load matchKeywords from the skill's _meta.json file."""
+def _load_meta(skill_dir: Path) -> dict:
+    """Read _meta.json with logging on failure; returns empty dict on miss."""
     meta_path = skill_dir / "_meta.json"
     if not meta_path.is_file():
-        return ()
+        return {}
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to parse %s: %s", meta_path, exc)
-        return ()
-    keywords = meta.get("matchKeywords", [])
+        return {}
+
+
+def _load_meta_keywords(skill_dir: Path) -> tuple[str, ...]:
+    """Load matchKeywords from the skill's _meta.json file."""
+    keywords = _load_meta(skill_dir).get("matchKeywords", [])
     if isinstance(keywords, list):
         return tuple(str(k).lower() for k in keywords if k)
+    return ()
+
+
+def _load_meta_requires_env(skill_dir: Path) -> tuple[str, ...]:
+    """Load requiresEnv from the skill's _meta.json file.
+
+    Skills declare here exactly which environment variables they need to
+    operate (API tokens, QPS knobs, etc.). The orchestrator's MCP host
+    consults the union of these across all loaded skills and passes only
+    *those* variables through to agent subprocesses — keeping the strict
+    env whitelist intact for everything else.
+    """
+    keys = _load_meta(skill_dir).get("requiresEnv", [])
+    if isinstance(keys, list):
+        return tuple(str(k) for k in keys if k)
     return ()
 
 
@@ -90,15 +110,38 @@ def load_skills(skills_dir: Path = SKILLS_DIR) -> list[Skill]:
             continue
         content = content.replace("${SKILL_DIR}", skill_file.parent.as_posix())
         keywords = _load_meta_keywords(skill_file.parent)
+        requires_env = _load_meta_requires_env(skill_file.parent)
         loaded.append(
             Skill(
                 name=skill_file.parent.name,
                 path=skill_file,
                 content=content,
                 match_keywords=keywords,
+                requires_env=requires_env,
             )
         )
     return loaded
+
+
+def collect_skill_env_keys(skills_dir: Path = SKILLS_DIR) -> set[str]:
+    """Return the union of env-var names declared by every installed skill.
+
+    Used by ``orchestrator/mcp_host.py`` to pass through *only* the env
+    variables skills declared in their ``_meta.json`` ``requiresEnv``
+    field — every other variable from the user's shell is still stripped
+    at the subprocess boundary.
+    """
+    keys: set[str] = set()
+    if not skills_dir.exists():
+        return keys
+    for skill_dir in sorted(skills_dir.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        if not (skill_dir / "SKILL.md").is_file():
+            continue
+        for k in _load_meta_requires_env(skill_dir):
+            keys.add(k)
+    return keys
 
 
 def select_skills_for_text(skills: list[Skill], text: str) -> list[Skill]:
@@ -118,6 +161,14 @@ def render_skill_catalog_for_prompt(skills: list[Skill]) -> str:
     return "\n".join(sections)
 
 
+# Mirrors project_context's MAX_TOTAL_INSTRUCTION_CHARS budget so the two
+# injection sources can't gang up to blow out the system prompt. When a
+# skill's full content exceeds the remaining budget, only the truncated
+# prefix is included — the agent can read the full SKILL.md with read_file
+# when it needs deeper detail.
+MAX_TOTAL_SKILL_CHARS = 8000
+
+
 def render_skills_for_prompt(skills: list[Skill]) -> str:
     if not skills:
         return ""
@@ -127,8 +178,19 @@ def render_skills_for_prompt(skills: list[Skill]) -> str:
         "Follow these rules and workflows for the current request. Use available "
         "tools to run the commands named by a skill only when the referenced files exist.",
     ]
+    remaining = MAX_TOTAL_SKILL_CHARS
     for skill in skills:
+        if remaining <= 200:
+            sections.append("_Additional skill content omitted after reaching the prompt budget._")
+            break
+        content = skill.content
+        if len(content) > remaining:
+            content = (
+                content[:remaining]
+                + "\n…[truncated; read the full SKILL.md via read_file when needed]"
+            )
+        remaining -= len(content)
         sections.append(f"\n<skill name=\"{skill.name}\" path=\"{skill.path.as_posix()}\">")
-        sections.append(skill.content)
+        sections.append(content)
         sections.append("</skill>")
     return "\n".join(sections)
