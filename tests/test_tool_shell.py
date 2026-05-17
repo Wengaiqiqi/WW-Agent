@@ -74,13 +74,19 @@ def test_case_insensitive_match():
 
 def test_run_subprocess_does_not_leak_env(monkeypatch):
     """End-to-end: run_subprocess's child must NOT see OPENAI_API_KEY even when
-    the parent process has it set."""
+    the parent process has it set.
+
+    The skill-declared-env passthrough is stubbed out: this test focuses on the
+    keyword/prefix filter, not on the skill opt-in surface (which has its own
+    coverage in ``test_skill_declared_env_keys_bypass_secret_filter``)."""
     import sys
     import json as _json
+    from tool import tool_shell
     from tool.tool_shell import run_subprocess
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-leak")
     monkeypatch.setenv("MY_TOKEN", "should-not-leak")
+    monkeypatch.setattr(tool_shell, "_skill_declared_env_keys", lambda: set())
     # PATH must survive so python can find its own runtime
     code = (
         "import os, json; "

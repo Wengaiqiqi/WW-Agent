@@ -50,6 +50,15 @@ _LANGCHAIN_ALLOWLIST = {
 }
 
 
+# Default subprocess timeouts (seconds). Shared by run_python / run_command at
+# both the LangChain ``@tool`` surface (``tool/tools.py``) and the tool-agent
+# wrapper surface (``agents/tool_agent/tool_executor.py``) so callers see
+# consistent defaults. 180s matches the slow-path realities the agent hits
+# routinely: ``pip install <pkg>`` over a flaky network, ``python-docx``
+# opening a large .docx, ``pypdf`` on a 200-page PDF.
+DEFAULT_SUBPROCESS_TIMEOUT = 180
+
+
 def _skill_declared_env_keys() -> set[str]:
     """Return the union of env-var names declared by every installed skill.
 
@@ -109,7 +118,7 @@ def _filter_secrets_from_env(env: dict[str, str]) -> dict[str, str]:
     return cleaned
 
 
-def run_subprocess(command: list[str] | str, timeout: int = 10, shell: bool = False) -> str:
+def run_subprocess(command: list[str] | str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT, shell: bool = False) -> str:
     # Force UTF-8 end-to-end so a child python `print(...)` on Chinese-Windows
     # doesn't deadlock writing a traceback through cp936 when the output
     # contains chars GBK can't encode (e.g. `²`, `—`, fullwidth punctuation).
@@ -154,11 +163,11 @@ def run_subprocess(command: list[str] | str, timeout: int = 10, shell: bool = Fa
     return json_result(asdict(output))
 
 
-def run_python_code(code: str, timeout: int = 10) -> str:
+def run_python_code(code: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -> str:
     return run_subprocess([sys.executable, "-c", code], timeout=timeout, shell=False)
 
 
-def run_shell_command(command: str, timeout: int = 30) -> str:
+def run_shell_command(command: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -> str:
     if os.name == "nt":
         # shell=True so Windows passes the raw command line to cmd.exe.
         # Passing ["cmd.exe", "/c", command] with shell=False routes through

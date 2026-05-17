@@ -120,10 +120,10 @@ async def _wrap_glob_search(args: dict) -> Any:
 async def _wrap_run_python(args: dict) -> Any:
     import time as _time
     from pathlib import Path as _Path
-    from tool.tool_shell import run_python_code
+    from tool.tool_shell import DEFAULT_SUBPROCESS_TIMEOUT, run_python_code
 
     code = args["code"]
-    timeout = int(args.get("timeout", 180))
+    timeout = int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT))
     log_path = _Path(".agent/runtime/tool-agent-runpython.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -147,14 +147,15 @@ async def _wrap_run_python(args: dict) -> Any:
 
 
 async def _wrap_run_command(args: dict) -> Any:
-    from tool.tool_shell import run_shell_command
+    from tool.tool_shell import DEFAULT_SUBPROCESS_TIMEOUT, run_shell_command
 
-    # Default 180s so `pip install <pkg>` actually completes on slow networks
-    # — the LLM rarely sets a timeout explicitly, and the previous 30s default
-    # turned every retry-after-pip-install into a guaranteed timeout error.
+    # Default ``DEFAULT_SUBPROCESS_TIMEOUT`` (180s) so `pip install <pkg>`
+    # actually completes on slow networks. The constant is defined in
+    # ``tool/tool_shell`` so the @tool surface (``tool/tools.py``) and this
+    # wrapper agree by construction instead of by drift-prone duplication.
     return run_shell_command(
         command=args["command"],
-        timeout=int(args.get("timeout", 180)),
+        timeout=int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT)),
     )
 
 

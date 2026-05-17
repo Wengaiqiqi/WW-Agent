@@ -18,6 +18,7 @@ import json
 import os
 import re
 import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -44,7 +45,7 @@ class _SSRFBlocked(ValueError):
     """
 
 
-def _hostname_is_safe(hostname: str) -> tuple[bool, str]:
+def hostname_is_safe(hostname: str) -> tuple[bool, str]:
     """Return ``(allowed, reason)`` for a parsed URL hostname.
 
     Resolves DNS once and inspects every A/AAAA record — a single hostname
@@ -52,6 +53,9 @@ def _hostname_is_safe(hostname: str) -> tuple[bool, str]:
     happens by resolving here, then a second time inside urlopen, which would
     re-validate if we wrapped urlopen too; we don't, so this is best-effort
     against active adversaries but solid against accidental misuse).
+
+    Public so peer modules (``tool_vision`` etc.) can apply the same check
+    before doing their own ``urllib.request`` calls.
     """
     if not hostname:
         return False, "empty hostname"
@@ -94,8 +98,44 @@ def _hostname_is_safe(hostname: str) -> tuple[bool, str]:
     return True, ""
 
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate the destination host on every HTTP redirect.
+
+    Without this, ``urllib.request.urlopen`` follows 30x redirects
+    transparently — a public host can redirect to ``http://127.0.0.1/`` or
+    ``http://169.254.169.254/`` and the seed-host check in ``web_extract`` is
+    bypassed. This handler runs ``hostname_is_safe`` on each ``Location:``
+    before allowing the redirect; failure raises ``HTTPError`` so the caller
+    surfaces a refused-fetch instead of returning private-network content.
+
+    ``LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1`` still bypasses the check (the
+    env var hook lives inside ``hostname_is_safe``).
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_host = urllib.parse.urlparse(newurl).hostname or ""
+        allowed, reason = hostname_is_safe(new_host)
+        if not allowed:
+            raise urllib.error.HTTPError(
+                newurl, code,
+                f"Refused redirect to {new_host}: {reason}",
+                headers, fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# Cached opener with the safe-redirect handler installed. ``build_opener``
+# is cheap but not free, and ``_http_get`` is called from web_search /
+# web_extract / web_crawl — building once at import keeps the hot path lean.
+_OPENER = urllib.request.build_opener(SafeRedirectHandler())
+
+
 def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIMEOUT) -> tuple[bytes, str]:
-    """GET *url* and return ``(body_bytes, final_url)``. Raises on HTTP error."""
+    """GET *url* and return ``(body_bytes, final_url)``. Raises on HTTP error.
+
+    Redirects are followed only when the destination host passes the same
+    private-IP check the caller did on the seed URL — see ``SafeRedirectHandler``.
+    """
     req = urllib.request.Request(
         url,
         headers={
@@ -106,7 +146,7 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIM
             **(headers or {}),
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - trusted user input via tool
+    with _OPENER.open(req, timeout=timeout) as resp:  # noqa: S310 - trusted user input via tool
         data = resp.read(_MAX_BYTES + 1)
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if encoding == "gzip":
@@ -297,7 +337,7 @@ def web_extract(url: str, max_chars: int = 8000) -> dict:
     if not url.startswith(("http://", "https://")):
         return {"success": False, "error": "URL must start with http:// or https://"}
     parsed = urllib.parse.urlparse(url)
-    allowed, reason = _hostname_is_safe(parsed.hostname or "")
+    allowed, reason = hostname_is_safe(parsed.hostname or "")
     if not allowed:
         return {
             "success": False,
@@ -378,7 +418,7 @@ def web_crawl(
 
     parsed_seed = urllib.parse.urlparse(url)
     seed_host = (parsed_seed.hostname or "").lower()
-    allowed, reason = _hostname_is_safe(seed_host)
+    allowed, reason = hostname_is_safe(seed_host)
     if not allowed:
         return {"success": False, "error": f"Refused: {reason}.", "url": url}
 
@@ -395,7 +435,7 @@ def web_crawl(
         current_host = (urllib.parse.urlparse(current).hostname or "").lower()
         if same_host_only and current_host != seed_host:
             continue
-        host_ok, _ = _hostname_is_safe(current_host)
+        host_ok, _ = hostname_is_safe(current_host)
         if not host_ok:
             continue
 

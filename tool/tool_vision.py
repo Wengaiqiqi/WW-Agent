@@ -25,7 +25,15 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 _MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
-_DOWNLOAD_TIMEOUT = float(os.getenv("AGENT_VISION_DOWNLOAD_TIMEOUT", "30"))
+
+
+def _download_timeout() -> float:
+    """Resolved at call time so a test / runtime ``monkeypatch.setenv`` takes
+    effect without re-importing the module."""
+    try:
+        return float(os.getenv("AGENT_VISION_DOWNLOAD_TIMEOUT", "30"))
+    except ValueError:
+        return 30.0
 
 
 def _validate_image_url(url: str) -> bool:
@@ -56,10 +64,28 @@ def _detect_mime(data: bytes, fallback_suffix: str = "") -> str:
 
 
 def _load_image_as_data_url(source: str) -> str:
-    """Return ``data:<mime>;base64,...`` for a URL or local path."""
+    """Return ``data:<mime>;base64,...`` for a URL or local path.
+
+    Remote URLs are SSRF-checked via ``tool_web.hostname_is_safe`` and follow
+    the same ``SafeRedirectHandler``-protected opener used elsewhere, so a
+    prompt-injected ``http://169.254.169.254/...`` (cloud metadata) cannot
+    sneak its bytes into the LLM payload through this tool.
+    """
     if source.startswith(("http://", "https://")):
         if not _validate_image_url(source):
             raise ValueError(f"Invalid image URL: {source!r}")
+        # Import lazily so a missing ``tool_web`` (extracted) wouldn't break
+        # ``vision_analyze`` for local file inputs.
+        from tool.tool_web import hostname_is_safe, _OPENER
+
+        parsed = urlparse(source)
+        allowed, reason = hostname_is_safe(parsed.hostname or "")
+        if not allowed:
+            raise ValueError(
+                f"Refused: {reason}. Set LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1 "
+                "to opt out (development only)."
+            )
+
         req = urllib.request.Request(
             source,
             headers={
@@ -67,11 +93,11 @@ def _load_image_as_data_url(source: str) -> str:
                 "Accept": "image/*,*/*;q=0.8",
             },
         )
-        with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
+        with _OPENER.open(req, timeout=_download_timeout()) as resp:
             data = resp.read(_MAX_DOWNLOAD_BYTES + 1)
         if len(data) > _MAX_DOWNLOAD_BYTES:
             raise ValueError(f"Image too large (> {_MAX_DOWNLOAD_BYTES} bytes)")
-        mime = _detect_mime(data, fallback_suffix=Path(urlparse(source).path).suffix)
+        mime = _detect_mime(data, fallback_suffix=Path(parsed.path).suffix)
     else:
         path = Path(source).expanduser()
         if not path.exists() or not path.is_file():

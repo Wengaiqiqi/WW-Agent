@@ -26,7 +26,11 @@ from tool.tool_web import (
 )
 from tool.tool_permissions import authorize_tool
 from tool.tool_registry import TOOL_SPECS, required_permission_for, tool_manifest_text
-from tool.tool_shell import run_python_code, run_shell_command
+from tool.tool_shell import (
+    DEFAULT_SUBPROCESS_TIMEOUT,
+    run_python_code,
+    run_shell_command,
+)
 from tool.tool_osv import osv_lookup
 from tool.tool_homeassistant import dispatch as ha_dispatch
 from tool.tool_x_search import x_search as x_search_impl
@@ -269,8 +273,13 @@ def apply_patch(patch: str) -> str:
 
 
 @tool
-def run_python(code: str, timeout: int = 10) -> str:
-    """Execute Python code in a subprocess and return structured JSON with stdout, stderr, and exit code."""
+def run_python(code: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -> str:
+    """Execute Python code in a subprocess and return structured JSON with stdout, stderr, and exit code.
+
+    ``timeout`` defaults to ``DEFAULT_SUBPROCESS_TIMEOUT`` (180s) so pip
+    installs, large-document parsers, and other slow-cold-start scripts
+    succeed without the caller having to remember to raise the limit.
+    """
     if denied := _authorize("run_python", "python code"):
         return denied
     try:
@@ -280,10 +289,11 @@ def run_python(code: str, timeout: int = 10) -> str:
 
 
 @tool
-def run_command(command: str, timeout: int = 30) -> str:
+def run_command(command: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -> str:
     """Execute a shell command in the workspace and return structured JSON.
 
-    This is a dangerous tool. Use it only when file/search/Python tools are insufficient.
+    This is a dangerous tool. Use it only when file/search/Python tools are
+    insufficient. ``timeout`` defaults to ``DEFAULT_SUBPROCESS_TIMEOUT`` (180s).
     """
     if denied := _authorize("run_command", command):
         return denied
