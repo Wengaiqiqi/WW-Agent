@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator, Callable, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
+from agent_display import has_raw_tool_markup, is_langgraph_tool_chunk
 from prompt_rules import (
     CONCISE_RULE,
     LANGUAGE_RULE,
@@ -236,14 +237,14 @@ class ToolAgentLoop:
 
                 if mode == "messages":
                     chunk, _metadata = payload
-                    if self._is_tool_chunk(chunk):
+                    if is_langgraph_tool_chunk(chunk):
                         continue
                     if getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None):
                         continue
                     token = self._chunk_text(chunk)
                     if not token:
                         continue
-                    if _has_raw_tool_markup(token):
+                    if has_raw_tool_markup(token):
                         continue
 
                     # Cross-message backstop for STRICTLY EXTENDING chunks.
@@ -406,13 +407,6 @@ class ToolAgentLoop:
         return [SystemMessage(content=SYSTEM_PROMPT), *messages]
 
     @staticmethod
-    def _is_tool_chunk(chunk: object) -> bool:
-        chunk_type = getattr(chunk, "type", "")
-        if chunk_type in {"tool", "ToolMessage", "tool_message"}:
-            return True
-        return "tool" in chunk.__class__.__name__.lower()
-
-    @staticmethod
     def _chunk_text(chunk: object) -> str:
         content = getattr(chunk, "content", "")
         if isinstance(content, str):
@@ -423,10 +417,6 @@ class ToolAgentLoop:
                 for item in content
             )
         return str(content or "")
-
-
-def _has_raw_tool_markup(content: str) -> bool:
-    return any(m in content for m in ("<tool_call>", "<function=", "<parameter="))
 
 
 def _no_answer_diagnostic(tool_calls_count: int, *, reason: str) -> str:

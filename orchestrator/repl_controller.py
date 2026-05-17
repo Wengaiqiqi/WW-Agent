@@ -11,44 +11,12 @@ from rich.markdown import Markdown
 from rich.live import Live
 from rich.text import Text
 
+from agent_display import format_tool_arg_summary
 from orchestrator.repl_types import LoopAction
 from orchestrator.repl_ui import ReplUI
 from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner
 
 log = logging.getLogger(__name__)
-
-# -- Rendering helpers (extracted from legacy/single_agent_loop.py CliApp) --
-
-TOOL_ARG_PRIMARY_KEY = {
-    "read_file": "path",
-    "write_file": "path",
-    "edit_file": "path",
-    "glob_search": "pattern",
-    "grep_search": "pattern",
-    "list_directory": "path",
-    "run_command": "command",
-    "web_search": "query",
-    "web_extract": "url",
-}
-
-
-def _format_tool_args(name: str, args: dict) -> str:
-    if not args:
-        return ""
-    key = TOOL_ARG_PRIMARY_KEY.get(name)
-    if key and key in args and args[key] is not None:
-        value = str(args[key])
-        first_line = value.strip().splitlines()[0] if value.strip() else ""
-        if len(first_line) > 80:
-            first_line = first_line[:77] + "…"
-        return first_line
-    pairs = []
-    for k, v in list(args.items())[:2]:
-        v_str = v if isinstance(v, str) else repr(v)
-        if len(v_str) > 40:
-            v_str = v_str[:37] + "…"
-        pairs.append(f"{k}={v_str}")
-    return ", ".join(pairs)
 
 
 def _build_tool_line(name: str, args: dict, *, active: bool) -> Text:
@@ -61,7 +29,7 @@ def _build_tool_line(name: str, args: dict, *, active: bool) -> Text:
     function renders both states, so freezing a running call into its final
     form is just an ``update()`` with ``active=False`` followed by ``stop()``.
     """
-    summary = _format_tool_args(name, args)
+    summary = format_tool_arg_summary(name, args)
     t = Text()
     # Rich's `blink` maps to ANSI SGR 5; terminals that ignore it fall back
     # to a static bold-black bullet, which is still readable.

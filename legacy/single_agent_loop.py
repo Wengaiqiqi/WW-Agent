@@ -874,44 +874,17 @@ class CliApp:
 
     # ------------------------------------------------------------------ #
     # Inline tool-call rendering (Claude-Code-style headers + previews).
-    # Used by run_turn while the agent is streaming.
+    # Used by run_turn while the agent is streaming. The actual argument
+    # mapping + summary formatting lives in ``agent_display`` so legacy
+    # and the multi-agent orchestrator can't drift apart on which key
+    # represents each tool (the previous inline copy had ``memory →
+    # operation``, but the real signature is ``memory(action=...)``).
     # ------------------------------------------------------------------ #
-    TOOL_ARG_PRIMARY_KEY = {
-        "run_command": "command",
-        "run_python": "code",
-        "read_file": "path",
-        "write_file": "path",
-        "edit_file": "path",
-        "apply_patch": "patch",
-        "glob_search": "pattern",
-        "grep_search": "pattern",
-        "web_search": "query",
-        "web_extract": "url",
-        "list_directory": "path",
-        "memory": "operation",
-        "clarify": "question",
-    }
-
-    def _format_tool_args(self, name: str, args: dict) -> str:
-        if not args:
-            return ""
-        key = self.TOOL_ARG_PRIMARY_KEY.get(name)
-        if key and key in args and args[key] is not None:
-            value = str(args[key])
-            first_line = value.strip().splitlines()[0] if value.strip() else ""
-            if len(first_line) > 80:
-                first_line = first_line[:77] + "…"
-            return first_line
-        pairs = []
-        for k, v in list(args.items())[:2]:
-            v_str = v if isinstance(v, str) else repr(v)
-            if len(v_str) > 40:
-                v_str = v_str[:37] + "…"
-            pairs.append(f"{k}={v_str}")
-        return ", ".join(pairs)
 
     def _render_tool_call_header(self, name: str, args: dict) -> None:
-        summary = self._format_tool_args(name, args)
+        from agent_display import format_tool_arg_summary
+
+        summary = format_tool_arg_summary(name, args)
         header = Text()
         header.append("⏺ ", style="bold cyan")
         header.append(name, style="bold")
@@ -1113,16 +1086,33 @@ class CliApp:
             return "".join(parts)
         return ""
 
+    # ``is_tool_stream_chunk`` and ``has_raw_tool_markup`` now delegate
+    # to ``agent_display`` so the same detection runs in legacy, the
+    # multi-agent tool-agent loop, and any future surface. Keep these as
+    # staticmethod thin wrappers because existing call sites use
+    # ``CliApp.is_tool_stream_chunk`` and ``CliApp.has_raw_tool_markup``;
+    # rewriting every caller would just churn the diff without changing
+    # behaviour.
+
     @staticmethod
     def is_tool_stream_chunk(chunk: object) -> bool:
-        chunk_type = getattr(chunk, "type", "")
-        if chunk_type in {"tool", "ToolMessage", "tool_message"}:
-            return True
-        class_name = chunk.__class__.__name__.lower()
-        return "tool" in class_name
+        from agent_display import is_langgraph_tool_chunk
+
+        return is_langgraph_tool_chunk(chunk)
 
     @staticmethod
     def strip_raw_tool_markup(content: str) -> str:
+        """Drop the tool-call markup tail and any preceding "I'm now writing
+        tool calls as text" preamble.
+
+        The Chinese ``internal_markers`` are model-specific tells observed
+        in the wild from a couple of older Qwen / MiMo variants when they
+        get confused mid-stream and start narrating their own (wrong)
+        tool-call construction. When such a marker appears *before* the
+        raw ``<tool_call>`` markup we drop the entire prefix — the user
+        would otherwise see "Let me organize..." followed by raw XML they
+        can't act on. Add new phrases as we encounter them.
+        """
         markers = ("<tool_call>", "<function=", "<parameter=")
         positions = [content.find(marker) for marker in markers if marker in content]
         if not positions:
@@ -1140,6 +1130,7 @@ class CliApp:
             return ""
         if CliApp.has_raw_tool_markup(reasoning):
             return ""
+        # Same provider-specific tells as ``strip_raw_tool_markup``.
         internal_markers = ("让我整理", "我需要按照", "搜索结果返回", "搜索结果数据")
         if any(marker in reasoning for marker in internal_markers):
             return ""
@@ -1147,7 +1138,9 @@ class CliApp:
 
     @staticmethod
     def has_raw_tool_markup(content: str) -> bool:
-        return any(marker in content for marker in ("<tool_call>", "<function=", "<parameter="))
+        from agent_display import has_raw_tool_markup as _impl
+
+        return _impl(content)
 
     def recover_answer_from_tool_results(self, messages: list[object], question: str) -> str | None:
         return self.repair_raw_tool_answer(messages, question)
