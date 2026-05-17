@@ -105,7 +105,7 @@ class ReplUI:
             parts.append(f"Instructions: {instruction_count}")
         parts.append("Type /help for commands")
 
-        title = Text("LangChain Agent CLI — Multi-Agent", style="bold cyan")
+        title = Text("W&W Agent CLI", style="bold cyan")
         subtitle = " | ".join(parts)
         self.console.print()
         self.console.print(Panel(subtitle, title=title, border_style="cyan", box=box.ROUNDED))

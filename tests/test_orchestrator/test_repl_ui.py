@@ -58,7 +58,7 @@ def test_render_welcome_shows_provider_model_permission_agents():
         workspace="/home/project",
     )
     text = buf.getvalue()
-    assert "Multi-Agent" in text
+    assert "W&W Agent CLI" in text
     assert "openai" in text
     assert "gpt-4o" in text
     assert "workspace-write" in text

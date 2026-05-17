@@ -1,4 +1,4 @@
-# LangChain Agent CLI
+# W&W Agent CLI
 
 A practical coding and research assistant running inside a terminal CLI, built with LangChain and LangGraph.
 

@@ -1,1 +1,1 @@
-"""Test suite for LangChain Agent CLI."""
+"""Test suite for W&W Agent CLI."""

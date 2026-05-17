@@ -1,6 +1,6 @@
 # agent.md
 
-This file provides durable guidance to the local LangChain Agent CLI in this repository.
+This file provides durable guidance to the local W&W Agent CLI in this repository.
 
 ## Project Shape
 

@@ -177,7 +177,7 @@ def test_render_welcome_shows_provider_model_permission_agents():
         workspace="/home/project",
     )
     text = buf.getvalue()
-    assert "Multi-Agent" in text
+    assert "W&W Agent CLI" in text
     assert "openai" in text
     assert "gpt-4o" in text
     assert "workspace-write" in text
@@ -380,7 +380,7 @@ class ReplUI:
         self.console.print()
         self.console.print(Panel(
             subtitle,
-            title=Text("LangChain Agent CLI — Multi-Agent", style="bold cyan"),
+            title=Text("W&W Agent CLI", style="bold cyan"),
             border_style="cyan", box=box.ROUNDED,
         ))
         self.console.print("[dim]Enter sends. Type /help for commands.[/dim]")
