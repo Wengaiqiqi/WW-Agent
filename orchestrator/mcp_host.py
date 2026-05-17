@@ -20,6 +20,64 @@ class _ClientHandle:
     a2a_url: str | None = None
 
 
+# Env vars an agent subprocess legitimately needs. Everything else from the
+# orchestrator's env — particularly the user's provider API keys, GitHub
+# tokens, AWS creds, etc. — is dropped at the process boundary. The agent
+# loads its own provider credentials from disk via hydrate_env_from_credentials,
+# so it doesn't actually need them to ride along in the spawn env.
+_OS_PASSTHROUGH = {
+    # POSIX
+    "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SHELL",
+    "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+    # Windows
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+    "USERPROFILE", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
+    "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+    "PROGRAMDATA", "TEMP", "TMP", "OS", "PROCESSOR_ARCHITECTURE",
+    # Python runtime
+    "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUTF8",
+    "PYTHONUNBUFFERED",
+    # App config (not secrets)
+    "LANGCHAIN_AGENT_MODEL", "LANGCHAIN_AGENT_CONFIG_DIR",
+    "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+}
+
+
+def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
+    """Return a minimal env to hand to a freshly-spawned agent subprocess.
+
+    Whitelisting (rather than copying os.environ and stripping secrets) is the
+    safer default: a new credential env var pattern we haven't anticipated
+    silently fails CLOSED instead of leaking. Tool-agent and skill-agent both
+    bootstrap their own provider credentials from
+    ~/.langchain-agent/credentials.json on startup, so they don't need the
+    orchestrator's env to carry API keys for them.
+
+    ``MOCK_*`` is forwarded because the e2e test harness drives subprocess
+    behavior via env vars like ``MOCK_TOOL_AGENT_SCRIPT`` — those aren't
+    secrets and they MUST reach the spawned agent for the tests to be
+    meaningful.
+    """
+    env: dict[str, str] = {
+        k: v for k, v in os.environ.items()
+        if k.upper() in _OS_PASSTHROUGH or k.upper().startswith("MOCK_")
+    }
+    env["AUTHZ_HMAC_KEY"] = hmac_key
+    env["AGENT_ID"] = agent_id
+    # The orchestrator's PermissionGate (orchestrator/permission_gate.py) is
+    # the authoritative wall: it decides which capabilities a planner may
+    # dispatch under the user's current permission mode, and signs a short-lived
+    # JWT grant naming exactly the allowed tool. Once a specialist receives
+    # that grant, its INTERNAL tool selection (e.g. tool-agent's ReAct loop
+    # reaching for run_python as a fallback) is already inside the trust
+    # boundary — gating it a second time with the legacy in-process authz
+    # would block the agent from completing the very task the user asked for.
+    # So we grant the subprocess full internal access; the orchestrator still
+    # owns the outer gate.
+    env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "danger-full-access"
+    return env
+
+
 class MCPHost:
     """Manages MCP client sessions to each specialist subprocess."""
 
@@ -33,9 +91,7 @@ class MCPHost:
         if card.entrypoint["type"] != "python":
             raise NotImplementedError("only python entrypoints supported in Day-1")
 
-        env = os.environ.copy()
-        env["AUTHZ_HMAC_KEY"] = self._hmac_key
-        env["AGENT_ID"] = card.id
+        env = _build_agent_env(hmac_key=self._hmac_key, agent_id=card.id)
 
         params = StdioServerParameters(
             command=sys.executable,

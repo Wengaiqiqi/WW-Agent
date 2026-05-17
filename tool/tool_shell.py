@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -21,14 +22,81 @@ def json_result(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
+# Env-var name patterns that almost certainly carry secrets. We strip these
+# before handing the environment to a tool-agent shell/python child, so a
+# prompt-injected `set | findstr KEY` (Windows) or `env | grep -i key` (POSIX)
+# returns nothing useful even when the agent's own process has the credentials
+# in env (it needs them for its own LLM API calls).
+#
+# The single broad pattern matches any name containing one of the sensitive
+# keywords as a token-boundary-delimited word — covers OPENAI_API_KEY,
+# AUTHZ_HMAC_KEY, MY_TOKEN, FOO_PASSWORD, AWS_ACCESS_KEY_ID, etc. The narrower
+# provider-name pattern catches per-provider conventions like XIAOMI_AK that
+# don't include a sensitive keyword in the name.
+_SECRET_KEYWORD_RE = re.compile(
+    r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|"
+    r"AUTH|HMAC|PRIVATE|API|SESSION|COOKIE|BEARER|CERT)(?:_|$)"
+)
+_PROVIDER_PREFIX_RE = re.compile(
+    r"(?i)^(openai|anthropic|deepseek|xiaomi|qwen|moonshot|zhipu|mistral|"
+    r"cohere|google|gemini|ollama|together|replicate|huggingface|aws|azure|"
+    r"gcp|github|tavily|brave|serpapi)_"
+)
+_LANGCHAIN_ALLOWLIST = {
+    "LANGCHAIN_AGENT_MODEL",
+    "LANGCHAIN_AGENT_CONFIG_DIR",
+    "LANGCHAIN_AGENT_PERMISSION_MODE",
+    "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+}
+
+
+def _filter_secrets_from_env(env: dict[str, str]) -> dict[str, str]:
+    """Strip secret-looking entries from a child process env dict.
+
+    The agent's own process retains its credentials (it needs them to call the
+    LLM API). When it shells out via run_command / run_python, we wipe anything
+    that pattern-matches an API key or auth token from the env handed to the
+    child, so a prompt-injected attacker can't dump credentials by running
+    ``set`` or ``env``.
+
+    Anything starting with ``LANGCHAIN_AGENT_`` is treated as secret unless it
+    appears in ``_LANGCHAIN_ALLOWLIST`` — these few config knobs are explicitly
+    safe to propagate. AUTHZ_HMAC_KEY (the orchestrator → agent grant signing
+    key) is one of the most important things to strip, and ``HMAC`` /
+    ``KEY`` in the keyword set catches it.
+    """
+    cleaned: dict[str, str] = {}
+    for name, value in env.items():
+        upper = name.upper()
+        if upper.startswith("LANGCHAIN_AGENT_"):
+            if upper in _LANGCHAIN_ALLOWLIST:
+                cleaned[name] = value
+            continue
+        if _SECRET_KEYWORD_RE.search(name) or _PROVIDER_PREFIX_RE.search(name):
+            continue
+        cleaned[name] = value
+    return cleaned
+
+
 def run_subprocess(command: list[str] | str, timeout: int = 10, shell: bool = False) -> str:
+    # Force UTF-8 end-to-end so a child python `print(...)` on Chinese-Windows
+    # doesn't deadlock writing a traceback through cp936 when the output
+    # contains chars GBK can't encode (e.g. `²`, `—`, fullwidth punctuation).
+    # Both the child's stdio AND our decoder must agree on UTF-8.
+    child_env = _filter_secrets_from_env(os.environ.copy())
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen(
         command,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=os.getcwd(),
         shell=shell,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=child_env,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
@@ -61,8 +129,11 @@ def run_python_code(code: str, timeout: int = 10) -> str:
 
 def run_shell_command(command: str, timeout: int = 30) -> str:
     if os.name == "nt":
-        # Use cmd.exe for better compatibility and faster startup than PowerShell.
-        shell_command = ["cmd.exe", "/c", command]
-    else:
-        shell_command = ["/bin/sh", "-lc", command]
+        # shell=True so Windows passes the raw command line to cmd.exe.
+        # Passing ["cmd.exe", "/c", command] with shell=False routes through
+        # subprocess.list2cmdline, which escapes any internal `"` as `\"` —
+        # that breaks commands like `"C:\Path With Spaces\python.exe" script.py`
+        # because cmd.exe then tries to invoke the literal `\"C:\\…\\"` token.
+        return run_subprocess(command, timeout=timeout, shell=True)
+    shell_command = ["/bin/sh", "-lc", command]
     return run_subprocess(shell_command, timeout=timeout, shell=False)

@@ -73,17 +73,32 @@ def _mint_tool_grant(tool_name: str, meta: dict) -> str:
     """Mint a short-lived JWT granting access to a specific tool on tool-agent.
 
     Skill-agent holds AUTHZ_HMAC_KEY so it can issue sub-grants for tools it
-    needs to invoke downstream.
+    needs to invoke downstream. CRITICAL: the inner tool MUST be one the
+    user's outer mode would have allowed — otherwise a skill could side-step
+    the gate by simply asking for ``run_command`` even when the user set
+    ``read-only``. We re-validate against the same _MODE_WHITELIST the
+    orchestrator's PermissionGate uses.
     """
     import time
     import jwt as pyjwt
+    from agents.shared.permission_modes import _MODE_WHITELIST, PermissionDenied
+
+    inherited_mode = meta.get("permission_mode", "workspace-write")
+    wl = _MODE_WHITELIST.get(inherited_mode, [])
+    if "*" not in wl and tool_name not in wl:
+        raise PermissionDenied(
+            f"skill attempted to mint grant for {tool_name!r}, but the user's "
+            f"mode {inherited_mode!r} does not permit it. Re-run with a higher "
+            f"permission mode if this is intentional."
+        )
+
     key = os.environ.get("AUTHZ_HMAC_KEY", "")
     now = int(time.time())
     payload = {
         "iss": "skill-agent",
         "sub": "tool-agent",
         "exp": now + 60,
-        "permission_mode": meta.get("permission_mode", "workspace-write"),
+        "permission_mode": inherited_mode,
         "allowed_tools": [tool_name],
         "trace_id": meta.get("trace_id", ""),
     }

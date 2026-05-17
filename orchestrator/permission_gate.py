@@ -2,25 +2,12 @@ from __future__ import annotations
 import time
 import jwt as pyjwt
 
-
-class PermissionDenied(Exception):
-    pass
-
-
-_MODE_WHITELIST: dict[str, list[str]] = {
-    "read-only": [
-        "read_file", "grep_search", "glob_search", "list_directory",
-        "web_search", "web_extract", "calculator", "current_datetime",
-        "tool_manifest", "config", "clarify",
-    ],
-    "workspace-write": [
-        "read_file", "grep_search", "glob_search", "list_directory",
-        "web_search", "web_extract", "calculator", "current_datetime",
-        "tool_manifest", "config", "clarify",
-        "write_file", "edit_file", "apply_patch", "memory", "todo_write",
-    ],
-    "danger-full-access": ["*"],
-}
+# Re-export from the shared module so existing callers (and tests) that do
+# ``from orchestrator.permission_gate import PermissionDenied, _MODE_WHITELIST``
+# keep working unchanged. The single source of truth lives in
+# ``agents.shared.permission_modes`` so skill-agent can read the same table
+# without a reverse-direction import.
+from agents.shared.permission_modes import PermissionDenied, _MODE_WHITELIST  # noqa: F401
 
 
 class PermissionGate:
@@ -40,9 +27,16 @@ class PermissionGate:
             return True
         if tool in wl:
             return True
-        # skill.* tools are always permitted; they are high-level orchestrated
-        # actions that carry their own internal authz checks.
-        if tool.startswith("skill."):
+        # skill.* dispatches are themselves opaque — a skill can internally
+        # invoke any tool-agent capability via _mint_tool_grant. Anyone who
+        # can drop a SKILL.md under skills/ would otherwise side-step the
+        # outer mode. Allow skills only when the user explicitly opted into
+        # at least workspace-write; under read-only, the safest default is
+        # "no skill execution" — most skills perform side effects anyway.
+        # skill-agent's _mint_tool_grant re-validates the inner tool against
+        # the inherited mode, so a skill running here still can't reach
+        # run_command unless the user is in danger-full-access.
+        if tool.startswith("skill.") and self.mode != "read-only":
             return True
         return False
 

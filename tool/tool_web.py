@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import gzip
 import io
+import ipaddress
 import json
 import os
 import re
+import socket
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -28,6 +30,68 @@ _USER_AGENT = (
 )
 _DEFAULT_TIMEOUT = 15
 _MAX_BYTES = 2_000_000
+
+
+class _SSRFBlocked(ValueError):
+    """Raised when web_extract is asked to fetch a URL that resolves to a
+    private/loopback/link-local/multicast/reserved address.
+
+    Prompt-injection vector: a malicious file the agent reads tells the LLM to
+    "verify by fetching http://127.0.0.1:11434/api/tags" (or 169.254.169.254
+    for cloud metadata, or an internal 10.x service). Without this check, the
+    agent obliges. The block fails closed; set LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1
+    to opt out for local development.
+    """
+
+
+def _hostname_is_safe(hostname: str) -> tuple[bool, str]:
+    """Return ``(allowed, reason)`` for a parsed URL hostname.
+
+    Resolves DNS once and inspects every A/AAAA record — a single hostname
+    can have both a public and a private record (DNS rebinding mitigation
+    happens by resolving here, then a second time inside urlopen, which would
+    re-validate if we wrapped urlopen too; we don't, so this is best-effort
+    against active adversaries but solid against accidental misuse).
+    """
+    if not hostname:
+        return False, "empty hostname"
+    if os.environ.get("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS") == "1":
+        return True, ""
+
+    # Bracketed IPv6 literals arrive with brackets stripped by urlparse.
+    try:
+        ip_literal = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip_literal = None
+
+    candidates: list[ipaddress._BaseAddress] = []
+    if ip_literal is not None:
+        candidates.append(ip_literal)
+    else:
+        try:
+            infos = socket.getaddrinfo(hostname, None)
+        except socket.gaierror as exc:
+            return False, f"DNS lookup failed: {exc}"
+        for info in infos:
+            addr = info[4][0]
+            try:
+                candidates.append(ipaddress.ip_address(addr.split("%", 1)[0]))
+            except ValueError:
+                continue
+        if not candidates:
+            return False, "no resolvable address"
+
+    for ip in candidates:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False, f"address {ip} is private/loopback/link-local/reserved"
+    return True, ""
 
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIMEOUT) -> tuple[bytes, str]:
@@ -232,6 +296,18 @@ def web_extract(url: str, max_chars: int = 8000) -> dict:
         return {"success": False, "error": "Empty URL."}
     if not url.startswith(("http://", "https://")):
         return {"success": False, "error": "URL must start with http:// or https://"}
+    parsed = urllib.parse.urlparse(url)
+    allowed, reason = _hostname_is_safe(parsed.hostname or "")
+    if not allowed:
+        return {
+            "success": False,
+            "error": (
+                f"Refused: {reason}. Internal/private addresses are blocked to "
+                "prevent SSRF. Set LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1 to opt "
+                "out (development only)."
+            ),
+            "url": url,
+        }
     try:
         body, final_url = _http_get(url)
     except Exception as exc:
