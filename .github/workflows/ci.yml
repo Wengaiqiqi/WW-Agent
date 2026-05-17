@@ -1,0 +1,110 @@
+name: CI
+
+# Triggers: every push + every PR. Forks open against this repo also run.
+on:
+  push:
+    branches: ["main", "codex/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# Cancel an in-flight run if the same ref gets a new push.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Fast unit-test matrix. Skips ``e2e`` tests (they spawn subprocesses
+  # and are run in a separate Linux-only job below).
+  # ---------------------------------------------------------------------
+  test:
+    name: pytest (no e2e) / Py${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install core + dev dependencies
+        # Install via pyproject's optional ``[dev]`` extra. Skill-specific
+        # heavy deps (PyMuPDF, CairoSVG, google-genai, etc.) stay out of the
+        # test environment.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run unit tests (no e2e)
+        env:
+          PYTHONUTF8: "1"
+        run: pytest -k "not e2e" --no-cov
+
+  # ---------------------------------------------------------------------
+  # End-to-end tests spawn subprocesses (orchestrator → tool-agent +
+  # skill-agent over MCP/A2A). Only runs on Linux because the multi-process
+  # asyncio teardown on Windows has known anyio quirks unrelated to product
+  # correctness (and the legacy / single-agent path covers Windows already).
+  # ---------------------------------------------------------------------
+  e2e:
+    name: pytest (e2e only) / Py3.12 / ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run e2e tests
+        env:
+          PYTHONUTF8: "1"
+        # Higher timeout: each e2e spawns subprocesses + has its own
+        # cold-start budget. Default per-test pytest timeout is fine,
+        # we just need the job to allow time for several to run.
+        timeout-minutes: 15
+        run: pytest -m e2e --no-cov
+
+  # ---------------------------------------------------------------------
+  # Type-check the strict-typed pure-logic modules listed in pyproject.toml.
+  # Fast, runs once per push.
+  # ---------------------------------------------------------------------
+  mypy:
+    name: mypy (strict modules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run mypy on strict-typed modules
+        # The strict opt-in list lives in ``[[tool.mypy.overrides]]``;
+        # passing the file paths here tells mypy "only check these" so a
+        # transient untyped third-party regression elsewhere doesn't break
+        # the gate.
+        run: |
+          mypy \
+            agent_display.py \
+            prompt_rules.py \
+            agent_paths.py \
+            agents/shared/permission_modes.py \
+            orchestrator/repl_types.py
