@@ -12,6 +12,33 @@ from __future__ import annotations
 from typing import Mapping
 
 
+def _visual_width(s: str) -> int:
+    """Best-effort east-asian-width count.
+
+    CJK / fullwidth glyphs occupy 2 terminal columns; everything else is
+    treated as width 1. Real ``wcwidth`` would handle combining marks and
+    ambiguous-width categories perfectly, but it's not in the dep set —
+    this approximation only ever *overestimates*, so the worst it can do
+    is leave one extra row of slack inside the input frame.
+    """
+    width = 0
+    for ch in s:
+        o = ord(ch)
+        if (
+            0x1100 <= o <= 0x115F            # Hangul Jamo
+            or 0x2E80 <= o <= 0xA4CF         # CJK + Hangul + Yi
+            or 0xAC00 <= o <= 0xD7A3         # Hangul Syllables
+            or 0xF900 <= o <= 0xFAFF         # CJK Compat Ideographs
+            or 0xFE30 <= o <= 0xFE4F         # CJK Compat Forms
+            or 0xFF00 <= o <= 0xFF60         # Fullwidth Forms
+            or 0xFFE0 <= o <= 0xFFE6         # Fullwidth signs
+        ):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
 def _make_slash_completer(commands: Mapping[str, str]):
     """Build a prompt_toolkit Completer yielding slash commands with description meta.
 
@@ -73,6 +100,7 @@ def ask_boxed_input(
     omitted, falls back to a fresh ``rich.console.Console()``.
     """
     from prompt_toolkit.application import Application
+    from prompt_toolkit.application.current import get_app
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import Layout
@@ -147,12 +175,26 @@ def ask_boxed_input(
         input_processors=[ConditionalProcessor(before_input, has_focus(buf))],
     )
 
-    # Shrink-to-content height: number of newlines in the buffer + 1, clamped
-    # between 1 and 8. Recomputed on every render so the frame grows as the
-    # user types newlines and stays tight when empty.
+    # Shrink-to-content height: count both logical newlines AND visual rows
+    # that long lines wrap into, so the frame actually grows when the user
+    # types past the right edge. Without the wrap-aware calculation the box
+    # stayed at one row tall; wrapped text was rendered above the viewport
+    # and looked to the user like the input was "sliding right" off-screen.
     def _calc_input_height() -> Dimension:
-        line_count = buf.text.count("\n") + 1
-        rows = min(max(line_count, 1), 8)
+        try:
+            cols = get_app().output.get_size().columns
+        except Exception:
+            cols = 80
+        # Frame steals 2 cols for the left+right border. The "▌ " marker on
+        # the cursor line eats 2 more; we conservatively subtract on every
+        # line, which can over-wrap by one row at most — harmless.
+        usable = max(20, cols - 4)
+        text = buf.text or ""
+        visual_rows = 0
+        for line in text.split("\n"):
+            line_w = _visual_width(line)
+            visual_rows += max(1, (line_w + usable - 1) // usable)
+        rows = min(max(visual_rows, 1), 8)
         return Dimension.exact(rows)
 
     input_window = Window(
