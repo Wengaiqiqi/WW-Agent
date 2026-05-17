@@ -18,3 +18,14 @@ Thumbs.db
 .idea/
 .vscode/
 .langchain-agent/
+
+# Local-only diagnostic + scratch dirs that have caused noisy git status.
+# .tmp/ holds dev throwaway scripts (diag_*, time_*, verify_*) — keep them
+# locally but never commit. agent/ at the root has been accidentally typed
+# multiple times where agents/ was intended; ignoring stops the stray subdir
+# from showing up in `git status` again. *.docx at the repo root catches
+# stray Word docs uploaded for ad-hoc testing — fixtures should live under
+# tests/fixtures/ and skill assets under skills/.
+.tmp/
+/agent/
+/*.docx
