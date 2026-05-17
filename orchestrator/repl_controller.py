@@ -494,6 +494,35 @@ class REPLController:
                     msg = event.get("message", "unknown warning")
                     self.ui.console.print(f"[dim yellow]⚠ {msg}[/dim yellow]")
 
+                elif etype == "clarify_request":
+                    # tool-agent's ReAct loop chose the ``clarify`` tool; pause
+                    # the streaming UI, render the question, collect the user's
+                    # answer, and POST it back so the wrapper's await unblocks.
+                    _freeze_tool_live()
+                    _stop_live()
+                    await _stop_status()
+                    request_id = str(event.get("id") or "")
+                    question = str(event.get("question") or "")
+                    choices = event.get("choices") or []
+                    if not request_id or not question:
+                        self.ui.console.print(
+                            "[dim yellow]⚠ clarify_request missing id/question — ignoring[/dim yellow]"
+                        )
+                        continue
+                    answer = await asyncio.to_thread(
+                        self._ask_user_clarify, question, list(choices),
+                    )
+                    try:
+                        from orchestrator.a2a_client import send_clarify_response
+                        await send_clarify_response(
+                            peer_id=agent_id,
+                            request_id=request_id,
+                            answer=answer,
+                        )
+                    except Exception as exc:  # pragma: no cover - network rare
+                        log.warning("failed to send clarify response: %s", exc)
+                    await _show_status("Thinking...")
+
         finally:
             _stop_live()
             _freeze_tool_live()
@@ -502,6 +531,41 @@ class REPLController:
             self.ui.set_agent_context("multi-agent")
 
         return final_text
+
+    def _ask_user_clarify(self, question: str, choices: list[str]) -> str:
+        """Synchronous user prompt for a tool-agent clarify_request event.
+
+        Runs inside ``asyncio.to_thread`` from ``_delegate_to_agent``. Keeps
+        the UI minimal — a titled panel for the question plus either a
+        numbered choice list or a free-text prompt. Returns the empty
+        string on Ctrl+C / EOF so the tool-agent wrapper sees a defined
+        (if uninformative) answer rather than hanging until the 10-minute
+        bridge timeout.
+        """
+        from rich.panel import Panel
+        from rich.prompt import Prompt
+        from rich import box
+
+        self.ui.console.print()
+        self.ui.console.print(Panel(
+            question, title="Clarify", border_style="cyan", box=box.ROUNDED,
+        ))
+        if choices:
+            for i, choice in enumerate(choices, 1):
+                self.ui.console.print(f"  {i}. {choice}")
+            self.ui.console.print(f"  {len(choices) + 1}. (type your own answer)")
+            prompt_text = "Choice (number or text)"
+        else:
+            prompt_text = "Your answer"
+        try:
+            raw = Prompt.ask(prompt_text, console=self.ui.console).strip()
+        except (EOFError, KeyboardInterrupt):
+            return ""
+        if choices and raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(choices):
+                return choices[n - 1]
+        return raw
 
     async def _ensure_planner(self) -> None:
         if self._planner is not None:

@@ -60,6 +60,54 @@ def test_run_python_and_run_command_hidden_from_mcp_specs():
     assert "run_command" not in names
 
 
+def test_clarify_hidden_from_mcp_specs():
+    """``clarify`` must not be MCP-registered. The synchronous MCP path has
+    no UI callback channel, so a direct planner dispatch would just hang.
+    The tool stays available to tool-agent's ReAct loop via the streaming
+    A2A path + clarify_bridge."""
+    names = {s.name for s in build_tool_specs()}
+    assert "clarify" not in names
+
+
+def test_clarify_available_in_react_tools():
+    """ReAct loop needs clarify available so the model can choose to ask
+    the user mid-turn. Pair test to the MCP-hidden check above."""
+    names = {t.name for t in make_langchain_tools()}
+    assert "clarify" in names
+
+
+@pytest.mark.asyncio
+async def test_clarify_wrapper_uses_bridge(monkeypatch):
+    """The clarify wrapper must route through ``clarify_bridge.request`` so the
+    SSE → user → SSE round-trip works. We patch the bridge and assert the
+    wrapper called it and returned the bridge's answer."""
+    import json
+    from agents.tool_agent import clarify_bridge, tool_executor
+
+    async def _fake_request(question, choices):
+        assert question == "color?"
+        assert choices == ["red", "blue"]
+        return "red"
+
+    monkeypatch.setattr(clarify_bridge, "request", _fake_request)
+    result = await tool_executor._wrap_clarify({
+        "question": "color?",
+        "choices": ["red", "blue"],
+    })
+    parsed = json.loads(result)
+    assert parsed["user_response"] == "red"
+
+
+@pytest.mark.asyncio
+async def test_clarify_wrapper_rejects_empty_question():
+    import json
+    from agents.tool_agent import tool_executor
+
+    result = await tool_executor._wrap_clarify({"question": "   "})
+    parsed = json.loads(result)
+    assert "error" in parsed
+
+
 def test_run_python_and_run_command_available_to_react_loop():
     """tool-agent's internal ReAct loop must still see them as LangChain tools."""
     names = {t.name for t in make_langchain_tools()}

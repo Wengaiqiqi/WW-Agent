@@ -226,6 +226,32 @@ async def _wrap_web_crawl(args: dict) -> Any:
     )
 
 
+async def _wrap_clarify(args: dict) -> Any:
+    """Bridge the ``clarify`` tool to the orchestrator via the per-turn
+    event queue set up in ``agents.tool_agent.main``.
+
+    Returns a structured "unavailable" string when called outside an SSE
+    streaming dispatch (e.g. someone hit ``clarify`` over the synchronous
+    MCP path) instead of hanging. See ``clarify_bridge.request``.
+    """
+    from agents.tool_agent import clarify_bridge
+
+    question = str(args.get("question") or "").strip()
+    if not question:
+        return json.dumps(
+            {"error": "clarify requires a non-empty question."},
+            ensure_ascii=False,
+        )
+    choices = args.get("choices")
+    if choices is not None and not isinstance(choices, list):
+        choices = None
+    answer = await clarify_bridge.request(question, choices)
+    return json.dumps(
+        {"question": question, "choices_offered": choices, "user_response": answer},
+        ensure_ascii=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool map
 # ---------------------------------------------------------------------------
@@ -393,18 +419,42 @@ _TOOL_MAP: dict[str, tuple] = {
         "BFS-crawl a small set of pages from a seed URL. Use when one page "
         "isn't enough; prefer web_extract when one page is.",
     ),
+    "clarify": (
+        _wrap_clarify,
+        {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Question to put to the user.",
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 4,
+                    "description": "Optional multiple-choice options (up to 4).",
+                },
+            },
+        },
+        "Ask the user a clarifying question. Use when the request is ambiguous "
+        "or has meaningful trade-offs the model cannot resolve. Returns the "
+        "user's answer as JSON.",
+    ),
 }
 
 
 # Tools NOT registered as MCP capabilities on the orchestrator. The intent:
-# the planner cannot pick `run_python` / `run_command` as a top-level dispatch
-# capability (those would short-circuit the ReAct loop and dodge the cost-of-
-# reflection that motivates the multi-agent split in the first place).
+# the planner cannot pick `run_python` / `run_command` / `clarify` as
+# top-level dispatch capabilities — those would short-circuit the ReAct
+# loop's autonomy (run_*) or hit the synchronous MCP path with no UI
+# callback channel (clarify) and just hang.
 #
 # They remain reachable in two other ways, and that is by design:
 #
 # 1. tool-agent's own ReAct loop (``make_langchain_tools``) — the agent
-#    decides when to shell out, which is exactly the autonomy we want.
+#    decides when to shell out OR when to ask the user, which is exactly
+#    the autonomy we want.
 # 2. skill-agent → A2A → tool-agent: ``_call_remote_tool`` mints a
 #    JWT-scoped grant via ``_mint_tool_grant``. Whether that grant is
 #    actually allowed is gated by ``_SKILL_INNER_WHITELIST[mode]`` — under
@@ -415,7 +465,7 @@ _TOOL_MAP: dict[str, tuple] = {
 #
 # Adding a tool here only removes the *direct planner dispatch* path, not
 # the *internal* paths. Document the actual blast radius before adding.
-_INTERNAL_ONLY: frozenset[str] = frozenset({"run_python", "run_command"})
+_INTERNAL_ONLY: frozenset[str] = frozenset({"run_python", "run_command", "clarify"})
 
 
 # ---------------------------------------------------------------------------

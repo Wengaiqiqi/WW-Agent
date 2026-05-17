@@ -122,6 +122,13 @@ async def _run_agent_streaming(task: str) -> AsyncIterator[dict[str, Any]]:
     first LLM token). On a fresh subprocess this work takes 7-10s; without an
     eager first event the orchestrator's `Delegating to tool-agent...` spinner
     sits silently the whole time and the user concludes it has hung.
+
+    Internally uses a queue + driver-task pattern so the ``clarify`` tool's
+    wrapper can inject ``clarify_request`` events into the SSE stream from
+    inside the ReAct loop (see ``clarify_bridge``). The driver pulls agent
+    events into the queue; this generator pulls from the queue; the wrapper
+    can ``put`` out-of-band events on the same queue while it awaits the
+    user's answer.
     """
     yield {"type": "thinking"}
 
@@ -134,10 +141,41 @@ async def _run_agent_streaming(task: str) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "error", "message": f"tool-agent setup failed: {exc}"}
         return
 
+    from agents.tool_agent import clarify_bridge
+
+    queue: asyncio.Queue = asyncio.Queue()
+    clarify_bridge.set_event_queue(queue)
+
     # ToolAgentLoop.run yields its own initial `thinking` event; that's fine —
     # the orchestrator's status panel is idempotent across repeated thinkings.
-    async for event in agent.run(task=task):
-        yield event
+    sentinel: dict[str, Any] = {"__sentinel__": True}
+
+    async def _drive() -> None:
+        try:
+            async for event in agent.run(task=task):
+                await queue.put(event)
+        except Exception as exc:
+            log.exception("ReAct loop crashed in driver task")
+            await queue.put({"type": "error", "message": str(exc)})
+        finally:
+            await queue.put(sentinel)
+
+    driver = asyncio.create_task(_drive())
+    try:
+        while True:
+            event = await queue.get()
+            if event is sentinel:
+                break
+            yield event
+    finally:
+        if not driver.done():
+            driver.cancel()
+            try:
+                await driver
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # pragma: no cover - defensive
+                log.exception("driver task raised during cleanup")
 
 
 async def amain() -> None:
@@ -145,6 +183,19 @@ async def amain() -> None:
 
     # Non-streaming dispatch (backward compatible + "tool.task" agent-level).
     async def a2a_dispatch(skill_id: str, input: dict, meta: dict) -> dict:
+        if skill_id == "_clarify_response":
+            # Out-of-band response from the orchestrator: the user
+            # answered a ``clarify_request`` we emitted earlier. Resolve
+            # the matching pending future so the wrapper unblocks.
+            from agents.tool_agent import clarify_bridge
+
+            request_id = str(input.get("request_id") or "")
+            answer = str(input.get("answer") or "")
+            if not request_id:
+                return {"error": "missing 'request_id' in clarify response"}
+            ok = clarify_bridge.resolve(request_id, answer)
+            return {"resolved": ok}
+
         if skill_id == "tool.task":
             task = input.get("task", "")
             if not task:

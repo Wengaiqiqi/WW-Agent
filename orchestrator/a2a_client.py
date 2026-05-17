@@ -99,6 +99,26 @@ async def delegate_task(
                                 }
 
 
+async def send_clarify_response(
+    *, peer_id: str, request_id: str, answer: str,
+) -> dict:
+    """Send the user's answer back to a peer agent that emitted a
+    ``clarify_request`` event over SSE.
+
+    Uses the same ``/a2a`` JSON-RPC endpoint as ``call_peer`` with a
+    sentinel ``skill_id`` of ``_clarify_response`` — the receiving
+    ``a2a_dispatch`` handler unblocks the pending future on tool-agent's
+    ``clarify_bridge``. Short timeout: this is an immediate-resolve call,
+    not a long-running task.
+    """
+    return await call_peer(
+        peer_id=peer_id,
+        skill_id="_clarify_response",
+        input={"request_id": request_id, "answer": answer},
+        meta={"trace_id": f"clarify-{request_id[:8]}"},
+    )
+
+
 async def call_peer(
     *, peer_id: str, skill_id: str, input: dict, meta: dict,
 ) -> dict:
