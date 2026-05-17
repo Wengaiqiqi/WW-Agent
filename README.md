@@ -1,219 +1,140 @@
 # W&W Agent CLI
 
-A practical coding and research assistant running inside a terminal CLI, built with LangChain and LangGraph.
+A terminal coding/research assistant built on LangChain + LangGraph. Two
+runtime shapes share one codebase:
 
-## Features
+- **Multi-agent** (default) — the orchestrator process routes work to
+  specialist subprocesses (`tool-agent`, `skill-agent`) over MCP stdio and
+  HTTP A2A streaming.
+- **Single-agent** (`--single`) — the original in-process LangGraph ReAct
+  loop, retained for fast non-interactive prompts and constrained
+  environments.
 
-- **Interactive REPL**: Terminal-based chat interface with slash commands
-- **Tool System**: File ops, shell, Python, V4A patch, web search/extract, persistent memory, agent-initiated clarify, and more
-- **Skill System**: Extensible local skills with dynamic loading
-- **Persistent Memory**: `MEMORY.md` / `USER.md` injected into the system prompt at session start; mid-session writes survive restart
-- **Permission Management**: Three-tier model (read-only, workspace-write, danger-full-access)
-- **Streaming Output**: Real-time response streaming with spinner animations
-- **Session Management**: Conversation history with memory compaction
-
-## Installation
+## Install
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Optional: Set Baidu ecommerce token (only needed for the Baidu skill)
-export BAIDU_EC_SEARCH_TOKEN="your-token-here"
 ```
 
-On first launch the CLI runs the `/model` wizard, asks you to pick a provider,
-enter the API key, and confirm the base URL. The key is saved to
-`.claude/credentials.json` (a sibling `.gitignore` is created automatically),
-so subsequent launches read it back from there — no env var needed.
+First launch runs the `/model` wizard (provider → model → API key → base
+URL). The key is saved to `.langchain-agent/credentials.json` (a sibling
+`.gitignore` is created automatically); subsequent launches hydrate `os.environ`
+from there.
 
-To preconfigure non-interactively, set `LANGCHAIN_AGENT_MODEL=<provider>` (or
-`<provider>/<model>`) and export the provider's API-key env var; see the
-table under "Model Configuration" for each provider's key name.
-
-## Usage
-
-### Interactive Mode
+To preconfigure non-interactively:
 
 ```bash
-python cli.py
+export LANGCHAIN_AGENT_MODEL=deepseek/deepseek-chat   # provider or provider/model
+export DEEPSEEK_API_KEY=...
 ```
 
-### Single Prompt Mode
+## Run
 
 ```bash
-python cli.py prompt "What can you do?"
+python cli.py                              # interactive multi-agent REPL
+python cli.py prompt "what's in README?"   # one-shot multi-agent
+python cli.py --single                     # legacy single-agent REPL
+python cli.py --single prompt "..."        # one-shot single-agent
 ```
 
-### Slash Commands
+## Multi-agent mode (default)
 
-- `/help` - Show available commands
-- `/status` - Show current session status
-- `/model [provider]` - Interactive 4-step model picker (skips Step 1 if a provider name is passed)
-- `/tools` - List registered tools
-- `/skills` - List installed skills
-- `/instructions` - List loaded project instruction files
-- `/permissions [mode]` - Show or set permission mode
-- `/config` - Show effective configuration
-- `/compact` - Start a fresh memory thread
-- `/clear` - Clear the terminal
-- `/exit` or `/quit` - Exit the CLI
+The orchestrator process boots, spawns two specialists, and routes each
+turn to the right one:
 
-## Multi-Agent Mode
+- **orchestrator** — planner LLM (a small router prompt); permission
+  gate; A2A streaming dispatch; TUI rendering with `[orchestrator]` /
+  `[skill]` / `[tool]` line tags.
+- **tool-agent** — workspace + web specialist. ReAct loop over file
+  ops, shell, Python, web fetch.
+- **skill-agent** — runs a single `skills/<slug>/SKILL.md` as system
+  prompt and uses a JSON-envelope protocol to call tools on tool-agent
+  via A2A.
 
-`python cli.py` (no `--single`) boots a small multi-agent network:
+Inter-process trust:
 
-- **orchestrator** — the CLI process; routes work to specialists and renders their output with `[orchestrator]` / `[skill]` / `[tool]` tags
-- **skill-agent** — subprocess that loads `skills/*/SKILL.md` and runs each skill via its own LLM turn
-- **tool-agent** — subprocess that exposes the `tool/*.py` functions
+- All cross-process calls carry a 60-second HS256 JWT (`AUTHZ_HMAC_KEY`
+  is minted by the orchestrator at startup and passed only to spawned
+  specialists). `agents.shared.authz.verify_grant` rejects expired,
+  tampered, or wrong-tool grants.
+- The orchestrator's `PermissionGate` is the *outer* whitelist. A skill
+  that wants a tool calls back through `_mint_tool_grant`, gated by the
+  *inner* whitelist (`_SKILL_INNER_WHITELIST`). The two-tier design lets
+  workspace-write users invoke skills without auto-elevating their
+  planner-level permissions.
 
-Specialists communicate with the orchestrator over **MCP** (stdio JSON-RPC). When a skill needs a tool mid-execution, skill-agent calls tool-agent directly over **A2A** (HTTP localhost JSON-RPC), and the call is mirrored back to the orchestrator via a telemetry side-channel so the user still sees the `[tool]` line in the unified stream.
+Runtime files (created lazily under `.agent/`):
 
-### Single-agent fallback
-
-`python cli.py --single` runs the original single-process REPL (unchanged from previous versions). No subprocesses are spawned.
-
-### Runtime files
-
-The multi-agent system uses `.agent/` for runtime state:
-
-- `.agent/agents/<id>.card.json` — Agent Cards (registry entries)
-- `.agent/runtime/peers.json` — A2A peer URL table written at startup
-- `.agent/runtime/<id>.a2a-url` — per-specialist A2A URL sidecar
-- `.agent/runtime/telemetry.ndjson` — A2A-call telemetry consumed by orchestrator
+- `.agent/agents/<id>.card.json` — Agent Card per specialist
+- `.agent/runtime/peers.json` — `{agent_id: a2a_url}` table written at boot
+- `.agent/runtime/<id>.a2a-url` — per-specialist URL sidecar
+- `.agent/runtime/telemetry.ndjson` — A2A telemetry tailed by orchestrator
 - `.agent/logs/` — specialist logs
 
-`.agent/` is intentionally separate from `.claude/`, which is reserved for the Claude Code dev tool.
+`.agent/` is separate from `.claude/` (reserved for Claude Code, an
+unrelated dev tool).
 
-### Slash commands
+### Design docs
 
-- `/agents` — list registered specialists with their PIDs and A2A URLs
-- (Full multi-agent REPL UX ships post-Day-1; for now, use `python cli.py prompt "..."` for non-interactive use)
+Full architecture: [docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md](docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md).
 
-### Design
+## Slash commands
 
-For the full architecture (component responsibilities, protocol message shapes, permission model, testing strategy) see [docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md](docs/superpowers/specs/2026-05-15-multi-agent-orchestration-design.md).
+| Command | What it does |
+|---|---|
+| `/help` | Show available commands |
+| `/status` | Session counters (turns, tool calls, last error) |
+| `/model` | 4-step model wizard (provider → model → key → URL) |
+| `/permissions [mode]` | Show or set permission mode |
+| `/agents` | List specialists with PIDs and A2A URLs (multi-agent only) |
+| `/tools` | List registered capabilities |
+| `/skills` | List installed local skills |
+| `/instructions` | List loaded project instruction files |
+| `/config` | Effective session config |
+| `/compact` | Start a fresh memory thread |
+| `/clear` | Clear the terminal |
+| `/exit` / `/quit` | Exit |
 
-## Configuration
+## Permission modes
 
-### Permission Modes
+Three tiers, default `workspace-write`:
 
-Set via environment variable or `/permissions` command:
+| Mode | Allowed |
+|---|---|
+| `read-only` | Read/search file tools, `web_search` / `web_extract` / `web_crawl`, `calculator`, `current_datetime`, `tool_manifest`, `config`, `clarify`. **Skills are blocked.** |
+| `workspace-write` | All of the above plus `write_file`, `edit_file`, `apply_patch`, `memory`, `todo_write`. Skills can execute and (via their inner whitelist) reach `run_command` / `run_python`. |
+| `danger-full-access` | Everything, including direct `run_python` / `run_command` dispatch from the planner. |
 
-- `read-only` - Only read operations allowed
-- `workspace-write` - Read and write within workspace (default)
-- `danger-full-access` - All operations including shell commands
-
-```bash
-export LANGCHAIN_AGENT_PERMISSION_MODE="read-only"
-```
-
-### Model Configuration
-
-`config.py`'s `PROVIDERS` dict defines each provider's protocol, default
-base URL, API-key env var, and the list of known model ids. The active
-selection is an `ActiveConfig` (provider + model + base_url + api_key_env +
-protocol) loaded from `.claude/settings.json` on startup.
-
-Built-in providers (mirrored from `hermes-agent/hermes_cli`'s
-`PROVIDER_REGISTRY` + `_PROVIDER_MODELS`, restricted to api-key auth with
-OpenAI / Anthropic protocols):
-
-- **First-party**: `anthropic`, `openai`, `deepseek`, `gemini`, `xai`, `nvidia`,
-  `xiaomi`, `zai`, `kimi-coding`, `kimi-coding-cn`, `stepfun`, `minimax`,
-  `minimax-cn`, `alibaba`, `alibaba-coding-plan`, `tencent-tokenhub`, `arcee`,
-  `gmi`, `huggingface`
-- **Aggregators**: `openrouter`, `ai-gateway`, `opencode-zen`, `opencode-go`,
-  `kilocode`
-- **Local / self-hosted**: `lmstudio`, `ollama-cloud`
-- **Free-form**: `custom`
-
-Providers with an empty model list (`custom`, `lmstudio`, `ollama-cloud`)
-prompt for a free-form model id in Step 2 of the wizard.
-
-> **xAI note**: hermes-agent uses xAI's `codex_responses` transport. This
-> project routes xAI through OpenAI-compatible chat completions instead
-> (`https://api.x.ai/v1`), so reasoning-only Grok variants may not surface
-> the full reasoning trace. Standard chat models like `grok-4.3` work as
-> expected.
-
-Inside the REPL, `/model` opens an interactive wizard modeled on hermes-agent's
-`hermes model` flow:
-
-```
-/model                # full wizard (4 steps)
-/model deepseek       # skip Step 1; jump straight to model selection
-/setup                # alias for /model
-```
-
-The four steps:
-
-1. **Select provider** — numbered list with API-key status indicator
-2. **Select model** — numbered list from that provider; `custom` provider
-   prompts for free-form model id
-3. **Enter API key** — masked input; press `y` to keep the existing key
-4. **Enter base URL** — pre-filled with the provider default; required for
-   `custom`
-
-Selection priority on startup (highest first):
-
-1. `LANGCHAIN_AGENT_MODEL` env var (`provider` or `provider/model`)
-2. `.claude/settings.json` `model` block (written by the wizard)
-3. `DEFAULT_PROVIDER` constant with its first model
-
-The wizard writes the provider+model+base_url to `.claude/settings.json` and
-saves the API key to `.claude/credentials.json` (a sibling `.gitignore`
-shields the file on first save). Subsequent launches hydrate `os.environ`
-from the credentials file, so the wizard only re-triggers when no key is
-discoverable.
-
-## Development
-
-### Running Tests
+Set via:
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=. --cov-report=html
-
-# Run specific test file
-pytest tests/test_calculator.py
-
-# Run with verbose output
-pytest -v
+export LANGCHAIN_AGENT_PERMISSION_MODE=read-only
 ```
 
-### Code Quality
-
-```bash
-# Format code
-black .
-
-# Lint code
-flake8 .
-
-# Type checking
-mypy cli.py config.py tools.py
-```
+or inside the REPL: `/permissions read-only`.
 
 ## Tools
 
-Run `/tools` inside the REPL for the full live list. Highlights ported from
-`hermes-agent/tools/`:
+Run `/tools` for the live list. Highlights:
 
 | Tool | Permission | What it does |
 |---|---|---|
-| `read_file` / `write_file` / `edit_file` | read / write | Single-file ops with workspace-boundary safety |
-| `apply_patch` | write | **V4A multi-file unified-diff patches** — Add/Update/Delete/Move in one atomic call. Validates all hunks before writing anything; falls back with no side effects when any hunk fails to match |
-| `glob_search` / `grep_search` / `list_directory` | read | Filesystem discovery |
-| `run_python` / `run_command` | danger | Code / shell execution (requires `danger-full-access` mode) |
-| `web_search` | read | **DuckDuckGo HTML search (no API key)** + Tavily when `TAVILY_API_KEY` is set. Returns `{title, url, snippet}` rows |
-| `web_extract` | read | Fetch a URL and return readable plain text (HTML stripped, no JS rendering) |
-| `memory` | write | **Cross-session memory** under `.claude/memories/`. `MEMORY.md` for agent notes, `USER.md` for user profile. Frozen snapshot is injected into the system prompt at session start |
-| `clarify` | read | **Agent-initiated question to user** — multiple-choice (arrow-key picker in TTY) or open-ended. Use when the request is ambiguous or has meaningful trade-offs |
-| `todo_write` | write | Structured task list under `.claude/todos.json` |
+| `read_file` / `write_file` / `edit_file` | read / write / write | UTF-8 file ops with workspace-boundary checks |
+| `apply_patch` | write | V4A unified-diff patches across multiple files (atomic — validates all hunks before writing) |
+| `glob_search` / `grep_search` / `list_directory` | read | Filesystem discovery (ripgrep-style grep) |
+| `run_python` | danger | Python in a subprocess. 180s default timeout |
+| `run_command` | danger | Shell command. 180s default timeout |
+| `web_search` | read | DuckDuckGo (no key) or Tavily (`TAVILY_API_KEY`) |
+| `web_extract` | read | Fetch URL + readable text. SSRF-blocked on private/loopback addresses (including post-redirect) |
+| `web_crawl` | read | Same-host BFS (≤25 pages). No JS rendering |
+| `memory` | write | Cross-session `MEMORY.md` / `USER.md` under `.langchain-agent/memories/` |
+| `todo_write` | write | Structured task list under `.langchain-agent/todos.json` |
+| `clarify` | read | Agent-initiated question to user (arrow-key picker in TTY) |
+| `osv_check` | read | OSV malware/CVE lookup for `(package, ecosystem)` |
+| `home_assistant` | danger | Home Assistant REST API (`HASS_TOKEN` required). Blocks `shell_command` / `python_script` / `command_line` HA domains |
+| `x_search` | read | xAI's hosted X (Twitter) search (`XAI_API_KEY` required) |
+| `vision_analyze` | read | Image + prompt → vision-capable LLM (SSRF-checked for remote URLs) |
+| `mixture_of_agents` | read | Parallel reference models + aggregator (paper: arXiv:2406.04692) |
 | `calculator` / `current_datetime` / `sleep` / `config` / `tool_manifest` | various | Misc utilities |
 
 ### V4A patch format
@@ -227,91 +148,190 @@ Run `/tools` inside the REPL for the full live list. Highlights ported from
 +new line
 *** Add File: NEW.md
 +content line 1
-+content line 2
 *** Delete File: obsolete.txt
 *** Move File: src/old.py -> src/new.py
 *** End Patch
 ```
 
-### Persistent memory layout
-
-```
-.claude/memories/
-├── MEMORY.md   # agent notes: codebase conventions, prior failures, environment quirks
-└── USER.md     # user profile: preferences, goals, communication style
-```
-
-Entries are separated by `\n§\n` and capped per file (MEMORY 4 KB, USER 2 KB).
-Mid-session `memory(action="add"|"replace"|"remove")` writes immediately to
-disk so the next session picks them up; the in-prompt snapshot is frozen at
-startup to keep the prefix cache stable.
-
-### Logging
-
-Logs are written to `.claude/agent.log`. Enable debug output to stderr:
-
-```bash
-export LANGCHAIN_AGENT_DEBUG=1
-python cli.py
-```
-
-## Project Structure
-
-```
-.
-├── cli.py                  # Main CLI entrypoint and agent loop
-├── config.py               # Model configuration
-├── tools.py                # Tool registration
-├── tool_file_ops.py        # File operation implementations
-├── tool_shell.py           # Shell command execution
-├── tool_permissions.py     # Permission management
-├── tool_registry.py        # Tool manifest
-├── skill_loader.py         # Skill discovery and loading
-├── project_context.py      # Project instruction files
-├── skills/                 # Local skills directory
-│   └── baidu-ecommerce-search/
-│       ├── SKILL.md        # Skill instructions
-│       ├── _meta.json      # Skill metadata
-│       └── scripts/        # Skill-specific scripts
-├── tests/                  # Test suite
-│   ├── test_calculator.py
-│   ├── test_permissions.py
-│   ├── test_skill_loader.py
-│   └── test_file_ops.py
-├── requirements.txt        # Python dependencies
-└── agent.md               # Project documentation
-
-```
-
 ## Skills
 
-Skills are loaded from `skills/<name>/SKILL.md`. Each skill can have:
+Each directory under `skills/<slug>/` containing a `SKILL.md` is a skill.
+Optional companion files:
 
-- `SKILL.md` - Markdown instructions for the agent
-- `_meta.json` - Metadata including `matchKeywords` for automatic activation
-- `scripts/` - Python scripts called by the skill
+- `_meta.json` — `{slug, version, matchKeywords[], requiresEnv[]}`
+- `scripts/` — Python helpers invoked by the skill
 
-### Creating a Skill
+`matchKeywords` drives single-agent's auto-injection of the SKILL.md
+into the system prompt. In multi-agent, the planner LLM picks
+`skill.<slug>` directly based on the skill's `description` (from SKILL.md
+frontmatter).
 
-1. Create directory: `skills/my-skill/`
-2. Add `SKILL.md` with instructions
-3. Add `_meta.json` with keywords:
+`requiresEnv` lets a skill opt specific env-var names INTO the
+subprocess environment despite the secret filter:
 
 ```json
 {
-  "slug": "my-skill",
-  "version": "1.0.0",
-  "matchKeywords": ["keyword1", "keyword2"]
+  "slug": "baidu-ecommerce-search",
+  "matchKeywords": ["全网", "比价", "京东"],
+  "requiresEnv": ["BAIDU_EC_SEARCH_TOKEN", "BAIDU_EC_SEARCH_QPS"]
 }
 ```
 
-## Security
+Bundled skills:
 
-- **Calculator**: Uses AST-based safe evaluation (no `eval()`)
-- **Permissions**: Three-tier model with explicit authorization
-- **Path Safety**: Workspace boundary enforcement
-- **Shell Commands**: Windows uses `cmd.exe` for compatibility
+- `baidu-ecommerce-search` — China e-commerce search/comparison (needs
+  `BAIDU_EC_SEARCH_TOKEN`).
+- `ppt-master` — slide-deck generation (templates, asset palettes,
+  multi-backend image generation).
 
-## License
+## Memory layout
 
-See project documentation for license information.
+```
+.langchain-agent/memories/
+├── MEMORY.md   # agent notes: conventions, environment, prior failures
+└── USER.md     # user profile: preferences, goals
+```
+
+Entries are separated by `\n§\n` and capped per file (MEMORY 4 KB, USER 2 KB).
+Mid-session `memory(action="add"|"replace"|"remove")` writes immediately;
+the in-prompt snapshot is frozen at session start to keep prefix caches
+stable.
+
+## Logging
+
+Default file log: `.langchain-agent/agent.log`. Mirror to stderr:
+
+```bash
+export LANGCHAIN_AGENT_DEBUG=1
+```
+
+## Provider catalog
+
+`config/_providers.py` registers each provider's protocol (OpenAI-chat or
+Anthropic), default base URL, API-key env var, and known model ids.
+First-party: `anthropic`, `openai`, `deepseek`, `gemini`, `xai`, `nvidia`,
+`xiaomi`, `zai`, `kimi-coding`, `kimi-coding-cn`, `stepfun`, `minimax`,
+`minimax-cn`, `alibaba`, `alibaba-coding-plan`, `tencent-tokenhub`,
+`arcee`, `gmi`, `huggingface`. Aggregators: `openrouter`, `ai-gateway`,
+`opencode-zen`, `opencode-go`, `kilocode`. Local: `lmstudio`,
+`ollama-cloud`. Free-form: `custom` (prompts for model id in step 2 of
+the wizard).
+
+Selection priority on startup:
+
+1. `LANGCHAIN_AGENT_MODEL` env var (`provider` or `provider/model`)
+2. `.langchain-agent/settings.json` `model` block (written by the wizard)
+3. `DEFAULT_PROVIDER` with its first model
+
+## Development
+
+```bash
+pytest                                   # full suite (~45 test files)
+pytest -k "not e2e"                      # skip subprocess-spawning e2e tests
+pytest --cov=. --cov-report=html         # coverage report
+```
+
+Lint / format:
+
+```bash
+black .
+flake8 .
+```
+
+## Project structure
+
+```
+.
+├── cli.py                       # entrypoint (dispatches --single vs multi-agent)
+├── agent_paths.py               # config-dir resolver
+├── project_context.py           # discover project instruction files (agent.md, etc.)
+├── prompt_rules.py              # shared style/behavior rules
+│
+├── config/                      # provider registry + settings + credentials + LLM factory
+│   ├── _providers.py
+│   ├── _settings.py
+│   ├── _credentials.py
+│   └── _llm.py
+│
+├── orchestrator/                # multi-agent orchestrator process
+│   ├── main.py                  # entrypoint (run_prompt / run_repl)
+│   ├── repl_controller.py       # turn execution + A2A streaming
+│   ├── repl_commands.py         # slash-command handlers
+│   ├── repl_state.py            # session state + planner-context budget
+│   ├── repl_ui.py               # Rich-based TUI
+│   ├── turns.py                 # LLMPlanner + TurnRunner
+│   ├── graph.py                 # legacy LangGraph dispatch (plan → tool call)
+│   ├── mcp_host.py              # spawn + JWT-gated MCP client sessions
+│   ├── permission_gate.py       # outer authz: sign per-tool JWT grants
+│   ├── a2a_client.py            # outbound SSE streaming + RPC
+│   ├── router.py                # CapabilityRouter
+│   ├── stream_mux.py            # tagged terminal stream
+│   ├── telemetry.py             # tail .agent/runtime/telemetry.ndjson
+│   ├── registry.py              # load Agent Cards
+│   └── ui_input.py              # boxed prompt-toolkit input
+│
+├── agents/                      # specialist subprocesses
+│   ├── shared/
+│   │   ├── mcp_server.py        # ToolSpec → MCP server runner
+│   │   ├── a2a_server.py        # FastAPI A2A endpoint (RPC + SSE)
+│   │   ├── authz.py             # verify_grant
+│   │   ├── permission_modes.py  # outer + inner whitelists
+│   │   ├── telemetry.py         # emit_event into telemetry.ndjson
+│   │   └── mock_chat_model.py   # scripted LLM for tests
+│   ├── tool_agent/
+│   │   ├── main.py              # entrypoint
+│   │   ├── agent_loop.py        # ReAct loop with stream-dedup logic
+│   │   └── tool_executor.py     # _TOOL_MAP (wrapped) + JWT-gated execute_tool
+│   └── skill_agent/
+│       ├── main.py              # entrypoint (MCP + A2A stream surfaces)
+│       ├── skill_executor.py    # SKILL.md ReAct + JSON envelope protocol
+│       └── a2a_client.py        # outbound A2A to tool-agent (call_peer)
+│
+├── tool/                        # tool implementations (single source of truth)
+│   ├── tools.py                 # @tool LangChain surface (legacy single-agent)
+│   ├── tool_registry.py         # TOOL_SPECS + required_permission_for
+│   ├── tool_permissions.py      # PermissionMode + authorize_tool
+│   ├── tool_file_ops.py
+│   ├── tool_patch.py            # V4A apply_patch
+│   ├── tool_shell.py            # run_python / run_command + secret filter
+│   ├── tool_web.py              # web_search / web_extract / web_crawl + SSRF
+│   ├── tool_memory.py
+│   ├── tool_clarify.py
+│   ├── tool_osv.py
+│   ├── tool_homeassistant.py
+│   ├── tool_x_search.py
+│   ├── tool_vision.py
+│   └── tool_moa.py
+│
+├── skills/
+│   ├── skill_loader.py
+│   ├── baidu-ecommerce-search/
+│   └── ppt-master/
+│
+├── legacy/
+│   └── single_agent_loop.py     # original single-process REPL (--single)
+│
+└── tests/                       # 45 test files; e2e under tests/test_e2e_multi_agent/
+```
+
+## Security notes
+
+- **SSRF**: `web_extract` / `web_crawl` resolve every A/AAAA record of the
+  target host and refuse private / loopback / link-local / multicast /
+  reserved addresses. `SafeRedirectHandler` re-validates on each 30x.
+  `vision_analyze` uses the same opener. Opt out for local dev with
+  `LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1`.
+- **Secret env stripping**: subprocesses spawned by `run_python` /
+  `run_command` see only a whitelisted slice of env. Names matching
+  `KEY` / `TOKEN` / `SECRET` / `HMAC` / `API` / `AUTH` / etc. are filtered
+  unless a skill's `_meta.json` opts the specific variable in via
+  `requiresEnv`.
+- **JWT-gated cross-process calls**: HS256, 60-second TTL, claim
+  `allowed_tools` names the single tool the grant permits. Re-keyed
+  every orchestrator launch.
+- **Workspace boundary**: `tool/tool_file_ops.resolve_workspace_path`
+  refuses paths that resolve outside `LANGCHAIN_AGENT_WORKSPACE_ROOT`
+  (defaults to CWD).
+- **Calculator**: AST-based safe evaluator (no `eval`).
+- **HA call_service**: rejects `shell_command` / `python_script` /
+  `command_line` / `rest_command` / `pyscript` / `hassio` domains.
