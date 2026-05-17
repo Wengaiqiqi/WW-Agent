@@ -19,10 +19,19 @@ from tool.tool_file_ops import (
 from tool.tool_clarify import clarify as clarify_dispatch
 from tool.tool_memory import memory_tool as memory_dispatch
 from tool.tool_patch import apply_patch_tool
-from tool.tool_web import web_extract as web_extract_impl, web_search as web_search_impl
+from tool.tool_web import (
+    web_crawl as web_crawl_impl,
+    web_extract as web_extract_impl,
+    web_search as web_search_impl,
+)
 from tool.tool_permissions import authorize_tool
 from tool.tool_registry import TOOL_SPECS, required_permission_for, tool_manifest_text
 from tool.tool_shell import run_python_code, run_shell_command
+from tool.tool_osv import osv_lookup
+from tool.tool_homeassistant import dispatch as ha_dispatch
+from tool.tool_x_search import x_search as x_search_impl
+from tool.tool_vision import vision_analyze as vision_analyze_impl
+from tool.tool_moa import mixture_of_agents as moa_impl
 
 import agent_paths
 
@@ -442,6 +451,217 @@ def tool_manifest() -> str:
     return tool_manifest_text()
 
 
+@tool
+def web_crawl(
+    url: str,
+    max_pages: int = 5,
+    max_chars_per_page: int = 4000,
+    same_host_only: bool = True,
+    include_links: bool = False,
+) -> str:
+    """BFS-crawl pages from ``url`` (same host by default).
+
+    No JavaScript rendering and no LLM summarization — pages are HTML-stripped
+    locally. ``max_pages`` is capped at 25. Useful for grabbing a small section
+    of a doc site or scraping a blog index plus a few posts in one call.
+
+    Do NOT use when a single page is enough — call ``web_extract`` instead.
+    Do NOT use for JS-heavy SPAs (results will be mostly nav chrome).
+    """
+    if denied := _authorize("web_crawl", url):
+        return denied
+    try:
+        return json.dumps(
+            web_crawl_impl(
+                url,
+                max_pages=max_pages,
+                max_chars_per_page=max_chars_per_page,
+                same_host_only=same_host_only,
+                include_links=include_links,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as exc:
+        return f"Web crawl error: {exc}"
+
+
+@tool
+def osv_check(
+    package: str,
+    ecosystem: str = "npm",
+    version: str | None = None,
+    malware_only: bool = False,
+) -> str:
+    """Query the public OSV API for advisories on a package.
+
+    ``ecosystem`` is the OSV ecosystem name (``npm``, ``PyPI``, ``Go``,
+    ``crates.io``, ``Maven``, ``RubyGems``, ``Packagist``, ``Hex``, etc.).
+    Set ``malware_only=True`` to filter to confirmed MAL-* advisories (skip
+    regular CVEs); useful before launching an MCP package via npx/uvx.
+
+    Do NOT use as a general "is this package good" review — OSV only knows
+    about reported vulnerabilities/malware, not code quality or licensing.
+    Do NOT use without an ecosystem; defaults to npm and silently misses
+    PyPI packages.
+    """
+    if denied := _authorize("osv_check", f"{ecosystem}/{package}"):
+        return denied
+    try:
+        return json.dumps(
+            osv_lookup(package, ecosystem, version=version, malware_only=malware_only),
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as exc:
+        return f"OSV check error: {exc}"
+
+
+@tool
+def home_assistant(
+    action: str,
+    domain: str | None = None,
+    area: str | None = None,
+    entity_id: str | None = None,
+    service: str | None = None,
+    data: dict | str | None = None,
+) -> str:
+    """Control / inspect a Home Assistant instance over the REST API.
+
+    Requires ``HASS_TOKEN`` (and optionally ``HASS_URL``) in the environment.
+
+    Actions:
+      - ``list_entities`` — optionally filter by ``domain`` and/or ``area``.
+      - ``get_state``     — requires ``entity_id``.
+      - ``list_services`` — optionally filter by ``domain``.
+      - ``call_service``  — requires ``domain`` + ``service``; ``entity_id``
+        and ``data`` (dict or JSON string) are optional. Domains that allow
+        shell/code execution on the HA host are blocked.
+
+    Do NOT call this when the user is asking generic smart-home questions
+    that don't reference *their* devices — answer from general knowledge.
+    Do NOT poll repeatedly; one ``get_state`` per logical question.
+    """
+    if denied := _authorize("home_assistant", action):
+        return denied
+    try:
+        result = ha_dispatch(
+            action,
+            domain=domain,
+            area=area,
+            entity_id=entity_id,
+            service=service,
+            data=data,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return f"Home Assistant error: {exc}"
+
+
+@tool
+def x_search(
+    query: str,
+    allowed_x_handles: list[str] | None = None,
+    excluded_x_handles: list[str] | None = None,
+    from_date: str = "",
+    to_date: str = "",
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
+) -> str:
+    """Search X (Twitter) via xAI's hosted ``x_search`` Responses API tool.
+
+    Requires ``XAI_API_KEY`` in the environment. Returns the model's answer
+    plus citation links. Use for current discussion / reactions on X rather
+    than general web pages. ``from_date`` / ``to_date`` are ``YYYY-MM-DD``.
+    Up to 10 handles each in ``allowed_x_handles`` or ``excluded_x_handles``
+    (the two are mutually exclusive).
+
+    Do NOT use for general web search — prefer ``web_search`` for anything
+    not specifically about X/Twitter content. Do NOT use to fetch a single
+    known X post URL — use ``web_extract`` (Twitter often blocks scraping,
+    but x_search is overkill for a known URL).
+    """
+    if denied := _authorize("x_search", query[:80]):
+        return denied
+    try:
+        return json.dumps(
+            x_search_impl(
+                query=query,
+                allowed_x_handles=allowed_x_handles,
+                excluded_x_handles=excluded_x_handles,
+                from_date=from_date,
+                to_date=to_date,
+                enable_image_understanding=enable_image_understanding,
+                enable_video_understanding=enable_video_understanding,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as exc:
+        return f"x_search error: {exc}"
+
+
+@tool
+def vision_analyze(image: str, prompt: str = "Describe this image in detail.") -> str:
+    """Analyze an image with a vision-capable LLM.
+
+    ``image`` can be an ``http(s)://`` URL or a local file path. Uses your
+    project's active LLM config (``config.build_llm``). Override the model
+    via ``AGENT_VISION_MODEL`` if your default model is not vision-capable.
+
+    Do NOT use on images that are clearly decorative or unrelated to the
+    question (logos, dividers, icons). Do NOT use to "read" a screenshot
+    of plain text — extract the text with run_python + tesseract or ask
+    the user for the source text instead, since vision OCR is slower and
+    less reliable.
+    """
+    if denied := _authorize("vision_analyze", image):
+        return denied
+    try:
+        return json.dumps(
+            vision_analyze_impl(image=image, prompt=prompt),
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as exc:
+        return f"vision_analyze error: {exc}"
+
+
+@tool
+def mixture_of_agents(
+    user_prompt: str,
+    reference_models: list[str] | None = None,
+    aggregator_model: str | None = None,
+) -> str:
+    """Run Mixture-of-Agents over multiple models, then synthesize a final answer.
+
+    The reference models run in parallel; their responses are then fed to an
+    aggregator model. All requests go through your active LLM config — so
+    ``reference_models`` only changes the model name (base_url and api_key
+    remain from the active config). Best for hard reasoning / coding tasks
+    where multiple frontier models can disagree productively.
+
+    Do NOT use for simple lookups, single-tool tasks, or anything you can
+    answer directly — MoA spends 4-5× the latency and tokens of a single
+    call. Do NOT use when your provider only supports one model name; the
+    references would just sample the same model multiple times.
+    """
+    if denied := _authorize("mixture_of_agents", user_prompt[:80]):
+        return denied
+    try:
+        return json.dumps(
+            moa_impl(
+                user_prompt=user_prompt,
+                reference_models=reference_models,
+                aggregator_model=aggregator_model,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as exc:
+        return f"mixture_of_agents error: {exc}"
+
+
 ALL_TOOLS = [
     calculator,
     current_datetime,
@@ -456,12 +676,19 @@ ALL_TOOLS = [
     run_command,
     web_search,
     web_extract,
+    web_crawl,
     memory,
     clarify,
     sleep,
     todo_write,
     config,
     tool_manifest,
+    # Ported from hermes-agent
+    osv_check,
+    home_assistant,
+    x_search,
+    vision_analyze,
+    mixture_of_agents,
 ]
 
 

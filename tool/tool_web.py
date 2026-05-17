@@ -330,3 +330,112 @@ def web_extract(url: str, max_chars: int = 8000) -> dict:
         "truncated": truncated,
         "byteLength": len(body),
     }
+
+
+# ---------------------------------------------------------------------------
+# web_crawl — same-domain BFS, no LLM summarization
+# ---------------------------------------------------------------------------
+_HREF_PATTERN = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _extract_links(html: str, base_url: str) -> list[str]:
+    """Extract absolute http(s) links from an HTML body."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for href in _HREF_PATTERN.findall(html):
+        absolute = urllib.parse.urljoin(base_url, href.strip())
+        if "#" in absolute:
+            absolute = absolute.split("#", 1)[0]
+        if not absolute.startswith(("http://", "https://")):
+            continue
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        found.append(absolute)
+    return found
+
+
+def web_crawl(
+    url: str,
+    max_pages: int = 5,
+    max_chars_per_page: int = 4000,
+    same_host_only: bool = True,
+    include_links: bool = False,
+) -> dict:
+    """BFS-crawl a website starting from ``url``.
+
+    Stays on the seed host by default. No JS rendering, no LLM summarization.
+    Returns ``{success, seed, pages: [{url, title, text, links?}]}``.
+    """
+    url = (url or "").strip()
+    if not url:
+        return {"success": False, "error": "Empty URL."}
+    if not url.startswith(("http://", "https://")):
+        return {"success": False, "error": "URL must start with http:// or https://"}
+
+    max_pages = max(1, min(int(max_pages or 5), 25))
+    max_chars_per_page = max(200, min(int(max_chars_per_page or 4000), 20000))
+
+    parsed_seed = urllib.parse.urlparse(url)
+    seed_host = (parsed_seed.hostname or "").lower()
+    allowed, reason = _hostname_is_safe(seed_host)
+    if not allowed:
+        return {"success": False, "error": f"Refused: {reason}.", "url": url}
+
+    queue: list[str] = [url]
+    visited: set[str] = set()
+    pages: list[dict] = []
+
+    while queue and len(pages) < max_pages:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+
+        current_host = (urllib.parse.urlparse(current).hostname or "").lower()
+        if same_host_only and current_host != seed_host:
+            continue
+        host_ok, _ = _hostname_is_safe(current_host)
+        if not host_ok:
+            continue
+
+        try:
+            body, final_url = _http_get(current)
+        except Exception as exc:
+            pages.append({"url": current, "error": f"Fetch failed: {exc}"})
+            continue
+
+        html = _decode(body)
+        parser = _TextExtractor()
+        parser.feed(html)
+        parser.close()
+        text = parser.text
+        truncated = len(text) > max_chars_per_page
+        if truncated:
+            text = text[:max_chars_per_page]
+
+        page: dict = {
+            "url": final_url,
+            "title": parser.title,
+            "text": text,
+            "truncated": truncated,
+        }
+        links = _extract_links(html, final_url)
+        if include_links:
+            page["links"] = links[:50]
+        pages.append(page)
+
+        if len(pages) < max_pages:
+            for link in links:
+                if link in visited:
+                    continue
+                if same_host_only and (urllib.parse.urlparse(link).hostname or "").lower() != seed_host:
+                    continue
+                queue.append(link)
+
+    return {
+        "success": True,
+        "seed": url,
+        "pages_crawled": len(pages),
+        "pages": pages,
+    }

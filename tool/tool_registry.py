@@ -27,11 +27,18 @@ TOOL_SPECS = (
     ToolSpec("clarify", "Ask the user a clarifying multiple-choice or open-ended question.", PermissionMode.READ_ONLY),
     ToolSpec("web_search", "Search the web (DuckDuckGo by default; Tavily when TAVILY_API_KEY is set).", PermissionMode.READ_ONLY),
     ToolSpec("web_extract", "Fetch a URL and return readable text.", PermissionMode.READ_ONLY),
+    ToolSpec("web_crawl", "Same-domain BFS crawl from a seed URL (no JS, no LLM summarization).", PermissionMode.READ_ONLY),
     ToolSpec("memory", "Read or curate persistent memory (MEMORY.md / USER.md).", PermissionMode.WORKSPACE_WRITE),
     ToolSpec("sleep", "Wait for a requested duration.", PermissionMode.READ_ONLY),
     ToolSpec("todo_write", "Update the structured task list for the current session.", PermissionMode.WORKSPACE_WRITE),
     ToolSpec("config", "Get or set local agent settings.", PermissionMode.WORKSPACE_WRITE),
     ToolSpec("tool_manifest", "Return the registered tool manifest.", PermissionMode.READ_ONLY),
+    # Ported from hermes-agent
+    ToolSpec("osv_check", "Query OSV for malware/CVE advisories on a package.", PermissionMode.READ_ONLY),
+    ToolSpec("home_assistant", "Control / inspect Home Assistant via REST API (HASS_TOKEN required).", PermissionMode.DANGER_FULL_ACCESS),
+    ToolSpec("x_search", "Search X (Twitter) via xAI's hosted x_search tool (XAI_API_KEY required).", PermissionMode.READ_ONLY),
+    ToolSpec("vision_analyze", "Send an image (URL or path) and a prompt to a vision-capable chat model.", PermissionMode.READ_ONLY),
+    ToolSpec("mixture_of_agents", "Run a Mixture-of-Agents collaboration across multiple LLMs.", PermissionMode.READ_ONLY),
 )
 
 

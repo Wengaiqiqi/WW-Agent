@@ -158,6 +158,49 @@ async def _wrap_run_command(args: dict) -> Any:
     )
 
 
+async def _wrap_web_search(args: dict) -> Any:
+    from tool.tool_web import web_search
+
+    return json.dumps(
+        web_search(
+            query=args["query"],
+            limit=int(args.get("limit", 5)),
+            provider=args.get("provider", "auto"),
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _wrap_web_extract(args: dict) -> Any:
+    from tool.tool_web import web_extract
+
+    return json.dumps(
+        web_extract(
+            url=args["url"],
+            max_chars=int(args.get("max_chars", 8000)),
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _wrap_web_crawl(args: dict) -> Any:
+    from tool.tool_web import web_crawl
+
+    return json.dumps(
+        web_crawl(
+            url=args["url"],
+            max_pages=int(args.get("max_pages", 5)),
+            max_chars_per_page=int(args.get("max_chars_per_page", 4000)),
+            same_host_only=bool(args.get("same_host_only", True)),
+            include_links=bool(args.get("include_links", False)),
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool map
 # ---------------------------------------------------------------------------
@@ -278,6 +321,52 @@ _TOOL_MAP: dict[str, tuple] = {
             },
         },
         "Execute a shell command; returns JSON with stdout/stderr/exitCode.",
+    ),
+    "web_search": (
+        _wrap_web_search,
+        {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "description": "What to search for."},
+                "limit": {"type": "integer", "description": "Max results (1-10, default 5)."},
+                "provider": {
+                    "type": "string",
+                    "enum": ["auto", "duckduckgo", "tavily"],
+                    "description": "auto picks Tavily if TAVILY_API_KEY is set, else DuckDuckGo.",
+                },
+            },
+        },
+        "Search the web; returns JSON {provider, query, results:[{title,url,snippet}]}.",
+    ),
+    "web_extract": (
+        _wrap_web_extract,
+        {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string", "description": "HTTP(S) URL to fetch."},
+                "max_chars": {"type": "integer", "description": "Truncate text to this many chars (default 8000)."},
+            },
+        },
+        "Fetch a URL and return readable text; no JS rendering. Use this for "
+        "any 'what does this page say' / 'summarize this URL' request.",
+    ),
+    "web_crawl": (
+        _wrap_web_crawl,
+        {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string", "description": "Seed URL to BFS-crawl."},
+                "max_pages": {"type": "integer", "description": "Page cap (default 5, hard cap 25)."},
+                "max_chars_per_page": {"type": "integer", "description": "Per-page text cap (default 4000)."},
+                "same_host_only": {"type": "boolean", "description": "Restrict to seed host (default true)."},
+                "include_links": {"type": "boolean", "description": "Include extracted hrefs per page."},
+            },
+        },
+        "BFS-crawl a small set of pages from a seed URL. Use when one page "
+        "isn't enough; prefer web_extract when one page is.",
     ),
 }
 
