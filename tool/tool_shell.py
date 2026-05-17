@@ -181,5 +181,11 @@ def run_shell_command(command: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -
         # that breaks commands like `"C:\Path With Spaces\python.exe" script.py`
         # because cmd.exe then tries to invoke the literal `\"C:\\…\\"` token.
         return run_subprocess(command, timeout=timeout, shell=True)
-    shell_command = ["/bin/sh", "-lc", command]
+    # ``-c`` (not ``-lc``): a login shell would re-source ``~/.profile`` /
+    # ``~/.bash_profile`` inside the child, which can re-export the very env
+    # vars ``_filter_secrets_from_env`` just stripped (a user who keeps
+    # ``export OPENAI_API_KEY=...`` in their login profile would silently
+    # leak it through the secret filter otherwise). PATH and locale survive
+    # via the explicit whitelist passthrough in ``_OS_PASSTHROUGH``.
+    shell_command = ["/bin/sh", "-c", command]
     return run_subprocess(shell_command, timeout=timeout, shell=False)

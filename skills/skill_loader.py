@@ -83,6 +83,50 @@ def _load_meta_keywords(skill_dir: Path) -> tuple[str, ...]:
     return ()
 
 
+# Env vars a skill is NEVER allowed to opt into, even if it declares them
+# in ``_meta.json::requiresEnv``. The skill-opt-in path bypasses the secret
+# keyword filter, so without this deny-list a compromised or malicious skill
+# could exfiltrate the orchestrator's HMAC signing key (forge JWT grants for
+# any tool on tool-agent) or the user's provider credentials.
+#
+# Entries are matched case-insensitively against the bare name. Project-internal
+# control variables are explicit; provider API keys use a prefix/suffix
+# match below so we don't have to enumerate every vendor.
+_REQUIRES_ENV_DENYLIST: frozenset[str] = frozenset({
+    "AUTHZ_HMAC_KEY",
+    "AGENT_ID",
+    # LANGCHAIN_AGENT_* are reserved for orchestrator → subprocess control
+    # plane; skills should never need to read them.
+    "LANGCHAIN_AGENT_MODEL",
+    "LANGCHAIN_AGENT_PERMISSION_MODE",
+    "LANGCHAIN_AGENT_CONFIG_DIR",
+    "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+})
+
+
+def _is_requires_env_safe(name: str) -> bool:
+    """Reject skill requiresEnv entries that name internal-control or provider
+    credential vars. A skill that legitimately needs a provider key should
+    receive it via its own scoped env var (e.g. ``BAIDU_EC_SEARCH_TOKEN``),
+    not by reaching for the orchestrator's ``OPENAI_API_KEY``.
+    """
+    upper = name.upper()
+    if upper in _REQUIRES_ENV_DENYLIST:
+        return False
+    if upper.startswith("LANGCHAIN_AGENT_"):
+        return False
+    # Catch the obvious credential-looking generic names. Skills already get
+    # to bypass the broad keyword filter — the point of requiresEnv is to
+    # name a *specific* variable, not "give me everything that looks like a
+    # token". A skill that wants ``OPENAI_API_KEY`` is almost certainly
+    # attempting a privilege grab.
+    if upper in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN",
+                 "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                 "GOOGLE_API_KEY", "GEMINI_API_KEY"}:
+        return False
+    return True
+
+
 def _load_meta_requires_env(skill_dir: Path) -> tuple[str, ...]:
     """Load requiresEnv from the skill's _meta.json file.
 
@@ -91,11 +135,29 @@ def _load_meta_requires_env(skill_dir: Path) -> tuple[str, ...]:
     consults the union of these across all loaded skills and passes only
     *those* variables through to agent subprocesses — keeping the strict
     env whitelist intact for everything else.
+
+    Names that hit ``_REQUIRES_ENV_DENYLIST`` are silently dropped and
+    logged so a misconfigured (or hostile) skill can't escalate privileges
+    by naming the orchestrator's HMAC key, the user's provider API key,
+    or another control-plane variable.
     """
     keys = _load_meta(skill_dir).get("requiresEnv", [])
-    if isinstance(keys, list):
-        return tuple(str(k) for k in keys if k)
-    return ()
+    if not isinstance(keys, list):
+        return ()
+    accepted: list[str] = []
+    for k in keys:
+        if not k:
+            continue
+        name = str(k)
+        if _is_requires_env_safe(name):
+            accepted.append(name)
+        else:
+            logger.warning(
+                "Skill %s declared %s in requiresEnv; rejected (reserved or "
+                "credential-looking name).",
+                skill_dir.name, name,
+            )
+    return tuple(accepted)
 
 
 def load_skills(skills_dir: Path = SKILLS_DIR) -> list[Skill]:

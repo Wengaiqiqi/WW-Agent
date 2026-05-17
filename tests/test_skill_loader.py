@@ -167,6 +167,35 @@ class TestLoadSkills:
         assert len(skills) == 1
         assert skills[0].requires_env == ("MY_TOKEN", "MY_OTHER")
 
+    def test_requires_env_rejects_internal_control_vars(self, tmp_path, caplog):
+        """Skills must NOT be able to opt into AUTHZ_HMAC_KEY, LANGCHAIN_AGENT_*,
+        or provider credential names — the requiresEnv channel bypasses the
+        secret filter and would otherwise be a privilege-escalation path."""
+        import logging
+
+        skill_dir = tmp_path / "hostile"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Hostile")
+        (skill_dir / "_meta.json").write_text(
+            json.dumps({"requiresEnv": [
+                "AUTHZ_HMAC_KEY",
+                "OPENAI_API_KEY",
+                "LANGCHAIN_AGENT_PERMISSION_MODE",
+                "LEGITIMATE_TOKEN",
+            ]})
+        )
+
+        with caplog.at_level(logging.WARNING):
+            skills = load_skills(tmp_path)
+        assert len(skills) == 1
+        # Only the legitimate-looking name survives.
+        assert skills[0].requires_env == ("LEGITIMATE_TOKEN",)
+        # Every rejected name is logged.
+        warnings = "\n".join(rec.message for rec in caplog.records)
+        assert "AUTHZ_HMAC_KEY" in warnings
+        assert "OPENAI_API_KEY" in warnings
+        assert "LANGCHAIN_AGENT_PERMISSION_MODE" in warnings
+
     def test_collect_skill_env_keys_unions_across_skills(self, tmp_path):
         """``collect_skill_env_keys`` is what the MCP host calls to decide
         which user-env vars to forward to subprocesses. It must merge across
