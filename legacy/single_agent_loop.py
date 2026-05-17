@@ -1,5 +1,5 @@
 """
-LangChain Agent CLI.
+W&W Agent CLI.
 
 Inspired by the Claw Code CLI shape in the adjacent reference project:
 - interactive REPL
@@ -53,6 +53,12 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from prompt_rules import (
+    CONCISE_RULE,
+    LANGUAGE_RULE,
+    NO_RAW_TOOL_MARKUP_RULE,
+)
+
 console = Console()
 
 
@@ -83,31 +89,33 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are LangChain Agent CLI, a practical coding and research assistant running
-inside a terminal CLI. Your backend model is "{model}" via the "{protocol}"
+You are W&W Agent CLI, a practical coding and research assistant running
+inside a terminal. Your backend model is "{{model}}" via the "{{protocol}}"
 protocol.
 
-Tool-use rules:
-- Use tools only when they are necessary for accuracy or for performing an
-  action the user requested.
-- Do not call current_datetime for greetings, identity questions, or ordinary
-  chat. Only call current_datetime when the user explicitly asks for the current
-  date, time, timestamp, today, now, or a time-sensitive fact.
-- Do not call tools just to make the answer feel more complete.
-- Never print raw tool call markup such as <tool_call>, <function=...>, or
-  <parameter=...>. Tool use must happen through the provided tool-calling API,
-  not by writing tool calls as text.
-- Do not use run_python only to reformat, sort, or summarize data that is already
-  available in the conversation. Do that reasoning directly in the final answer.
-- After using tools, the final answer must include the concrete findings that
-  came from those tools. Never say you already provided details unless those
-  details are visible in the final answer.
-- If a tool returns an error, empty result, missing token, nonzero exit code, or
-  insufficient permission, say what failed and what the user needs to do next.
+## Tool-use rules
+- Use tools only when necessary for accuracy or to perform an action the
+  user requested. Don't call a tool to make an answer feel more complete.
+- Don't call current_datetime for greetings, identity questions, or
+  ordinary chat — only when the user explicitly asks for the current date,
+  time, timestamp, today, now, or a time-sensitive fact.
+- Don't use run_python to reformat / sort / summarize data already in the
+  conversation. Do that reasoning directly in the final answer.
+- After using tools, the final answer must include the concrete findings
+  from those tools. Don't claim you already provided details unless they
+  are visible in the final answer.
+- On tool error / empty result / missing token / nonzero exit / permission
+  refusal: name what failed and what the user needs to do next.
+- {no_raw_markup}
 
-Explain in plain Chinese unless the user asks for another language. Keep answers
-concise, but include enough detail that the user can act on them.
-"""
+## Output style
+- {concise}
+- {language}
+""".format(
+    no_raw_markup=NO_RAW_TOOL_MARKUP_RULE,
+    concise=CONCISE_RULE,
+    language=LANGUAGE_RULE,
+)
 
 # Minimum number of buffered characters before the first stream flush.
 STREAM_BUFFER_FLUSH_THRESHOLD = 24
@@ -389,6 +397,11 @@ class CliApp:
         self._apply_config(self.active_cfg)
         self._register_clarify_callback()
         self._memory_snapshot = self._load_memory_snapshot()
+        # Stable system block (base + memory + instructions + skill catalog).
+        # Computed lazily and cached so prompt caches downstream don't get
+        # invalidated by per-turn changes — only the active-skills block
+        # below changes between turns.
+        self._cached_base_system_prompt: str | None = None
         self.agent = None
 
     @staticmethod
@@ -500,7 +513,15 @@ class CliApp:
                 if isinstance(message, HumanMessage):
                     latest_user_text = str(message.content)
                     break
-            return [SystemMessage(content=self.system_prompt(latest_user_text)), *messages]
+            # Split the system block in two so the stable prefix (base +
+            # memory + instructions + skill catalog) can be prompt-cached
+            # while only the per-turn active-skills block changes.
+            base_block = self.base_system_prompt()
+            active_skills = self.active_skills_prompt(latest_user_text)
+            system_msgs = [SystemMessage(content=base_block)]
+            if active_skills:
+                system_msgs.append(SystemMessage(content=active_skills))
+            return system_msgs + messages
 
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -514,30 +535,61 @@ class CliApp:
                 checkpointer=self.checkpointer,
             )
 
-    def system_prompt(self, user_text: str = "") -> str:
-        from skills.skill_loader import (
-            render_skill_catalog_for_prompt,
-            render_skills_for_prompt,
-            select_skills_for_text,
-        )
+    def base_system_prompt(self) -> str:
+        """Stable per-session system block (base rules + memory + instructions + skill catalog).
+
+        Excludes per-turn active skills so the same string is produced every
+        turn. That string is eligible for the model's prompt cache; changing
+        the content per turn would invalidate the cache on every request.
+        """
+        if self._cached_base_system_prompt is not None:
+            return self._cached_base_system_prompt
+
+        from skills.skill_loader import render_skill_catalog_for_prompt
 
         base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             model=self.state.model,
             protocol=self.state.protocol,
         )
         catalog_prompt = render_skill_catalog_for_prompt(self.skills)
-        matched_skills = select_skills_for_text(self.skills, user_text)
-        active_skills_prompt = render_skills_for_prompt(matched_skills)
         instructions_prompt = self.render_project_instructions()
         memory_prompt = self._memory_snapshot
-        prompt_sections = "\n\n".join(
+        sections = "\n\n".join(
             part
-            for part in (memory_prompt, instructions_prompt, catalog_prompt, active_skills_prompt)
+            for part in (memory_prompt, instructions_prompt, catalog_prompt)
             if part
         )
-        if not prompt_sections:
-            return base_prompt
-        return f"{base_prompt}\n\n{prompt_sections}"
+        self._cached_base_system_prompt = (
+            base_prompt if not sections else f"{base_prompt}\n\n{sections}"
+        )
+        return self._cached_base_system_prompt
+
+    def active_skills_prompt(self, user_text: str) -> str:
+        """Per-turn block: skills matched by the latest user message.
+
+        Empty when no skills match. Kept separate from
+        :meth:`base_system_prompt` so prompt caching stays valid on stable
+        turns.
+        """
+        from skills.skill_loader import (
+            render_skills_for_prompt,
+            select_skills_for_text,
+        )
+
+        matched = select_skills_for_text(self.skills, user_text)
+        return render_skills_for_prompt(matched)
+
+    def system_prompt(self, user_text: str = "") -> str:
+        """Backwards-compat shim: full system block as one string.
+
+        New call sites should prefer :meth:`base_system_prompt` +
+        :meth:`active_skills_prompt` so the stable prefix can be cached.
+        """
+        base = self.base_system_prompt()
+        active = self.active_skills_prompt(user_text)
+        if not active:
+            return base
+        return f"{base}\n\n{active}"
 
     def render_project_instructions(self) -> str:
         from project_context import render_instruction_files
@@ -1111,17 +1163,18 @@ class CliApp:
             SystemMessage(
                 content=(
                     "You are repairing a final answer for a CLI agent. Do not call tools. "
-                    "Do not output raw <tool_call>, <function=...>, or <parameter=...> markup. "
-                    "Summarize the already available tool results for the user in Chinese. "
-                    "If the tool result contains an error, explain the error and the next step."
+                    f"{NO_RAW_TOOL_MARKUP_RULE} "
+                    "Summarize the already-available tool results into a direct answer. "
+                    "If a tool result contains an error, lead with the error and the next step. "
+                    f"{LANGUAGE_RULE}"
                 )
             ),
             HumanMessage(
                 content=(
-                    f"用户问题：{question}\n\n"
-                    "以下是已经执行完成的工具结果：\n\n"
+                    f"User question: {question}\n\n"
+                    "Tool results already gathered:\n\n"
                     + "\n\n".join(tool_summaries)
-                    + "\n\n请只输出最终给用户看的回答。"
+                    + "\n\nReturn ONLY the final answer for the user."
                 )
             ),
         ]
@@ -1133,7 +1186,7 @@ class CliApp:
         return self.strip_raw_tool_markup(content).strip() or None
 
     def render_welcome(self) -> None:
-        title = Text("LangChain Agent CLI", style="bold cyan")
+        title = Text("W&W Agent CLI", style="bold cyan")
         subtitle = (
             f"Provider: {self.state.provider} | "
             f"Model: {self.state.model} | Protocol: {self.state.protocol} | "
@@ -1709,7 +1762,7 @@ def create_prompt_session():
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LangChain Agent CLI")
+    parser = argparse.ArgumentParser(description="W&W Agent CLI")
     parser.add_argument(
         "--output-format",
         choices=("text",),
