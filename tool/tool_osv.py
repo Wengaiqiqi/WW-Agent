@@ -62,8 +62,13 @@ def osv_lookup(
         method="POST",
     )
 
+    from tool.tool_web import OPENER
+
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        # Route through OPENER so a (hypothetical) 30x off api.osv.dev to a
+        # private host can't be followed silently. The initial public host
+        # doesn't need ``hostname_is_safe`` — api.osv.dev is hard-coded.
+        with OPENER.open(req, timeout=_TIMEOUT) as resp:
             body = json.loads(resp.read())
     except Exception as exc:
         return {

@@ -127,7 +127,15 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 # Cached opener with the safe-redirect handler installed. ``build_opener``
 # is cheap but not free, and ``_http_get`` is called from web_search /
 # web_extract / web_crawl — building once at import keeps the hot path lean.
-_OPENER = urllib.request.build_opener(SafeRedirectHandler())
+#
+# Public (no underscore): peer tool modules (``tool_homeassistant``,
+# ``tool_osv``, ``tool_x_search``, ``tool_vision``) reuse it so every
+# HTTP fetcher in the project benefits from the same redirect validation.
+# The opener itself doesn't validate the *initial* host — callers do that
+# (or, in HA's case, accept the user-configured HASS_URL). The opener only
+# guards the 30x redirect path, which is enough to keep tokens from leaking
+# to a private IP when a public endpoint redirects elsewhere.
+OPENER = urllib.request.build_opener(SafeRedirectHandler())
 
 
 def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIMEOUT) -> tuple[bytes, str]:
@@ -146,7 +154,7 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIM
             **(headers or {}),
         },
     )
-    with _OPENER.open(req, timeout=timeout) as resp:  # noqa: S310 - trusted user input via tool
+    with OPENER.open(req, timeout=timeout) as resp:  # noqa: S310 - trusted user input via tool
         data = resp.read(_MAX_BYTES + 1)
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if encoding == "gzip":

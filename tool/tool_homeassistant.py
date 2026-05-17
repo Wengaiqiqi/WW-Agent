@@ -49,6 +49,17 @@ def _config() -> tuple[str, str]:
 
 
 def _request(method: str, path: str, body: Optional[dict] = None, timeout: float = 15.0) -> Any:
+    """Issue an authenticated HTTP request to the user's Home Assistant.
+
+    HASS_URL is user-configured (often a private-network address like
+    ``http://homeassistant.local:8123``), so we deliberately do *not* run
+    ``hostname_is_safe`` on the initial request — that would refuse the
+    entire HA tool by design. Redirects ARE validated via ``OPENER``: if a
+    compromised or misconfigured HA endpoint replies with a 30x to an
+    *unrelated* private IP, the bearer token won't leak there.
+    """
+    from tool.tool_web import OPENER
+
     url, token = _config()
     if not token:
         raise RuntimeError("HASS_TOKEN is not set")
@@ -60,7 +71,7 @@ def _request(method: str, path: str, body: Optional[dict] = None, timeout: float
     }
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with OPENER.open(req, timeout=timeout) as resp:
         raw = resp.read()
     if not raw:
         return None

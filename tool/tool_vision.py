@@ -76,7 +76,7 @@ def _load_image_as_data_url(source: str) -> str:
             raise ValueError(f"Invalid image URL: {source!r}")
         # Import lazily so a missing ``tool_web`` (extracted) wouldn't break
         # ``vision_analyze`` for local file inputs.
-        from tool.tool_web import hostname_is_safe, _OPENER
+        from tool.tool_web import hostname_is_safe, OPENER
 
         parsed = urlparse(source)
         allowed, reason = hostname_is_safe(parsed.hostname or "")
@@ -93,7 +93,7 @@ def _load_image_as_data_url(source: str) -> str:
                 "Accept": "image/*,*/*;q=0.8",
             },
         )
-        with _OPENER.open(req, timeout=_download_timeout()) as resp:
+        with OPENER.open(req, timeout=_download_timeout()) as resp:
             data = resp.read(_MAX_DOWNLOAD_BYTES + 1)
         if len(data) > _MAX_DOWNLOAD_BYTES:
             raise ValueError(f"Image too large (> {_MAX_DOWNLOAD_BYTES} bytes)")

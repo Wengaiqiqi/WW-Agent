@@ -101,7 +101,7 @@ pytest                       # full: includes subprocess e2e tests
   `agents/tool_agent/tool_executor.py` import the constant.
 - **SSRF guard** for any new `urllib.request` / `httpx` fetcher: import
   `tool.tool_web.hostname_is_safe` and check before opening the socket;
-  use `tool.tool_web._OPENER` if redirects are followed. Set
+  use `tool.tool_web.OPENER` if redirects are followed. Set
   `LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1` to opt out during local dev.
 - **Prefer small, focused changes.** Run the relevant test file after
   each edit; full `pytest` before pushing.

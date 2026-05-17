@@ -101,9 +101,18 @@ def _extract_inline_citations(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _post_json(url: str, headers: dict[str, str], body: dict[str, Any], timeout: int) -> dict[str, Any]:
+    """POST JSON and return the parsed JSON response.
+
+    Routed through ``tool_web.OPENER`` so any 30x off the xAI base URL is
+    validated by ``SafeRedirectHandler`` — keeps the API key from leaking
+    to a private IP if api.x.ai (or a user-overridden ``XAI_BASE_URL``)
+    ever redirects there.
+    """
+    from tool.tool_web import OPENER
+
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with OPENER.open(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
