@@ -107,4 +107,13 @@ jobs:
             prompt_rules.py \
             agent_paths.py \
             agents/shared/permission_modes.py \
-            orchestrator/repl_types.py
+            agents/shared/authz.py \
+            agents/tool_agent/clarify_bridge.py \
+            orchestrator/repl_types.py \
+            orchestrator/router.py \
+            orchestrator/stream_mux.py \
+            orchestrator/registry.py \
+            orchestrator/repl_state.py \
+            orchestrator/permission_gate.py \
+            skills/skill_loader.py \
+            tool/tool_registry.py

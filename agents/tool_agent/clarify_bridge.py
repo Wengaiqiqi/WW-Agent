@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Per-task event queue. ``None`` outside an SSE streaming dispatch — the
 # wrapper degrades gracefully in that case instead of hanging.
-_event_queue: contextvars.ContextVar[Optional[asyncio.Queue]] = contextvars.ContextVar(
+_event_queue: contextvars.ContextVar[Optional[asyncio.Queue[dict[str, Any]]]] = contextvars.ContextVar(
     "tool_agent_clarify_queue", default=None,
 )
 
@@ -53,7 +53,7 @@ _pending: dict[str, asyncio.Future[str]] = {}
 _RESPONSE_TIMEOUT = 600.0  # 10 minutes
 
 
-def set_event_queue(queue: asyncio.Queue) -> None:
+def set_event_queue(queue: "asyncio.Queue[dict[str, Any]]") -> None:
     """Called by the SSE handler before driving the ReAct loop."""
     _event_queue.set(queue)
 

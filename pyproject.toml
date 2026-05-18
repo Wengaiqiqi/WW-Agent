@@ -215,7 +215,16 @@ module = [
     "prompt_rules",
     "agent_paths",
     "agents.shared.permission_modes",
+    "agents.shared.authz",
+    "agents.tool_agent.clarify_bridge",
     "orchestrator.repl_types",
+    "orchestrator.router",
+    "orchestrator.stream_mux",
+    "orchestrator.registry",
+    "orchestrator.repl_state",
+    "orchestrator.permission_gate",
+    "skills.skill_loader",
+    "tool.tool_registry",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

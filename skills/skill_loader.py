@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 SKILLS_DIR = Path("skills")
@@ -63,16 +64,17 @@ class Skill:
         return False
 
 
-def _load_meta(skill_dir: Path) -> dict:
+def _load_meta(skill_dir: Path) -> dict[str, Any]:
     """Read _meta.json with logging on failure; returns empty dict on miss."""
     meta_path = skill_dir / "_meta.json"
     if not meta_path.is_file():
         return {}
     try:
-        return json.loads(meta_path.read_text(encoding="utf-8"))
+        parsed = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to parse %s: %s", meta_path, exc)
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _load_meta_keywords(skill_dir: Path) -> tuple[str, ...]:

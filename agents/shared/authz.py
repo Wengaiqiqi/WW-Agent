@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from typing import Any
+
 import jwt as pyjwt
 
 
@@ -6,7 +9,7 @@ class AuthzError(Exception):
     pass
 
 
-def verify_grant(token: str, *, key: str, requested_tool: str) -> dict:
+def verify_grant(token: str, *, key: str, requested_tool: str) -> dict[str, Any]:
     """Verify the authz_grant JWT. Returns the decoded claims on success.
 
     Raises AuthzError on signature failure, expiry, or tool not in allowed_tools.

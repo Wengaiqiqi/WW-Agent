@@ -13,11 +13,11 @@ class Card:
     id: str
     display_name: str
     version: str
-    entrypoint: dict
-    mcp: dict
-    a2a: dict
+    entrypoint: dict[str, Any]
+    mcp: dict[str, Any]
+    a2a: dict[str, Any]
     capabilities_hint: list[str]
-    model_override: dict | None
+    model_override: dict[str, Any] | None
 
 
 def load_cards(cards_dir: Path) -> list[Card]:

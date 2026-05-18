@@ -42,7 +42,7 @@ class MultiAgentSessionState:
     def from_runtime(
         cls,
         *,
-        active_cfg,
+        active_cfg: Any,
         skills: list[Any],
         instruction_files: list[Any],
         memory_snapshot: str,
@@ -72,7 +72,7 @@ class MultiAgentSessionState:
         os.environ["LANGCHAIN_AGENT_PERMISSION_MODE"] = mode
         return True
 
-    def apply_config(self, cfg) -> None:
+    def apply_config(self, cfg: Any) -> None:
         self.provider = cfg.provider
         self.model = cfg.model
         self.protocol = cfg.protocol
