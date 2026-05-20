@@ -4,13 +4,15 @@ Reuses tool/*.py functions where their signatures are trivially wrappable.
 This module only adapts signatures and produces JSON schemas for MCP
 ``tools/list``.
 
-The workspace-path restriction enforced by ``tool/tool_file_ops.py`` is
-intentionally bypassed here: the tool-agent runs as a separate MCP process
-whose access control is governed by the MCP protocol layer, not the CLI's
-workspace sandbox.
+File-path handling uses ``tool/tool_file_ops.resolve_workspace_path`` so a
+prompt-injected ``write_file path="/etc/passwd"`` is refused at the wrapper
+boundary, matching the README's "workspace-boundary checks" promise. The
+sandbox can be widened in tests / on dev hosts by setting
+``LANGCHAIN_AGENT_WORKSPACE_ROOT``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -31,15 +33,17 @@ def _hmac_key() -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _wrap_read_file(args: dict) -> Any:
-    path = Path(args["path"])
+def _do_read_file(path_arg: str) -> str:
+    from tool.tool_file_ops import resolve_workspace_path
+
+    path = resolve_workspace_path(path_arg)
     content = path.read_text(encoding="utf-8")
     lines = content.splitlines()
     return json.dumps(
         {
             "type": "text",
             "file": {
-                "filePath": str(path.resolve()),
+                "filePath": str(path),
                 "content": content,
                 "numLines": len(lines),
                 "startLine": 1,
@@ -51,16 +55,25 @@ async def _wrap_read_file(args: dict) -> Any:
     )
 
 
-async def _wrap_write_file(args: dict) -> Any:
-    path = Path(args["path"])
-    content = args["content"]
+async def _wrap_read_file(args: dict) -> Any:
+    # File reads are usually fast, but a 50 MB file or a network FS can stall
+    # the asyncio event loop for tens of ms — which blocks orchestrator SSE
+    # heartbeats and the agent's own ``clarify_request`` queueing. Offload to
+    # the default thread pool to keep the loop responsive.
+    return await asyncio.to_thread(_do_read_file, args["path"])
+
+
+def _do_write_file(path_arg: str, content: str) -> str:
+    from tool.tool_file_ops import resolve_workspace_path
+
+    path = resolve_workspace_path(path_arg, allow_missing=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     original = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(content, encoding="utf-8")
     return json.dumps(
         {
             "type": "update" if original is not None else "create",
-            "filePath": str(path.resolve()),
+            "filePath": str(path),
             "content": content,
         },
         ensure_ascii=False,
@@ -68,33 +81,29 @@ async def _wrap_write_file(args: dict) -> Any:
     )
 
 
-async def _wrap_list_directory(args: dict) -> Any:
-    from tool.tool_file_ops import list_directory_structured, workspace_root
-    import os
+async def _wrap_write_file(args: dict) -> Any:
+    return await asyncio.to_thread(_do_write_file, args["path"], args["content"])
 
-    path = args.get("path", ".")
-    # If the path is absolute and outside the workspace, serve it directly.
-    p = Path(path)
-    if p.is_absolute():
-        dirs = []
-        files = []
-        for entry in sorted(p.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
-            if entry.is_dir():
-                dirs.append({"name": entry.name, "path": str(entry), "type": "directory"})
-            else:
-                files.append({"name": entry.name, "path": str(entry), "type": "file", "size": entry.stat().st_size})
-        return json.dumps(
-            {"directory": str(p), "count": len(dirs) + len(files), "directories": dirs, "files": files},
-            ensure_ascii=False,
-            indent=2,
-        )
-    return list_directory_structured(path)
+
+async def _wrap_list_directory(args: dict) -> Any:
+    from tool.tool_file_ops import list_directory_structured
+
+    # ``list_directory_structured`` runs the same workspace-boundary check
+    # under the hood. The previous "absolute path → serve directly" escape
+    # let a prompt-injected ``list_directory path="C:\\Users"`` enumerate the
+    # user's home directory; closing that loophole brings this wrapper in
+    # line with the read/write/edit wrappers and the README's promise.
+    return await asyncio.to_thread(list_directory_structured, args.get("path", "."))
 
 
 async def _wrap_grep_search(args: dict) -> Any:
     from tool.tool_file_ops import grep_search_files
 
-    return grep_search_files(
+    # Recursive grep walks the workspace tree synchronously and can take
+    # multiple seconds on a large repo — off-load so the event loop keeps
+    # pumping SSE events while ripgrep runs.
+    return await asyncio.to_thread(
+        grep_search_files,
         pattern=args["pattern"],
         path=args.get("path", "."),
         glob_pattern=args.get("glob_pattern"),
@@ -111,7 +120,8 @@ async def _wrap_grep_search(args: dict) -> Any:
 async def _wrap_glob_search(args: dict) -> Any:
     from tool.tool_file_ops import glob_search_files
 
-    return glob_search_files(
+    return await asyncio.to_thread(
+        glob_search_files,
         pattern=args["pattern"],
         path=args.get("path", "."),
     )
@@ -140,90 +150,161 @@ def _rotate_runpython_log(log_path) -> None:
         pass
 
 
-async def _wrap_run_python(args: dict) -> Any:
+def _do_run_python(code: str, timeout: int) -> str:
     import time as _time
     from pathlib import Path as _Path
-    from tool.tool_shell import DEFAULT_SUBPROCESS_TIMEOUT, run_python_code
+    from tool.tool_shell import run_python_code
 
-    code = args["code"]
-    timeout = int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT))
     log_path = _Path(".agent/runtime/tool-agent-runpython.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     _rotate_runpython_log(log_path)
-
-    # Log ENTRY immediately so we can tell "never called" from "called but hung".
     with log_path.open("a", encoding="utf-8") as fh:
         fh.write(
             f"\n=== ENTER {_time.strftime('%Y-%m-%d %H:%M:%S')} timeout={timeout}s ===\n"
             f"--- code ---\n{code}\n"
         )
     t0 = _time.monotonic()
-    # Default 180s to match run_command — reading .docx/.pdf/.xlsx via
-    # python-docx / pypdf / openpyxl easily exceeds 30s on cold start
-    # because lxml and friends are loaded at import time.
     result = run_python_code(code=code, timeout=timeout)
     elapsed = _time.monotonic() - t0
     with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(
-            f"--- EXIT elapsed={elapsed:.1f}s ---\n{result}\n"
-        )
+        fh.write(f"--- EXIT elapsed={elapsed:.1f}s ---\n{result}\n")
     return result
+
+
+async def _wrap_run_python(args: dict) -> Any:
+    from tool.tool_shell import DEFAULT_SUBPROCESS_TIMEOUT
+
+    code = args["code"]
+    timeout = int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT))
+    # ``run_python_code`` uses ``subprocess.communicate`` (blocking) and the
+    # default timeout is 180s. Running it directly from this async function
+    # froze the asyncio loop for the full duration — orchestrator's SSE
+    # heartbeat stalled, ``clarify_request`` events queued behind the call,
+    # and the user saw the spinner go silent. ``asyncio.to_thread`` keeps
+    # the loop pumping. Default 180s matches ``run_command`` so reading
+    # binary formats (.docx via python-docx, .pdf via pypdf) survives lxml's
+    # cold-start cost.
+    return await asyncio.to_thread(_do_run_python, code, timeout)
 
 
 async def _wrap_run_command(args: dict) -> Any:
     from tool.tool_shell import DEFAULT_SUBPROCESS_TIMEOUT, run_shell_command
 
-    # Default ``DEFAULT_SUBPROCESS_TIMEOUT`` (180s) so `pip install <pkg>`
+    # Default ``DEFAULT_SUBPROCESS_TIMEOUT`` (180s) so ``pip install <pkg>``
     # actually completes on slow networks. The constant is defined in
     # ``tool/tool_shell`` so the @tool surface (``tool/tools.py``) and this
-    # wrapper agree by construction instead of by drift-prone duplication.
-    return run_shell_command(
-        command=args["command"],
-        timeout=int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT)),
+    # wrapper agree by construction. ``to_thread`` per the rationale on
+    # ``_wrap_run_python``.
+    return await asyncio.to_thread(
+        run_shell_command,
+        args["command"],
+        int(args.get("timeout", DEFAULT_SUBPROCESS_TIMEOUT)),
+    )
+
+
+def _do_web_search(query: str, limit: int, provider: str) -> str:
+    from tool.tool_web import web_search
+    return json.dumps(
+        web_search(query=query, limit=limit, provider=provider),
+        ensure_ascii=False, indent=2,
     )
 
 
 async def _wrap_web_search(args: dict) -> Any:
-    from tool.tool_web import web_search
+    # ``urllib`` HTTP fetch is fully synchronous and the default timeout is
+    # 30s — running it from this async function blocks every other coroutine
+    # in the tool-agent process. Offload.
+    return await asyncio.to_thread(
+        _do_web_search,
+        args["query"],
+        int(args.get("limit", 5)),
+        args.get("provider", "auto"),
+    )
 
+
+def _do_web_extract(url: str, max_chars: int) -> str:
+    from tool.tool_web import web_extract
     return json.dumps(
-        web_search(
-            query=args["query"],
-            limit=int(args.get("limit", 5)),
-            provider=args.get("provider", "auto"),
-        ),
-        ensure_ascii=False,
-        indent=2,
+        web_extract(url=url, max_chars=max_chars),
+        ensure_ascii=False, indent=2,
     )
 
 
 async def _wrap_web_extract(args: dict) -> Any:
-    from tool.tool_web import web_extract
+    return await asyncio.to_thread(
+        _do_web_extract,
+        args["url"],
+        int(args.get("max_chars", 8000)),
+    )
 
+
+def _do_web_crawl(url, max_pages, max_chars_per_page, same_host_only, include_links):
+    from tool.tool_web import web_crawl
     return json.dumps(
-        web_extract(
-            url=args["url"],
-            max_chars=int(args.get("max_chars", 8000)),
+        web_crawl(
+            url=url,
+            max_pages=max_pages,
+            max_chars_per_page=max_chars_per_page,
+            same_host_only=same_host_only,
+            include_links=include_links,
         ),
-        ensure_ascii=False,
-        indent=2,
+        ensure_ascii=False, indent=2,
     )
 
 
 async def _wrap_web_crawl(args: dict) -> Any:
-    from tool.tool_web import web_crawl
-
-    return json.dumps(
-        web_crawl(
-            url=args["url"],
-            max_pages=int(args.get("max_pages", 5)),
-            max_chars_per_page=int(args.get("max_chars_per_page", 4000)),
-            same_host_only=bool(args.get("same_host_only", True)),
-            include_links=bool(args.get("include_links", False)),
-        ),
-        ensure_ascii=False,
-        indent=2,
+    return await asyncio.to_thread(
+        _do_web_crawl,
+        args["url"],
+        int(args.get("max_pages", 5)),
+        int(args.get("max_chars_per_page", 4000)),
+        bool(args.get("same_host_only", True)),
+        bool(args.get("include_links", False)),
     )
+
+
+async def _wrap_memory(args: dict) -> Any:
+    """Persist a fact across turns / sessions.
+
+    Wraps :func:`tool.tool_memory.memory` with a deliberately *un*-quotable
+    return shape. The original tool returns a structured dict with success /
+    entries / usage fields -- LLMs see something that pretty and just paste
+    it as the final answer (so the user gets ``{success: true, entries:
+    [...]}`` instead of a natural-language reply).
+
+    By returning a terse instruction string here, there's nothing tempting
+    to copy and the model is forced to write a real conversational reply.
+    """
+    import json as _json
+
+    from tool import tool_memory
+
+    action = str(args.get("action") or "").strip()
+    target = str(args.get("target") or "memory").strip() or "memory"
+    content = str(args.get("content") or "")
+    old_text = str(args.get("old_text") or "")
+    result = tool_memory.memory(
+        action=action, target=target, content=content, old_text=old_text,
+    )
+    if not result.get("success"):
+        # Surface the actual error so the model can recover (e.g. "entry
+        # already exists" -> use replace instead).
+        return _json.dumps(result, ensure_ascii=False)
+
+    if action == "read":
+        # Reads ARE supposed to return content; the model needs to see it.
+        entries = result.get("entries") or []
+        if not entries:
+            return f"(no entries in {target})"
+        return "\n".join(f"- {e}" for e in entries)
+
+    # add / replace / remove: return the minimum the agent loop can possibly
+    # mistake for a final answer. Anything longer or more sentence-like and
+    # smaller models (DeepSeek's flash variants especially) just copy the
+    # tool message verbatim as their reply. A single token leaves them with
+    # no choice but to look back at the user's original message and write
+    # something real.
+    return "ok"
 
 
 async def _wrap_clarify(args: dict) -> Any:
@@ -419,6 +500,56 @@ _TOOL_MAP: dict[str, tuple] = {
         "BFS-crawl a small set of pages from a seed URL. Use when one page "
         "isn't enough; prefer web_extract when one page is.",
     ),
+    "memory": (
+        _wrap_memory,
+        {
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["add", "replace", "remove", "read"],
+                    "description": (
+                        "add: append a new entry. replace: overwrite an existing "
+                        "entry (use old_text to identify which). remove: delete an "
+                        "entry (use old_text or content as the substring match). "
+                        "read: return current entries."
+                    ),
+                },
+                "target": {
+                    "type": "string",
+                    "enum": ["memory", "user"],
+                    "description": (
+                        "memory = agent's own notes (conventions, project facts). "
+                        "user = the user's profile (name, preferences, etc.). "
+                        "Default: memory."
+                    ),
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "For add: the new entry text. For replace: the new entry "
+                        "text replacing the matched old entry. For remove: a "
+                        "substring identifying the entry to delete (alternative "
+                        "to old_text)."
+                    ),
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": (
+                        "Substring of an existing entry to identify it. Used by "
+                        "replace and remove."
+                    ),
+                },
+            },
+        },
+        "Persist a fact across turns/sessions. Use this when the user says "
+        "'remember that ...', states a name/preference, or asks you to forget "
+        "or correct something. Two stores: 'user' for facts about the user "
+        "(name, preferences); 'memory' for project/agent notes. Entries are "
+        "auto-injected into future system prompts so you don't have to query "
+        "them — call this only to write/update/delete.",
+    ),
     "clarify": (
         _wrap_clarify,
         {
@@ -465,7 +596,17 @@ _TOOL_MAP: dict[str, tuple] = {
 #
 # Adding a tool here only removes the *direct planner dispatch* path, not
 # the *internal* paths. Document the actual blast radius before adding.
-_INTERNAL_ONLY: frozenset[str] = frozenset({"run_python", "run_command", "clarify"})
+_INTERNAL_ONLY: frozenset[str] = frozenset(
+    {"run_python", "run_command", "clarify", "memory"}
+)
+# ``memory`` is intentionally NOT a planner-dispatchable capability: when the
+# orchestrator picks ``capability=memory`` directly, the dispatch goes through
+# the MCP path and the tool's terse ``"ok"`` return shows up to the user as
+# the final answer. The right flow is planner -> tool.task -> tool-agent's
+# ReAct loop -> memory tool, where the ReAct loop is responsible for following
+# up with a real natural-language reply. tool-agent's own ``make_langchain_tools``
+# (above) does NOT consult ``_INTERNAL_ONLY``, so the ReAct loop still gets
+# ``memory`` bound for autonomous use.
 
 
 # ---------------------------------------------------------------------------
@@ -492,16 +633,43 @@ def _make_tool_coroutine(handler, name: str):
     return _tool_coroutine
 
 
-def make_langchain_tools() -> list:
-    """Return the 5 tool handlers as LangChain-compatible StructuredTool objects.
+def tools_for_mode(mode: str) -> list[str]:
+    """Names of the tools tool-agent's ReAct loop may invoke under *mode*.
 
-    Used by ToolAgentLoop's create_react_agent so tool-agent can call tools
-    in-process (no MCP/A2A round-trip through itself).
+    Consulted by ``make_langchain_tools`` so a read-only delegation reaches
+    tool-agent with ``write_file`` / ``run_command`` simply not bound to the
+    model. Returns the full ``_TOOL_MAP`` key list when the mode whitelist is
+    ``["*"]`` (danger-full-access).
+    """
+    from agents.shared.permission_modes import _TOOL_AGENT_MODE_TOOLS
+
+    allowed = _TOOL_AGENT_MODE_TOOLS.get(mode, [])
+    if "*" in allowed:
+        return list(_TOOL_MAP.keys())
+    # Preserve _TOOL_MAP order so the prompt's tool listing stays stable.
+    return [n for n in _TOOL_MAP.keys() if n in set(allowed)]
+
+
+def make_langchain_tools(mode: str = "danger-full-access") -> list:
+    """Return LangChain-compatible StructuredTool objects for the ReAct loop.
+
+    *mode* gates which tools are bound. The previous unconditional binding
+    let an orchestrator-delegated ``tool.task`` reach ``run_command`` even
+    when the user had selected ``read-only`` — bypassing the permission gate
+    entirely (the gate only protected the legacy direct-MCP dispatch path).
+    The fix lives here rather than in the gate itself because it's cleaner
+    to never tell the model the tool exists than to refuse the call after.
+
+    Default is ``danger-full-access`` so in-process callers (unit tests, the
+    legacy single-agent loop) keep working without a mode threaded through.
     """
     from langchain_core.tools import StructuredTool
 
+    allowed = set(tools_for_mode(mode))
     result: list = []
     for name, (handler, schema, desc) in _TOOL_MAP.items():
+        if name not in allowed:
+            continue
         coro = _make_tool_coroutine(handler, name)
         tool = StructuredTool(
             name=name,

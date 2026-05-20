@@ -27,6 +27,7 @@ COMMANDS: dict[str, str] = {
     "/instructions": "List loaded project instruction files",
     "/clear": "Clear the terminal",
     "/compact": "Start a fresh memory thread for later turns",
+    "/gateway": "Configure and run chat-platform gateways (Feishu, QQ, ...)",
 }
 
 

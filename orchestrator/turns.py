@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
@@ -29,7 +30,7 @@ class _DecisionShape(BaseModel):
     """Schema the planner LLM is asked to emit when dispatching.
 
     ``response`` is allowed so a model that wraps its prose reply in JSON
-    (some local quants do this defensively) still parses cleanly — the
+    (some local quants do this defensively) still parses cleanly; the
     classifier treats ``capability == ""`` as a conversational reply.
     """
 
@@ -42,24 +43,31 @@ class LLMPlanner:
     _SYSTEM_TEMPLATE = """\
 You route a user message to the right capability.
 
+# Identity
+You are **WW Agent**, a multi-agent AI assistant. If asked who or what you
+are, identify yourself as WW Agent -- a helpful agent that can read files,
+search the web, run code, and call domain skills. Do NOT name a specific
+underlying model, hosting company, or platform; you are WW Agent regardless
+of which LLM powers you under the hood. Do NOT invent product names.
+
 # Output protocol
-- If a capability matches: reply with ONLY a JSON object — no prose, no
+- If a capability matches: reply with ONLY a JSON object; no prose, no
   markdown fences. Schema: {{"capability": "<name>", "arguments": {{<args>}}}}
 - Otherwise (greetings, explanations, creative writing without a save target,
   general chat): reply directly in natural language. Do NOT wrap chat in JSON.
 
-# Routing rules (apply in this order — STOP at the first that matches)
+# Routing rules (apply in this order; STOP at the first that matches)
 
 1. **Skills win when their description matches the request.** Look through
    the Available capabilities list for any name starting with `skill.`. If
    one of them describes the domain the user is asking about (shopping /
-   e-commerce / prices / brand rankings / orders for a shopping skill;
-   slides / decks / PPT for a PPT skill; etc.), pick that skill —
+   e-commerce / prices / brand rankings / orders for a shopping skill; etc.),
+   pick that skill:
    `{{"capability": "skill.<slug>", "arguments": {{<extracted args>}}}}`.
    Skills wrap curated domain APIs that a generic tool-agent cannot
-   replicate — prefer them whenever the topic matches.
+   replicate; prefer them whenever the topic matches.
 2. **Single-purpose capabilities** when the user explicitly names a tool
-   with short concrete args (e.g. "calculate 17 * 23" → calculator).
+   with short concrete args (e.g. "calculate 17 * 23" -> calculator).
 3. **Default to "{default_dispatch}"** for everything else that needs a
    tool: file reading/writing/searching/listing, generating-and-saving,
    FETCHING A URL, summarizing a web page the user pasted, scraping a
@@ -71,23 +79,15 @@ You route a user message to the right capability.
 4. **Prose** for greetings, explanations from your own knowledge,
    creative writing without a save target, and general chat.
 
-Never tell the user "I can't access URLs" or "I can't browse the web" —
+Never tell the user "I can't access URLs" or "I can't browse the web";
 the tool-agent has `web_extract` and `web_crawl`. Route the message to
 "{default_dispatch}" and let it fetch.
 
 If the user's permission_mode (shown in Session context) forbids the
-required action, refuse in prose and explain how to raise the mode — do
+required action, refuse in prose and explain how to raise the mode; do
 NOT dispatch a capability that will be denied downstream.
 
 # Examples
-User: hello!
-Reply: Hi! How can I help today?
-
-User: 我想买风扇，给我全网最低价
-Reply: {{"capability": "skill.baidu-ecommerce-search", "arguments": {{"query": "全网最便宜的风扇"}}}}
-
-User: 帮我做一份汇报 PPT
-Reply: {{"capability": "skill.ppt-master", "arguments": {{"query": "做一份汇报 PPT"}}}}
 
 User: read README.md
 Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "Read README.md and summarize it."}}}}
@@ -98,11 +98,11 @@ Reply: {{"capability": "calculator", "arguments": {{"expression": "17 * 23"}}}}
 User: write a 200-word essay about cats and save it to cats.txt
 Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "Write a 200-word essay about cats and save it to cats.txt"}}}}
 
-User: 复述一下这个网站的内容 https://example.com/article
-Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "复述一下这个网站的内容 https://example.com/article"}}}}
+User: summarize this web page https://example.com/article
+Reply: {{"capability": "{default_dispatch}", "arguments": {{"task": "summarize this web page https://example.com/article"}}}}
 
 User: what's a transformer in ML?
-Reply: A transformer is a neural-network architecture that uses self-attention …
+Reply: A transformer is a neural-network architecture that uses self-attention.
 
 # Style
 {language_rule}
@@ -122,15 +122,15 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
         self._context_provider = context_provider or (lambda: "")
         self._tool_schemas = tool_schemas or {}
         self._default_dispatch = default_dispatch_capability
-        # Resolve the system prompt once — it depends only on constants and
+        self._tool_context = self._build_tool_context()
+        # Resolve the system prompt once; it depends only on constants and
         # the default-dispatch capability name, both fixed for a session.
         self._system_prompt = self._SYSTEM_TEMPLATE.format(
             default_dispatch=default_dispatch_capability,
             language_rule=LANGUAGE_RULE,
         )
 
-    def _build_messages(self, state) -> list[dict]:
-        context = self._context_provider()
+    def _build_tool_context(self) -> str:
         tool_lines: list[str] = []
         for cap in self._caps:
             schema = self._tool_schemas.get(cap, {})
@@ -139,14 +139,20 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
             tool_lines.append(f"- {cap}: {desc}")
             if params:
                 props = params.get("properties", {})
-                required = params.get("required", [])
-                for pname, pinfo in props.items():
-                    req_mark = " (required)" if pname in required else ""
-                    type_ = pinfo.get("type", "any")
-                    pdesc = f": {pinfo.get('description', '')}" if pinfo.get("description") else ""
-                    tool_lines.append(f"    {pname} ({type_}){req_mark}{pdesc}")
+                required = set(params.get("required", []))
+                if props:
+                    names = []
+                    for pname, pinfo in props.items():
+                        mark = "*" if pname in required else ""
+                        type_ = pinfo.get("type", "any")
+                        names.append(f"{pname}{mark}:{type_}")
+                    tool_lines.append("    args: " + ", ".join(names))
+        return "\n".join(tool_lines)
+
+    def _build_messages(self, state) -> list[dict]:
+        context = self._context_provider()
         prompt = (
-            f"Available capabilities:\n" + "\n".join(tool_lines) + "\n\n"
+            f"Available capabilities:\n{self._tool_context}\n\n"
             f"Session context:\n{context}\n\n"
             f"User: {state['user_input']}"
         )
@@ -155,9 +161,22 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
             {"role": "user", "content": prompt},
         ]
 
+    # ``<think>`` / ``<thinking>`` blocks emitted by reasoning models
+    # (DeepSeek R1, Qwen-thinking, MiMo) precede the actual response payload.
+    # If we hand them to the prose/JSON classifier verbatim, a leading ``<``
+    # makes the classifier treat the whole stream as prose — the eventual
+    # ``{"capability": ...}`` then gets rendered as plain text to the user
+    # instead of dispatched. Strip non-greedily so multiple think blocks (or
+    # a model that re-opens one) all get removed.
+    _THINK_BLOCK = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.IGNORECASE | re.DOTALL)
+
+    @staticmethod
+    def _strip_think_blocks(text: str) -> str:
+        return LLMPlanner._THINK_BLOCK.sub("", text)
+
     @staticmethod
     def _strip_code_fences(text: str) -> str:
-        text = text.strip()
+        text = LLMPlanner._strip_think_blocks(text).strip()
         if text.startswith("```"):
             lines = text.split("\n")
             if lines and lines[0].startswith("```"):
@@ -203,8 +222,8 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
         """Stream the planner LLM call, yielding text chunks for prose responses.
 
         Yields events:
-          {"type": "text", "chunk": str}        — incremental conversational text
-          {"type": "decision", "decision": dict} — final structured decision
+          {"type": "text", "chunk": str}         incremental conversational text
+          {"type": "decision", "decision": dict} final structured decision
 
         For JSON tool-dispatch responses, no text events are emitted; only the
         final decision. For prose (conversational / creative writing), each
@@ -223,6 +242,12 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
 
         buffer = ""
         mode: str | None = None  # None until classified, then 'json' or 'prose'
+        # Tracks whether we're currently inside a ``<think>`` block so we
+        # neither classify on nor yield those tokens. Reasoning models emit
+        # entire thinking traces before the actual response — letting that
+        # leak to the UI is both a UX bug (user sees model's scratch work)
+        # and a classifier bug (leading ``<`` ⇒ prose ⇒ JSON path missed).
+        in_think = False
 
         async for chunk in astream(self._build_messages(state)):
             token = _extract_chunk_text(chunk)
@@ -230,8 +255,48 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
                 continue
             buffer += token
 
+            # Drop completed think blocks from the live buffer used for
+            # classification. We can't drop the *streamed* tokens once
+            # emitted, but we haven't emitted any yet (mode is None) — so
+            # this is purely about what the classifier sees.
+            visible = LLMPlanner._strip_think_blocks(buffer)
+
+            # ``in_think`` is True when we're mid-stream inside an unclosed
+            # think block AND must NOT yet classify or yield the buffer.
+            # Three cases trigger it:
+            #
+            # 1. Open count > close count: a complete ``<think>`` opened
+            #    without its matching ``</think>``. Counting is exact even
+            #    for two consecutive blocks (substring containment failed
+            #    here in an earlier revision).
+            # 2. A partial opening tag still arriving in chunks: chunked
+            #    streaming can split ``<think>`` into ``<thi`` and ``nk>``.
+            #    The first chunk has no full tag, but classifying on the
+            #    leading ``<`` would route as prose and leak the literal
+            #    ``<thi`` to the user. Defer if ``visible`` has any ``<``
+            #    without a closing ``>`` after it.
+            # 3. A partial closing tag while we believe we're inside a
+            #    block — handled by case 1 because counting waits for the
+            #    close to complete.
+            lowered = buffer.lower()
+            open_count = (
+                lowered.count("<think>")
+                + lowered.count("<thinking>")
+                + lowered.count("<reasoning>")
+            )
+            close_count = (
+                lowered.count("</think>")
+                + lowered.count("</thinking>")
+                + lowered.count("</reasoning>")
+            )
+            last_open = visible.rfind("<")
+            partial_tag = last_open >= 0 and ">" not in visible[last_open:]
+            in_think = open_count > close_count or partial_tag
+
             if mode is None:
-                stripped = buffer.lstrip()
+                if in_think:
+                    continue  # wait for the think block to close
+                stripped = visible.lstrip()
                 if not stripped:
                     continue
                 if stripped.startswith("```"):
@@ -246,10 +311,12 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
                     mode = "json" if stripped.startswith("{") else "prose"
 
                 if mode == "prose":
-                    # Flush everything buffered so far as the first text chunk.
-                    yield {"type": "text", "chunk": buffer}
+                    # Flush the think-stripped buffer as the first text chunk.
+                    yield {"type": "text", "chunk": visible}
             elif mode == "prose":
-                yield {"type": "text", "chunk": token}
+                # Don't echo tokens that fall inside an in-flight think block.
+                if not in_think:
+                    yield {"type": "text", "chunk": token}
             # mode == "json": keep accumulating silently
 
         if not buffer.strip():
@@ -269,7 +336,7 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
             }
             return
 
-        # JSON path — strict parse + Pydantic validate. If anything fails we
+        # JSON path: strict parse + Pydantic validate. If anything fails we
         # fall back to default_dispatch instead of surfacing the broken JSON
         # buffer to the UI (which the prose path would do).
         cleaned = LLMPlanner._strip_code_fences(buffer)
@@ -284,7 +351,7 @@ Reply: A transformer is a neural-network architecture that uses self-attention �
             pass
 
         # Malformed JSON (very common when the model tries to embed long
-        # content like a 500-word essay inside an arguments string — literal
+        # content like a 500-word essay inside an arguments string; literal
         # newlines break json.loads). Hand the whole original request to the
         # default dispatch capability and let its loop figure it out.
         log.warning(
@@ -413,7 +480,7 @@ class TurnRunner:
         raw_text = extract_text(result.get("result"))
 
         # Agent-task capabilities (tool.task, skill.*) already return
-        # natural-language answers — skip the synthesizer.
+        # natural-language answers; skip the synthesizer.
         _AGENT_TASKS = {"tool.task"}
         if capability in _AGENT_TASKS or capability.startswith("skill."):
             return TurnResult(capability=capability, owner=owner, text=raw_text, error=None)

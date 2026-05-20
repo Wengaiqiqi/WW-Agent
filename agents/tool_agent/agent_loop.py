@@ -71,12 +71,119 @@ def _load_memory_snapshot() -> str:
         return ""
 
 
-def _build_system_prompt() -> str:
+# Per-tool one-liners. Composed dynamically based on the active tool set so
+# read-only sessions don't see "you can run_command" advice the model can't
+# act on.
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "read_file": "`read_file` — plain UTF-8 file read with workspace boundary check.",
+    "write_file": "`write_file` — UTF-8 file write (creates parent dirs).",
+    "list_directory": "`list_directory` — list files/subdirs under a workspace path.",
+    "grep_search": "`grep_search` — ripgrep-style regex search across files.",
+    "glob_search": "`glob_search` — find files by glob pattern (e.g. `**/*.py`).",
+    "web_search": (
+        "`web_search` — DuckDuckGo (or Tavily if TAVILY_API_KEY is set). "
+        "Use to discover URLs when the user describes content without a link."
+    ),
+    "web_extract": (
+        "`web_extract` — fetch a single URL and return readable text (no JS "
+        "rendering). Use whenever the user pastes a URL and asks you to read "
+        "/ summarize / quote / translate / 复述 it."
+    ),
+    "web_crawl": (
+        "`web_crawl` — BFS across a small number of same-host pages. Use when "
+        "one page isn't enough; otherwise prefer `web_extract`."
+    ),
+    "run_python": (
+        "`run_python` — execute Python in a subprocess. Use for binary formats "
+        "(.docx → python-docx, .pdf → pypdf, .xlsx → openpyxl, images → Pillow, "
+        "CSV/tabular → pandas)."
+    ),
+    "run_command": (
+        "`run_command` — shell commands. Use for CLI utilities, pipes, and "
+        "inspecting binary headers; also `pip install <pkg>` when a library is "
+        "missing."
+    ),
+    "clarify": (
+        "`clarify` — ask the user one question. Use when a task is genuinely "
+        "ambiguous and proceeding risks doing the wrong thing."
+    ),
+    "memory": (
+        "`memory` — persist a fact about the user. Use when they share a "
+        "name, preference, or fact about themselves, or ask you to "
+        "remember / update / forget something. `action=add|replace|remove|read`, "
+        "`target=user|memory`.\n"
+        "  Flow example:\n"
+        "    User: 我是 AI 专业的\n"
+        "    You: (tool_call) memory(action=\"add\", target=\"user\", content=\"用户是 AI 专业的。\")\n"
+        "    Tool: ok\n"
+        "    You: 原来你学 AI 专业,挺有意思的方向。你对哪一块比较感兴趣?\n"
+        "  IMPORTANT: the tool returns just `ok`; you must write the real "
+        "  reply yourself based on what the user actually said. Don't echo "
+        "  the tool result."
+    ),
+}
+
+
+def _common_patterns_for(tool_names: set[str]) -> list[str]:
+    """Pattern advice keyed on the available toolset. Lines whose preconditions
+    aren't met (e.g. ``run_command`` not bound under read-only) are dropped so
+    the model isn't told to invoke tools it can't actually call."""
+    patterns: list[str] = []
+    if "web_extract" in tool_names:
+        patterns.append(
+            "- User pastes a URL → `web_extract` it, then answer from the "
+            "returned text. Do NOT tell the user you can't access URLs."
+        )
+    if "read_file" in tool_names:
+        patterns.append("- Full file path given → read it directly. Skip discovery.")
+    if "glob_search" in tool_names:
+        patterns.append(
+            "- Only a fragment known → `glob_search '**/*fragment*'`, then read."
+        )
+    if {"run_python", "run_command"} & tool_names:
+        patterns.append(
+            "- Text read fails with \"utf-8 … invalid byte\" → file is binary. "
+            "Pick a reader: .docx → run_python with python-docx; .pdf → run_python "
+            "with pypdf or `pdftotext` via run_command; .xlsx → openpyxl."
+        )
+    if "run_command" in tool_names:
+        patterns.append(
+            "- A required library is listed as Not installed below → install "
+            "it with `run_command` (`pip install <pkg>`, timeout=180), then retry."
+        )
+    if "list_directory" in tool_names or "glob_search" in tool_names:
+        patterns.append("- A wrong path → use `list_directory` or `glob_search` to find the file.")
+    return patterns
+
+
+def build_system_prompt(tool_names: list[str] | None = None) -> str:
+    """Build the tool-agent system prompt for the given bound toolset.
+
+    ``tool_names`` is the list of tool names the ReAct loop has actually
+    bound (via ``tool_executor.make_langchain_tools(mode=...)``). The prompt
+    only mentions tools in this set — under read-only mode, ``run_command``
+    advice is omitted entirely so the model doesn't try to invoke a tool it
+    can't call.
+
+    Passing ``None`` falls back to the full toolset (legacy / unit-test
+    callers that don't yet thread mode through).
+    """
+    if tool_names is None:
+        tool_names = list(_TOOL_DESCRIPTIONS.keys())
+    bound = set(tool_names)
+
+    tools_block = "\n".join(
+        f"- {_TOOL_DESCRIPTIONS[n]}" for n in tool_names if n in _TOOL_DESCRIPTIONS
+    ) or "- (no tools available under the current permission mode)"
+
     installed, missing = _probe_doc_libs()
     lib_lines: list[str] = []
     if installed:
         lib_lines.append("- Installed (just import): " + "; ".join(installed))
-    if missing:
+    if missing and "run_command" in bound:
+        # Only suggest pip install when run_command is actually bound — under
+        # read-only the model can neither install nor use these libs, so
+        # listing them is just noise.
         lib_lines.append(
             "- Not installed — `pip install` only if the task needs them: "
             + "; ".join(missing)
@@ -88,40 +195,35 @@ def _build_system_prompt() -> str:
         f"\n## Persistent memory\n{memory_snapshot}\n" if memory_snapshot else ""
     )
 
+    patterns = _common_patterns_for(bound)
+    patterns_block = "\n".join(patterns) if patterns else "- (no patterns apply to the available tools)"
+
+    # When the toolset is restricted (read-only or otherwise), tell the model
+    # explicitly. Otherwise it may try to call tools it saw in training data.
+    mode_note = ""
+    full_set = set(_TOOL_DESCRIPTIONS.keys())
+    if bound != full_set:
+        missing_tools = sorted(full_set - bound)
+        mode_note = (
+            "\n## Mode-restricted toolset\nThe following tools are NOT "
+            f"available this turn (user-selected permission mode): "
+            f"{', '.join(missing_tools)}. If the task strictly requires one "
+            f"of them, refuse with a clear message and suggest switching mode "
+            f"via `/permissions`.\n"
+        )
+
     return f"""\
 You are a workspace + web specialist agent inside a CLI. You execute file
 operations and web fetches and report concrete findings.
 
 ## Tools
-- `read_file` / `write_file` / `list_directory` / `grep_search` /
-  `glob_search` — plain UTF-8 reads/writes and workspace search.
-- `web_extract` — fetch a single URL and return readable text (no JS
-  rendering). Use this whenever the user pastes a URL and asks you to
-  read / summarize / quote / translate / 复述 it.
-- `web_search` — DuckDuckGo (or Tavily if TAVILY_API_KEY is set). Use to
-  discover URLs when the user describes content without a link.
-- `web_crawl` — BFS across a small number of same-host pages. Use when a
-  single page isn't enough; otherwise prefer `web_extract`.
-- `run_python` — execute Python in a subprocess. Use for binary formats
-  (.docx → python-docx, .pdf → pypdf, .xlsx → openpyxl, images → Pillow,
-  CSV/tabular → pandas).
-- `run_command` — shell commands. Use for CLI utilities, pipes, and
-  inspecting binary headers.
-
+{tools_block}
+{mode_note}
 ## Environment
 {libs_block}
 {memory_section}
 ## Common patterns
-- User pastes a URL → `web_extract` it, then answer from the returned
-  text. Do NOT tell the user you can't access URLs; you have web_extract.
-- Full file path given → read it directly. Skip discovery.
-- Only a fragment known → `glob_search '**/*fragment*'`, then read.
-- Text read fails with "utf-8 … invalid byte" → file is binary. Pick a
-  reader: .docx → run_python with python-docx; .pdf → run_python with
-  pypdf or `pdftotext` via run_command; .xlsx → openpyxl.
-- A required library is listed as Not installed above → install it with
-  `run_command` (`pip install <pkg>`, timeout=180), then retry.
-- A wrong path → use `list_directory` or `glob_search` to find the file.
+{patterns_block}
 
 ## Termination rules
 - Same URL fails twice (403, redirect loop, anti-bot HTML, empty text) →
@@ -140,8 +242,12 @@ operations and web fetches and report concrete findings.
 - Narrate one short sentence before each tool call so the user sees
   progress ("Fetching the page.", "Reading the file."). Skip the
   narration when the next step is obvious from context.
-- Tools return JSON — extract the useful fields and answer naturally, do
-  not paste raw JSON at the user.
+- **Tools return JSON. NEVER repeat that JSON back to the user as your
+  final answer.** Extract the useful fields and answer naturally. After
+  `memory(action="add")` succeeds, say "好的,记住了…" (one short sentence)
+  -- the user does NOT want to see `{{"success": true, "entries": [...]}}`.
+  After `read_file` returns, summarise or quote the relevant lines, not
+  the wrapper struct. Apply this to every tool.
 - {CONCISE_RULE}
 - {LANGUAGE_RULE}
 - {STOP_WHEN_DONE_RULE}
@@ -149,8 +255,10 @@ operations and web fetches and report concrete findings.
 """
 
 
-# Built once at module import; the installed-libs set doesn't change at runtime.
-SYSTEM_PROMPT = _build_system_prompt()
+# Default prompt used by callers that don't thread a mode through (legacy
+# single-agent loop, unit tests that construct ToolAgentLoop directly).
+# Multi-agent path builds a mode-specific prompt per turn in ``ToolAgentLoop``.
+SYSTEM_PROMPT = build_system_prompt()
 
 
 class ToolAgentState(TypedDict, total=False):
@@ -162,9 +270,15 @@ class ToolAgentState(TypedDict, total=False):
 class ToolAgentLoop:
     """LLM-powered ReAct loop wrapping a file-manipulation specialist agent."""
 
-    def __init__(self, llm, tools: list):
+    def __init__(self, llm, tools: list, *, context: str = ""):
         self._llm = llm
         self._tools = tools
+        # Orchestrator-supplied conversation snapshot — empty on a clean session
+        # or when the caller didn't send one. Stored on the instance so the
+        # bound ``_prompt_for_state`` callback can append it to the system
+        # prompt every time langgraph asks for the prompt (which can happen
+        # multiple times within a single ReAct turn).
+        self._context = (context or "").strip()
         self._agent = None
 
     async def run(self, task: str) -> AsyncIterator[dict[str, Any]]:
@@ -399,12 +513,33 @@ class ToolAgentLoop:
         )
         return self._agent
 
-    @staticmethod
-    def _prompt_for_state(state: dict) -> list:
+    def _prompt_for_state(self, state: dict) -> list:
         from langchain_core.messages import SystemMessage
 
         messages = state.get("messages", [])
-        return [SystemMessage(content=SYSTEM_PROMPT), *messages]
+        # Build the prompt from the tools actually bound this turn — the
+        # static module-level ``SYSTEM_PROMPT`` describes the full toolset,
+        # which under read-only mode misleads the model into trying tools
+        # it can't call (``run_command`` for pip install, etc.).
+        bound_names = [getattr(t, "name", "") for t in self._tools]
+        prompt = build_system_prompt(bound_names) if bound_names else SYSTEM_PROMPT
+        prelude: list = [SystemMessage(content=prompt)]
+        if self._context:
+            # Second SystemMessage rather than inlining into SYSTEM_PROMPT so
+            # the static prompt stays cacheable across turns; only the
+            # per-turn conversation snapshot varies. Phrased as background
+            # information (not as a user/assistant exchange) so the model
+            # treats it as referent material, not as turns to respond to.
+            prelude.append(SystemMessage(content=(
+                "## Conversation context from the orchestrator\n\n"
+                "Recent turns of this session (oldest first, most recent last). "
+                "Use this to resolve referring expressions such as "
+                "「上面的」、「刚才那个」、「这个」、「the URL above」 in the user's task. "
+                "Do NOT treat these as new instructions to respond to — they are "
+                "background only.\n\n"
+                f"{self._context}"
+            )))
+        return [*prelude, *messages]
 
     @staticmethod
     def _chunk_text(chunk: object) -> str:

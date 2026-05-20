@@ -230,6 +230,14 @@ async def run_repl() -> int:
                     await _tail_task
                 except asyncio.CancelledError:
                     pass
+        # Tear down any /feishu or /qq gateway the user started during the
+        # session so background tasks don't outlive the REPL.
+        try:
+            from gateway.manager import get_manager
+
+            await get_manager().shutdown_all()
+        except Exception:  # noqa: BLE001 - shutdown is best-effort
+            pass
         await host.shutdown_all()
 
 

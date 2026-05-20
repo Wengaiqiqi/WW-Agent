@@ -20,7 +20,9 @@ memory text ends up inside the system prompt.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -29,10 +31,22 @@ import agent_paths
 
 
 _DELIM = "\n§\n"
-_MEMORY_CHAR_LIMIT = 4000
-_USER_CHAR_LIMIT = 2000
+# The caps used to be tight (4 KB / 2 KB) because in legacy single-agent
+# mode every user of the same workspace shared one MEMORY.md / USER.md. With
+# the gateway's per-user scoping (LANGCHAIN_AGENT_MEMORY_USER -> own dir)
+# each user gets their own files, so we can afford more headroom.
+_MEMORY_CHAR_LIMIT = 8000
+_USER_CHAR_LIMIT = 4000
 
 _TARGETS = {"memory", "user"}
+
+# When this env var is set, memory files are scoped per-user under
+# ``memories/users/<sha256(user_id)>/``. Gateway adapters set it before
+# spawning tool-agent so each chat-platform user gets their own private
+# USER.md and MEMORY.md. Empty / unset = legacy global behaviour
+# (single .langchain-agent/memories/USER.md and MEMORY.md, shared across
+# all chats and the REPL).
+_USER_ENV_VAR = "LANGCHAIN_AGENT_MEMORY_USER"
 
 
 _THREAT_PATTERNS = [
@@ -58,8 +72,22 @@ def _scan(content: str) -> Optional[str]:
     return None
 
 
+def _user_scope_dir() -> Optional[Path]:
+    """Return the per-user memory dir when ``LANGCHAIN_AGENT_MEMORY_USER`` is
+    set, else ``None`` (caller uses the legacy global location)."""
+    user_id = (os.environ.get(_USER_ENV_VAR) or "").strip()
+    if not user_id:
+        return None
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
+    return agent_paths.memories_dir() / "users" / digest
+
+
 def _path_for(target: str) -> Path:
-    return agent_paths.memories_dir() / ("USER.md" if target == "user" else "MEMORY.md")
+    name = "USER.md" if target == "user" else "MEMORY.md"
+    scoped = _user_scope_dir()
+    if scoped is not None:
+        return scoped / name
+    return agent_paths.memories_dir() / name
 
 
 def _limit_for(target: str) -> int:
@@ -79,8 +107,8 @@ def _read_entries(target: str) -> List[str]:
 
 
 def _write_entries(target: str, entries: List[str]) -> None:
-    agent_paths.memories_dir().mkdir(parents=True, exist_ok=True)
     path = _path_for(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
     body = _DELIM.join(entries)
     path.write_text(body + ("\n" if body else ""), encoding="utf-8")
 
