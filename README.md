@@ -1,8 +1,6 @@
 # W&W Agent
 
-> A terminal-first multi-agent system built on LangChain + LangGraph, with
-> chat-platform gateways (Feishu / Lark, QQ Official Bot) and per-user
-> persistent memory.
+> 一个以终端为主要交互方式的多智能体系统，基于 LangChain 和 LangGraph 构建，支持飞书 / Lark、QQ 官方机器人等聊天平台网关，并为每个用户提供持久化记忆功能。
 >
 > 命令行优先的多 Agent 框架,自带飞书 / QQ 聊天网关 + 每用户持久化记忆。
 
