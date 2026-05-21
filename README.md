@@ -22,9 +22,6 @@ python -m gateway feishu           # 飞书机器人(长连接,无需公网)
 python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
 ```
 
-Inside the REPL, use `/gateway` to manage chat-platform integrations
-interactively, and `/help` for the full slash-command catalog.
-
 ---
 
 ## 目录 Table of Contents
@@ -80,8 +77,8 @@ interactively, and `/help` for the full slash-command catalog.
             └──────┬───────┘      └──────┬───────┘
                    │                     │
                    ├─ read/write_file    ├─ baidu-ec-search
-                   ├─ grep/glob_search   ├─ ppt-master (optional)
-                   ├─ web_extract/crawl  └─ ...
+                   ├─ grep/glob_search   └─ ...
+                   ├─ web_extract/crawl  
                    ├─ run_python/cmd
                    ├─ memory  (per-user)
                    └─ clarify
@@ -523,7 +520,7 @@ Gateway 模块的覆盖率:
 
 ## 致谢 Acknowledgements
 
-- **hermes-agent**:Gateway 的整体架构思路(平台 adapter / session / memory) — 我们做了 ~95% 的功能裁剪,留下"够用的 agent + IM 桥"那部分
+- **hermes-agent**:Gateway 的整体架构思路(平台 adapter / session / memory) — 我做了 ~95% 的功能裁剪,留下"够用的 agent + IM 桥"那部分
 - **LangChain / LangGraph**:核心编排框架
 - **lark-oapi-sdk-python**:飞书长连接 SDK
 - **MCP / A2A SDK**:跨进程协议标准
