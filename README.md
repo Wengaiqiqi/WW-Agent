@@ -1,4 +1,4 @@
-# W&W Agent
+# W&W Agent 
 
 > 一个以终端为主要交互方式的多智能体系统，基于 LangChain 和 LangGraph 构建，支持飞书 / Lark、QQ 官方机器人等聊天平台网关，并为每个用户提供持久化记忆功能。
 >
