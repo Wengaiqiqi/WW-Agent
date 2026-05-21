@@ -36,6 +36,10 @@ After picking a platform, a second menu offers:
 | Clear credentials | Delete the platform's entry from `gateways.json` |
 | Back to platform list | Return to step 1 |
 
+The action menu shows a live tail of the most recent 8 lines from
+`<config_dir>/gateway.log`, filtered to the platform you opened — useful
+for confirming WS connect / event delivery without leaving the REPL.
+
 Credentials live in `.langchain-agent/gateways.json` (a sibling
 `.gitignore` is created automatically). The wizard masks secrets when
 redisplaying them (`cli_xxxx******`). Background tasks share the REPL's
