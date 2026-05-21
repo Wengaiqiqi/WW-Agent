@@ -121,6 +121,24 @@ PROVIDERS: dict[str, dict[str, Any]] = {
             "mimo-v2-flash",
         ],
     },
+    # Token-plan (Anthropic-compatible) endpoint. Same MiMo family, request
+    # format is Anthropic /v1/messages -- billed through token-plan-cn host.
+    # Co-exists with ``xiaomi`` so the user picks whichever endpoint their
+    # key is provisioned against, without juggling base_url + protocol by
+    # hand in settings.json.
+    "xiaomi-anthropic": {
+        "label": "Xiaomi MiMo (Anthropic)",
+        "protocol": "anthropic",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "api_key_env": "XIAOMI_API_KEY",
+        "models": [
+            "mimo-v2.5-pro",
+            "mimo-v2.5",
+            "mimo-v2-pro",
+            "mimo-v2-omni",
+            "mimo-v2-flash",
+        ],
+    },
     "zai": {
         "label": "Z.AI / GLM",
         "protocol": "openai",
