@@ -16,9 +16,11 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+from collections.abc import Callable
 
 
 _PICKER_VIEWPORT_ROWS = 18
+_PICKER_FOOTER_ROWS = 8  # number of body rows reserved for the footer pane
 
 
 def _run_blocking_app(app) -> None:
@@ -70,6 +72,10 @@ def interactive_select(
     options: list[tuple[str, str]],
     default_index: int = 0,
     instruction: str = "up/down move - enter select - esc cancel",
+    *,
+    footer_lines: Callable[[], list[str]] | None = None,
+    footer_title: str | None = None,
+    footer_refresh_seconds: float | None = None,
 ) -> int | None:
     """Inline arrow-key picker built on prompt_toolkit.
 
@@ -77,6 +83,16 @@ def interactive_select(
     be empty. Returns the chosen index, or ``None`` when the user pressed
     Esc / q / Ctrl+C. Callers must check :func:`can_use_interactive_picker`
     first; invoking this without a TTY raises ``RuntimeError``.
+
+    Optional footer pane (used by ``/gateway`` to tail ``gateway.log``):
+
+    - ``footer_lines``: callable invoked on every render; returns the lines
+      to display below the picker body. ``None`` (default) hides the
+      footer entirely — layout unchanged for legacy callers.
+    - ``footer_title``: single-line header rendered above the footer.
+    - ``footer_refresh_seconds``: when set, the picker schedules a periodic
+      ``app.invalidate()`` so the footer re-runs ``footer_lines`` even when
+      the user isn't pressing keys.
     """
     if not options:
         return None
@@ -199,19 +215,66 @@ def interactive_select(
     })
 
     body_height = visible + (2 if needs_scroll else 0)
-    layout = Layout(HSplit([
+
+    windows = [
         Window(content=FormattedTextControl(render_title), height=2),
         Window(
             content=FormattedTextControl(render_body),
             height=D(preferred=body_height, max=body_height),
         ),
-    ]))
+    ]
 
-    _run_blocking_app(
-        Application(
-            layout=layout, key_bindings=kb, style=style, full_screen=False,
-        )
+    if footer_lines is not None:
+        def render_footer_title():
+            return FormattedText([("class:hint", (footer_title or "") + "\n")])
+
+        def render_footer_body():
+            try:
+                lines = footer_lines() or []
+            except Exception:  # noqa: BLE001 - footer must not crash the UI
+                lines = []
+            if not lines:
+                return FormattedText([
+                    ("class:dim", "(no log yet — start the gateway to see activity)\n"),
+                ])
+            return FormattedText([("class:dim", "\n".join(lines) + "\n")])
+
+        if footer_title:
+            windows.append(Window(content=FormattedTextControl(render_footer_title), height=1))
+        windows.append(Window(
+            content=FormattedTextControl(render_footer_body),
+            height=D(preferred=_PICKER_FOOTER_ROWS, max=_PICKER_FOOTER_ROWS),
+        ))
+
+    layout = Layout(HSplit(windows))
+
+    app = Application(
+        layout=layout, key_bindings=kb, style=style, full_screen=False,
     )
+
+    if footer_lines is not None and footer_refresh_seconds is not None:
+        async def _ticker() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(footer_refresh_seconds)
+                    app.invalidate()
+            except asyncio.CancelledError:
+                raise
+
+        # Install the refresh task on the first paint — by then the
+        # application has its asyncio loop bound and ``create_background_task``
+        # is safe to call. The flag prevents re-installation on every render.
+        installed: list[bool] = [False]
+
+        def _install_once(_app) -> None:
+            if installed[0]:
+                return
+            installed[0] = True
+            app.create_background_task(_ticker())
+
+        app.before_render += _install_once
+
+    _run_blocking_app(app)
     return result[0]
 
 
@@ -220,6 +283,10 @@ async def interactive_select_async(
     options: list[tuple[str, str]],
     default_index: int = 0,
     instruction: str = "up/down move - enter select - esc cancel",
+    *,
+    footer_lines: Callable[[], list[str]] | None = None,
+    footer_title: str | None = None,
+    footer_refresh_seconds: float | None = None,
 ) -> int | None:
     """Async variant for slash-command handlers that run inside the REPL loop.
 
@@ -243,6 +310,8 @@ async def interactive_select_async(
     because to_thread just suspends the awaiting task. So the original
     motivation -- "gateway must keep ticking while menu is up" -- still
     holds.
+
+    Footer kwargs forward to :func:`interactive_select` unchanged.
     """
     return await asyncio.to_thread(
         interactive_select,
@@ -250,4 +319,7 @@ async def interactive_select_async(
         options,
         default_index=default_index,
         instruction=instruction,
+        footer_lines=footer_lines,
+        footer_title=footer_title,
+        footer_refresh_seconds=footer_refresh_seconds,
     )
