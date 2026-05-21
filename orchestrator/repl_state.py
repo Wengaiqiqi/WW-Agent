@@ -17,6 +17,20 @@ _RECENT_HISTORY_FULL = 3
 _MAX_MEMORY_CHARS = 4000
 _MAX_INSTRUCTION_CHARS = 6000
 
+# Bytes budgets for the peer-agent context block (delegated to tool-agent /
+# skill-agent over A2A). Tighter than the planner's budget because the peer's
+# system prompt is already large and the peer doesn't need the project
+# instructions / memory snapshot — only enough of the recent conversation
+# for it to resolve referring expressions ("上面的", "刚才那个", "this").
+#
+# Sizing intent: roughly half the planner's window
+# (``_PEER_HISTORY_TURNS=6`` vs MAX_HISTORY_ITEMS=12,
+# ``_PEER_OBSERVATION_CHARS=400`` vs ``_MAX_OBSERVATION_CHARS=600``). The
+# planner needs the full history to make routing decisions; the peer only
+# needs the *recent* tail to ground referring expressions.
+_PEER_HISTORY_TURNS = 6
+_PEER_OBSERVATION_CHARS = 400
+
 
 @dataclass
 class MultiAgentSessionState:
@@ -180,3 +194,38 @@ class MultiAgentSessionState:
             "Skills:\n" + ("\n".join(skill_lines) or "<none>"),
             "Recent history:\n" + ("\n\n".join(history_lines) or "<none>"),
         ])
+
+    def render_history_for_peer(self) -> str:
+        """Render the recent conversation for delegation to a peer agent.
+
+        Returns ``""`` when there is nothing to share (first turn of a fresh
+        session). Each kept turn shows what the user said and what the
+        previous owner (orchestrator chat reply, tool-agent output, etc.)
+        produced — enough for the peer to resolve referring expressions like
+        「上面的作文」、「刚才那个文件」、「the URL above」without re-prompting.
+
+        The current turn is not yet in ``recent_history`` (the controller
+        records it after the delegation returns), so the most recent entry
+        here is always the *previous* turn — exactly what the peer needs.
+        """
+        if not self.recent_history:
+            return ""
+
+        items = self.recent_history[-_PEER_HISTORY_TURNS:]
+        blocks: list[str] = []
+        for item in items:
+            user_text = (item.get("user") or "").strip()
+            observation = (item.get("observation") or "").strip()
+            if len(observation) > _PEER_OBSERVATION_CHARS:
+                observation = observation[:_PEER_OBSERVATION_CHARS] + "…[truncated]"
+            owner = item.get("owner") or "multi-agent"
+            capability = item.get("capability") or ""
+            owner_label = f"{owner} ({capability})" if capability else owner
+            parts = [
+                f"User: {user_text}",
+                f"{owner_label}: {observation or '<no output>'}",
+            ]
+            if item.get("error"):
+                parts.append(f"Error: {item['error']}")
+            blocks.append("\n".join(parts))
+        return "\n\n".join(blocks)

@@ -100,20 +100,34 @@ async def test_streaming_conversational_response_renders_text(tmp_path):
     from orchestrator.turns import LLMPlanner
 
     controller, ui, state, host, router, buf = _make_controller(tmp_path)
-    essay = "窗外的春风拂过书桌，鸟儿在树梢轻声歌唱。"
+    essay = "The spring breeze crossed the desk."
     llm = MockChatModel(responses=[essay], chunk_size=4)
     controller._planner = LLMPlanner(
         llm=llm, available_capabilities=router.all_capabilities(),
     )
 
-    result = await controller._execute_turn("写一个小短文")
+    result = await controller._execute_turn("please share a tiny vignette")
     assert result == LoopAction.CONTINUE
     assert state.turns == 1
     out = buf.getvalue()
-    assert "窗外" in out
+    assert "spring breeze" in out
     assert "[multi-agent]:" in out
     # Conversational path must not call any tool.
     assert host.calls == []
+
+
+def test_fast_route_obvious_project_work_skips_planner(tmp_path):
+    controller, ui, state, host, router, buf = _make_controller(tmp_path)
+    plan = controller._fast_route("review整个项目 and optimize Loading")
+    assert plan == {
+        "capability": "tool.task",
+        "arguments": {"task": "review整个项目 and optimize Loading"},
+    }
+
+
+def test_fast_route_leaves_plain_chat_for_planner(tmp_path):
+    controller, ui, state, host, router, buf = _make_controller(tmp_path)
+    assert controller._fast_route("hello there") is None
 
 
 @pytest.mark.asyncio

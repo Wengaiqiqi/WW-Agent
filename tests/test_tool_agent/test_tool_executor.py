@@ -36,7 +36,10 @@ def test_tool_specs_include_read_file():
 
 
 @pytest.mark.asyncio
-async def test_execute_read_file(tmp_path):
+async def test_execute_read_file(tmp_path, monkeypatch):
+    # Workspace boundary check now applies to ``_wrap_read_file`` — point the
+    # workspace root at the test's tmp_path so the temp file is in-scope.
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
     target = tmp_path / "hello.txt"
     target.write_text("hi there", encoding="utf-8")
     result = await execute_tool("read_file", {
@@ -44,6 +47,26 @@ async def test_execute_read_file(tmp_path):
         "_meta": {"authz_grant": _grant("read_file")},
     })
     assert "hi there" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_execute_read_file_outside_workspace_is_refused(tmp_path, monkeypatch):
+    """Regression for the security fix: ``_wrap_read_file`` used to read any
+    absolute path, including outside the workspace. After the fix, an
+    absolute path that escapes ``LANGCHAIN_AGENT_WORKSPACE_ROOT`` raises a
+    PermissionError up through ``execute_tool``."""
+    # Workspace = tmp_path/inside; target lives in tmp_path/outside.
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(inside))
+
+    with pytest.raises(PermissionError, match="outside workspace"):
+        await execute_tool("read_file", {
+            "path": str(outside),
+            "_meta": {"authz_grant": _grant("read_file")},
+        })
 
 
 @pytest.mark.asyncio

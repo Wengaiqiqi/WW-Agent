@@ -53,6 +53,10 @@ _LANGCHAIN_ALLOWLIST = {
     "LANGCHAIN_AGENT_CONFIG_DIR",
     "LANGCHAIN_AGENT_PERMISSION_MODE",
     "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+    # Used by ``tool/tool_file_ops.resolve_workspace_path`` to bound file ops.
+    # A run_command child that itself drives further file ops via Python /
+    # this project's wrappers needs to inherit the same boundary.
+    "LANGCHAIN_AGENT_WORKSPACE_ROOT",
 }
 
 

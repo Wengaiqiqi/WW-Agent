@@ -18,6 +18,63 @@ from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner
 
 log = logging.getLogger(__name__)
 
+_FAST_TOOL_MARKERS = (
+    "http://", "https://",
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg",
+    ".ini", ".csv", ".tsv", ".docx", ".pdf", ".xlsx", ".html", ".css",
+    ".js", ".ts", ".tsx", ".vue", ".svg", ".png", ".jpg", ".jpeg",
+)
+
+_FAST_TOOL_PREFIXES = (
+    "read ", "open ", "inspect ", "list ", "search ", "grep ", "find ",
+    "write ", "edit ", "modify ", "update ", "fix ", "delete ", "create ",
+    "run ", "execute ", "debug ", "review ", "audit ", "analyze ",
+    "optimise ", "optimize ", "profile ", "summarize ",
+    "pytest", "python ", "git ", "npm ", "pip ", "dir ", "ls ",
+)
+# "test " removed: "test 一下这个想法" is plain chat, not a tool task.
+# Specific testing verbs ("pytest", "run ") still match.
+
+_FAST_TOOL_WORDS = (
+    "read", "inspect", "search", "grep", "write", "edit", "modify",
+    "update", "fix", "debug", "review", "audit", "analyze", "optimise",
+    "optimize", "profile",
+)
+
+_FAST_TOOL_CJK = (
+    "查看", "读取", "打开", "列出", "搜索", "查找", "修改", "更改",
+    "更新", "修复", "删除", "创建", "写入", "保存", "运行", "执行",
+    "调试", "审查", "检查", "分析", "优化", "总结",
+)
+
+# Read-only-safe subset of the CJK / prefix vocabulary. Used by fast_route
+# under read-only mode: a user-typed "查看 README" should still skip the
+# planner LLM round-trip even when mutation isn't allowed; "保存到 a.txt"
+# should not — it can't succeed anyway, and forcing it through the planner
+# lets the LLM render a clean refusal in prose.
+_FAST_TOOL_READONLY_PREFIXES = (
+    "read ", "open ", "inspect ", "list ", "search ", "grep ", "find ",
+    "review ", "audit ", "analyze ", "summarize ",
+    "dir ", "ls ",
+)
+_FAST_TOOL_READONLY_WORDS = (
+    "read", "inspect", "search", "grep", "review", "audit", "analyze",
+)
+_FAST_TOOL_READONLY_CJK = (
+    "查看", "读取", "打开", "列出", "搜索", "查找",
+    "审查", "检查", "分析", "总结",
+)
+
+# Referring expressions that indicate the user is talking about
+# orchestrator-side context the tool-agent does NOT have. When detected,
+# fast_route should defer to the planner so the planner can either resolve
+# the referent inline or hand a richer task description down.
+# (Pure-tool detection still wins when the message is *only* a path/URL.)
+_REFERRING_TOKENS = (
+    "上面", "下面", "刚才", "之前", "上一", "前面",
+    "the above", "the previous", "what you just",
+)
+
 
 def _build_tool_line(name: str, args: dict, *, active: bool) -> Text:
     """Build the `⏺ tool_name  arg` line for a tool call.
@@ -61,7 +118,7 @@ class REPLController:
 
     async def handle_input(self, text: str) -> LoopAction:
         if text.startswith("/"):
-            result = self.commands.handle(text)
+            result = await self.commands.handle(text)
             if result is not None:
                 return result
         return await self._execute_turn(text)
@@ -73,7 +130,6 @@ class REPLController:
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                await self._ensure_planner()
                 plan_input = {"user_input": text}
                 if error_context:
                     plan_input["user_input"] = (
@@ -82,8 +138,13 @@ class REPLController:
                         "Try a different approach or use different tools.]"
                     )
 
-                # -- conversational path streams; tool-dispatch returns silently --
-                plan, streamed = await self._plan_with_streaming(plan_input)
+                fast_plan = None if error_context else self._fast_route(text)
+                if fast_plan is not None:
+                    plan, streamed = fast_plan, False
+                else:
+                    await self._ensure_planner()
+                    # -- conversational path streams; tool-dispatch returns silently --
+                    plan, streamed = await self._plan_with_streaming(plan_input)
                 capability = plan.get("capability", "")
 
                 if not capability:
@@ -103,7 +164,35 @@ class REPLController:
                     if capability == "tool.task":
                         peer_id = "tool-agent"
                         task_text = plan.get("arguments", {}).get("task", text)
-                        extra_meta: dict = {}
+                        # Mint an authz_grant for tool.task — same model the
+                        # skill.* branch already used. Without this, tool-agent's
+                        # ReAct loop was running with the full tool set under
+                        # every permission mode, silently bypassing read-only.
+                        # The grant pins the user's mode; tool-agent filters
+                        # its tools accordingly (see ``tools_for_mode``).
+                        from orchestrator.permission_gate import (
+                            PermissionGate,
+                            PermissionDenied,
+                        )
+                        gate = PermissionGate(
+                            mode=self.state.permission_mode,
+                            hmac_key=self.hmac_key,
+                            trace_id=trace_id,
+                        )
+                        try:
+                            grant = gate.sign(
+                                target_specialist="tool-agent",
+                                tool="tool.task",
+                            )
+                        except PermissionDenied as exc:
+                            self.ui.render_error("Permission Denied", str(exc))
+                            self.state.record_turn(
+                                user_input=text, capability=capability,
+                                owner="tool-agent", observation="",
+                                error=str(exc),
+                            )
+                            return LoopAction.CONTINUE
+                        extra_meta: dict = {"authz_grant": grant}
                     else:
                         peer_id = "skill-agent"
                         # Skills don't take a separate `task` argument — the
@@ -154,9 +243,16 @@ class REPLController:
                             "skill_slug": slug,
                             "authz_grant": grant,
                         }
+                    # Snapshot recent conversation BEFORE the delegation — the
+                    # peer can use it to resolve referring expressions
+                    # ("上面的", "刚才那个", "this") that fast_route would
+                    # otherwise drop on the floor by bypassing the planner.
+                    peer_context = self.state.render_history_for_peer()
                     try:
                         result_text = await self._delegate_to_agent(
-                            peer_id, task_text, trace_id, extra_meta=extra_meta,
+                            peer_id, task_text, trace_id,
+                            extra_meta=extra_meta,
+                            peer_context=peer_context,
                         )
                     except Exception as exc:
                         if attempt < MAX_RETRIES and self._planner is not _stub_planner:
@@ -228,6 +324,72 @@ class REPLController:
         )
         return LoopAction.CONTINUE
 
+    def _fast_route(self, text: str) -> dict | None:
+        """Return a local routing decision for obvious tool-agent tasks.
+
+        The planner LLM is useful for ambiguous chat-vs-tool decisions, but it
+        is also the work hidden behind the initial ``Loading...`` spinner. For
+        requests that clearly need files, URLs, commands, tests, debugging, or
+        repository review, skip that network/model round trip and delegate
+        directly to tool-agent.
+
+        **Mode interaction**: under read-only, only fast-route on read-class
+        verbs/keywords. Write/run-class requests in read-only would just fail
+        at tool-binding time (the model wouldn't have ``write_file`` bound) —
+        but routing them to the planner instead gives the LLM a chance to
+        render a clean refusal explaining how to escalate.
+
+        **Referring expressions**: a message that references prior turns
+        ("上面"/"刚才"/"the above") always goes through the planner so the
+        planner can resolve the referent inline.
+        """
+        if os.environ.get("LANGCHAIN_AGENT_DISABLE_FAST_ROUTE") == "1":
+            return None
+
+        stripped = text.strip()
+        if not stripped:
+            return None
+        if ":" in stripped:
+            cap, _, _arg = stripped.partition(":")
+            if cap.strip() in set(self.router.all_capabilities()):
+                return None
+
+        lower = stripped.lower()
+
+        # Defer to the planner when the message refers to earlier
+        # conversation — only the planner sees session history (the peer
+        # context is now plumbed through, but the planner can also do
+        # inline rewriting which the peer can't).
+        if any(tok in lower or tok in stripped for tok in _REFERRING_TOKENS):
+            return None
+
+        mode = getattr(self.state, "permission_mode", "danger-full-access")
+        prefixes: tuple[str, ...]
+        words: tuple[str, ...]
+        cjk: tuple[str, ...]
+        if mode == "read-only":
+            prefixes = _FAST_TOOL_READONLY_PREFIXES
+            words = _FAST_TOOL_READONLY_WORDS
+            cjk = _FAST_TOOL_READONLY_CJK
+        else:
+            prefixes = _FAST_TOOL_PREFIXES
+            words = _FAST_TOOL_WORDS
+            cjk = _FAST_TOOL_CJK
+
+        should_delegate = (
+            any(marker in lower for marker in _FAST_TOOL_MARKERS)
+            or any(lower.startswith(prefix) for prefix in prefixes)
+            or any(lower.startswith(word) for word in words)
+            or any(word in lower.split() for word in words)
+            or any(word in stripped for word in cjk)
+        )
+        if not should_delegate:
+            return None
+        return {
+            "capability": "tool.task",
+            "arguments": {"task": stripped},
+        }
+
     async def _plan_with_streaming(self, plan_input: dict) -> tuple[dict, bool]:
         """Run the planner, streaming conversational text to the TUI as it arrives.
 
@@ -289,7 +451,7 @@ class REPLController:
 
     async def _delegate_to_agent(
         self, agent_id: str, task: str, trace_id: str,
-        *, extra_meta: dict | None = None,
+        *, extra_meta: dict | None = None, peer_context: str = "",
     ) -> str:
         """Stream an A2A task to a peer agent and render progress in the TUI.
 
@@ -422,7 +584,7 @@ class REPLController:
             if extra_meta:
                 meta.update(extra_meta)
             async for event in delegate_task(
-                peer_id=agent_id, task=task, meta=meta,
+                peer_id=agent_id, task=task, meta=meta, context=peer_context,
             ):
                 etype = event.get("type", "")
 

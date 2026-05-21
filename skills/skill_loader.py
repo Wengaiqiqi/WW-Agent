@@ -19,6 +19,22 @@ class Skill:
     source: str = "project"
     match_keywords: tuple[str, ...] = ()
     requires_env: tuple[str, ...] = ()
+    # Tools the skill declared it needs in ``_meta.json::requiresTools``.
+    #
+    # Three states, with distinct semantics:
+    #   * ``None``              — field absent from _meta.json. The loader
+    #                             will fill the conservative default at
+    #                             grant-mint time (read-class only).
+    #   * empty tuple ``()``    — explicit ``"requiresTools": []`` in
+    #                             _meta.json: skill author says "I need
+    #                             no tools". Honored as-is — no grants
+    #                             will be minted for this skill.
+    #   * non-empty tuple       — explicit list of tools.
+    #
+    # Distinguishing None from empty matters: the previous "falsy ⇒ default"
+    # check silently elevated an explicit-empty declaration to the default
+    # toolset, which was the opposite of what the author meant.
+    requires_tools: tuple[str, ...] | None = None
 
     @property
     def title(self) -> str:
@@ -64,6 +80,15 @@ class Skill:
         return False
 
 
+# Top-level keys ``_meta.json`` is allowed to carry. Unknown keys are
+# logged so authors notice typos ("requireTools" vs "requiresTools") at
+# load time rather than silently inheriting the default toolset.
+_KNOWN_META_KEYS: frozenset[str] = frozenset({
+    "slug", "version", "ownerId", "publishedAt",
+    "matchKeywords", "requiresEnv", "requiresTools",
+})
+
+
 def _load_meta(skill_dir: Path) -> dict[str, Any]:
     """Read _meta.json with logging on failure; returns empty dict on miss."""
     meta_path = skill_dir / "_meta.json"
@@ -74,7 +99,15 @@ def _load_meta(skill_dir: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to parse %s: %s", meta_path, exc)
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if not isinstance(parsed, dict):
+        return {}
+    unknown = set(parsed.keys()) - _KNOWN_META_KEYS
+    if unknown:
+        logger.warning(
+            "Skill %s: unknown keys in _meta.json: %s. Known: %s.",
+            skill_dir.name, sorted(unknown), sorted(_KNOWN_META_KEYS),
+        )
+    return parsed
 
 
 def _load_meta_keywords(skill_dir: Path) -> tuple[str, ...]:
@@ -129,6 +162,78 @@ def _is_requires_env_safe(name: str) -> bool:
     return True
 
 
+# Tools a skill is allowed to declare in ``requiresTools``. A skill that
+# names a tool outside this set is rejected at load time — better than
+# silently granting it. Mirrors the union of every mode's _TOOL_AGENT_MODE_TOOLS
+# plus ``edit_file`` / ``apply_patch`` / ``memory`` (which skills sometimes
+# need but tool-agent's ReAct loop doesn't bind by default).
+_VALID_REQUIRES_TOOLS: frozenset[str] = frozenset({
+    "read_file", "grep_search", "glob_search", "list_directory",
+    "web_search", "web_extract", "web_crawl",
+    "write_file", "edit_file", "apply_patch", "memory",
+    "run_python", "run_command", "clarify",
+})
+
+
+# Default toolset for skills that don't declare ``requiresTools`` in their
+# ``_meta.json``. Read-class only: a skill that legitimately needs to shell
+# out should say so explicitly. This downgrades the previous behavior — where
+# ``workspace-write`` gave every skill ``*`` access — to a least-privilege
+# model where the skill author opts INTO the dangerous tools they need.
+_DEFAULT_REQUIRES_TOOLS: tuple[str, ...] = (
+    "read_file", "grep_search", "glob_search", "list_directory",
+    "web_search", "web_extract", "web_crawl", "clarify",
+)
+
+
+def _load_meta_requires_tools(skill_dir: Path) -> tuple[str, ...] | None:
+    """Load and validate ``requiresTools`` from the skill's ``_meta.json``.
+
+    Returns ``None`` when the field is absent (caller maps to the default
+    toolset). Returns ``()`` when the author explicitly wrote
+    ``"requiresTools": []`` (caller honors as "skill needs no tools").
+    Returns the validated subset otherwise.
+    """
+    meta = _load_meta(skill_dir)
+    if "requiresTools" not in meta:
+        return None
+    raw = meta["requiresTools"]
+    if raw is None:
+        return None  # explicit null also means "fall back to default"
+    if not isinstance(raw, list):
+        logger.warning(
+            "Skill %s: requiresTools should be a list, got %s — ignoring.",
+            skill_dir.name, type(raw).__name__,
+        )
+        return None
+    accepted: list[str] = []
+    for entry in raw:
+        if not entry:
+            continue
+        name = str(entry)
+        if name in _VALID_REQUIRES_TOOLS:
+            accepted.append(name)
+        else:
+            logger.warning(
+                "Skill %s: requiresTools entry %r unknown — rejected. "
+                "Valid tools: %s",
+                skill_dir.name, name, sorted(_VALID_REQUIRES_TOOLS),
+            )
+    return tuple(accepted)
+
+
+def effective_requires_tools(skill: "Skill") -> frozenset[str]:
+    """Return the tools the skill is allowed to invoke via tool-agent.
+
+    A skill that omits ``requiresTools`` (``None``) gets the read-class
+    default. An explicit empty list is honored as "skill needs no tools"
+    — returns an empty set so ``_mint_tool_grant`` will refuse any call.
+    """
+    if skill.requires_tools is None:
+        return frozenset(_DEFAULT_REQUIRES_TOOLS)
+    return frozenset(skill.requires_tools)
+
+
 def _load_meta_requires_env(skill_dir: Path) -> tuple[str, ...]:
     """Load requiresEnv from the skill's _meta.json file.
 
@@ -162,10 +267,40 @@ def _load_meta_requires_env(skill_dir: Path) -> tuple[str, ...]:
     return tuple(accepted)
 
 
+# Process-level cache for ``load_skills``. The skill directory is read on
+# every ``_mint_tool_grant`` call to look up the calling skill's
+# requiresTools; without caching, a skill that makes 10 tool calls reads N
+# SKILL.md + N _meta.json files 10 times. Skills are static within a
+# subprocess lifetime, so caching by directory mtime is safe.
+#
+# Keyed by (resolved path, mtime_ns of the directory). Dir mtime changes
+# whenever a child file is added/removed/renamed — close enough for our
+# "skills don't change mid-session" assumption. Content edits to existing
+# SKILL.md don't invalidate, which is fine for production (skill authors
+# don't hot-reload) but a test that mutates a SKILL.md needs to call
+# ``invalidate_skills_cache`` explicitly.
+_skills_cache: dict[tuple[str, int], list[Skill]] = {}
+
+
+def invalidate_skills_cache() -> None:
+    """Drop the cached skill list. For tests that mutate ``skills/`` mid-run."""
+    _skills_cache.clear()
+
+
 def load_skills(skills_dir: Path = SKILLS_DIR) -> list[Skill]:
-    """Load local skills from skills/<name>/SKILL.md."""
+    """Load local skills from skills/<name>/SKILL.md (cached per process)."""
     if not skills_dir.exists():
         return []
+
+    try:
+        cache_key = (str(skills_dir.resolve()), skills_dir.stat().st_mtime_ns)
+    except OSError:
+        cache_key = None  # disable cache on stat failure
+
+    if cache_key is not None:
+        cached = _skills_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     loaded: list[Skill] = []
     for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
@@ -175,6 +310,7 @@ def load_skills(skills_dir: Path = SKILLS_DIR) -> list[Skill]:
         content = content.replace("${SKILL_DIR}", skill_file.parent.as_posix())
         keywords = _load_meta_keywords(skill_file.parent)
         requires_env = _load_meta_requires_env(skill_file.parent)
+        requires_tools = _load_meta_requires_tools(skill_file.parent)
         loaded.append(
             Skill(
                 name=skill_file.parent.name,
@@ -182,8 +318,12 @@ def load_skills(skills_dir: Path = SKILLS_DIR) -> list[Skill]:
                 content=content,
                 match_keywords=keywords,
                 requires_env=requires_env,
+                requires_tools=requires_tools,
             )
         )
+
+    if cache_key is not None:
+        _skills_cache[cache_key] = loaded
     return loaded
 
 

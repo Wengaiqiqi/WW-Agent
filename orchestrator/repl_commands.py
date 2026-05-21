@@ -11,8 +11,14 @@ class ReplCommandHandler:
         self.host = host
         self.router = router
 
-    def handle(self, line: str) -> LoopAction | None:
-        """Returns LoopAction for recognized slash commands, None for non-commands."""
+    async def handle(self, line: str) -> LoopAction | None:
+        """Returns LoopAction for recognized slash commands, None for non-commands.
+
+        Async because ``/gateway`` opens a picker that needs to share the
+        REPL event loop (so a running gateway task can keep ticking while
+        the user navigates the menu). Every other command stays sync and
+        is just called directly.
+        """
         command = line.split(maxsplit=1)[0].lower()
         if not command.startswith("/"):
             return None
@@ -42,7 +48,7 @@ class ReplCommandHandler:
             if command == "/compact":
                 return self._cmd_compact()
             if command == "/gateway":
-                return self._cmd_gateway()
+                return await self._cmd_gateway()
             self.ui.render_command_error(
                 "Unknown command",
                 f"{command} — type /help for available commands.",
@@ -214,11 +220,16 @@ class ReplCommandHandler:
         ("qq", "QQ Official Bot"),
     )
 
-    def _cmd_gateway(self) -> LoopAction:
+    async def _cmd_gateway(self) -> LoopAction:
         """Two-step menu just like /model: platform -> action -> execute, loop.
 
         The menu redraws after every action so the user sees fresh status
         without re-typing the command. Esc / q exits back to the REPL.
+
+        Async on purpose: the inner pickers use ``interactive_select_async``
+        so any gateway task started here keeps ticking while the user
+        navigates the menu (the synchronous picker variant would freeze
+        the REPL event loop on a worker-thread join).
         """
         from orchestrator.picker import can_use_interactive_picker
 
@@ -232,25 +243,32 @@ class ReplCommandHandler:
 
         default_platform_idx = 0
         while True:
-            platform, default_platform_idx = self._gw_pick_platform(default_platform_idx)
+            platform, default_platform_idx = await self._gw_pick_platform(
+                default_platform_idx,
+            )
             if platform is None:
                 return LoopAction.CONTINUE
-            keep_open = self._gw_platform_menu(platform)
+            keep_open = await self._gw_platform_menu(platform)
             if not keep_open:
                 return LoopAction.CONTINUE
 
     # -- menus ------------------------------------------------------------
 
-    def _gw_pick_platform(self, default_idx: int) -> tuple[str | None, int]:
-        from orchestrator.picker import interactive_select
+    async def _gw_pick_platform(
+        self, default_idx: int,
+    ) -> tuple[str | None, int]:
+        from orchestrator.picker import interactive_select_async
 
         rows: list[tuple[str, str]] = []
         for slug, label in self._GATEWAY_PLATFORMS:
             primary, secondary = self._gw_platform_row(slug, label)
             rows.append((primary, secondary))
 
-        self.ui.console.print()
-        idx = interactive_select(
+        # Fresh canvas for the platform list each time the user returns to
+        # it (e.g., after "Back to platform list"). Same rationale as
+        # ``_gw_platform_menu``.
+        self.ui.clear()
+        idx = await interactive_select_async(
             "Chat Platform Gateways",
             rows,
             default_index=default_idx,
@@ -260,9 +278,9 @@ class ReplCommandHandler:
             return None, default_idx
         return self._GATEWAY_PLATFORMS[idx][0], idx
 
-    def _gw_platform_menu(self, platform: str) -> bool:
+    async def _gw_platform_menu(self, platform: str) -> bool:
         """Action menu for one platform. Returns True to redraw the platform list."""
-        from orchestrator.picker import interactive_select
+        from orchestrator.picker import interactive_select_async
 
         while True:
             from gateway import credentials as gw_creds
@@ -274,6 +292,10 @@ class ReplCommandHandler:
             configured = bool(cfg)
 
             label = dict(self._GATEWAY_PLATFORMS)[platform]
+            # Wipe the previous menu / overview / picker remnants so each
+            # iteration of the action loop starts on a clean screen instead
+            # of stacking on top of the last one.
+            self.ui.clear()
             self._gw_print_overview(platform, label, cfg, mgr)
 
             actions: list[tuple[str, str, str]] = []
@@ -294,7 +316,7 @@ class ReplCommandHandler:
 
             rows = [(label, hint) for _, label, hint in actions]
             self.ui.console.print()
-            idx = interactive_select(
+            idx = await interactive_select_async(
                 f"{label} -- choose action",
                 rows,
                 default_index=0,

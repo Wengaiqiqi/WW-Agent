@@ -314,3 +314,103 @@ async def test_run_yields_done_when_exception_after_answer_already_streamed():
     assert "error" not in types, f"late exception leaked as error: {events}"
     assert types[-1] == "done", types
     assert events[-1]["text"] == "The answer is 42."
+
+
+def test_prompt_for_state_without_context_emits_only_static_system_prompt():
+    """No orchestrator context → exactly one SystemMessage, the static one.
+
+    Regression target: appending an empty/whitespace context block as a
+    second SystemMessage would silently inflate every tool-agent prompt
+    with a meaningless "Recent turns: <none>" header.
+    """
+    from langchain_core.messages import HumanMessage as _HM, SystemMessage
+
+    loop = ToolAgentLoop(llm=None, tools=[], context="   ")
+    prompt = loop._prompt_for_state({"messages": [_HM(content="hi")]})
+
+    sysmsgs = [m for m in prompt if isinstance(m, SystemMessage)]
+    assert len(sysmsgs) == 1
+    assert "workspace + web specialist" in sysmsgs[0].content
+    # User message must still be present and last.
+    assert isinstance(prompt[-1], _HM)
+
+
+def test_prompt_for_state_with_context_appends_second_system_message():
+    """Non-empty context → two SystemMessages; the second carries the
+    orchestrator-supplied conversation snapshot. The peer needs to see
+    referring-expression material *as background*, not as a user turn."""
+    from langchain_core.messages import HumanMessage as _HM, SystemMessage
+
+    context = (
+        "User: 写一首诗\n"
+        "orchestrator: 窗外是一棵老槐树。\n\n"
+        "User: 保存到 a.txt"
+    )
+    loop = ToolAgentLoop(llm=None, tools=[], context=context)
+    prompt = loop._prompt_for_state({"messages": [_HM(content="保存到 a.txt")]})
+
+    sysmsgs = [m for m in prompt if isinstance(m, SystemMessage)]
+    assert len(sysmsgs) == 2
+    assert "workspace + web specialist" in sysmsgs[0].content
+    # The conversation snapshot must appear verbatim in the second message
+    # so the model can resolve 「上面的」/「这个」 in the user's task.
+    assert "窗外是一棵老槐树。" in sysmsgs[1].content
+    assert "Conversation context" in sysmsgs[1].content
+    # Explicit guard against the model mistaking the snapshot for live
+    # instructions to act on.
+    assert "background" in sysmsgs[1].content.lower()
+
+
+def test_prompt_for_state_omits_write_and_shell_under_read_only_toolset():
+    """When the bound tool list excludes write/shell tools, the system
+    prompt must also stop mentioning them — otherwise the model reads
+    'you can run_command' and tries to call a tool that isn't bound."""
+    from langchain_core.messages import HumanMessage as _HM, SystemMessage
+    from langchain_core.tools import StructuredTool
+
+    async def _noop(**_):  # pragma: no cover - tool body never runs in unit tests
+        return ""
+
+    # Construct the same read-only-mode tool set ``tools_for_mode`` would
+    # produce — just enough to drive the prompt builder.
+    read_only_tools = [
+        StructuredTool(name=n, description=n, args_schema={
+            "type": "object", "properties": {}, "required": [],
+        }, coroutine=_noop)
+        for n in ("read_file", "grep_search", "list_directory",
+                  "web_search", "web_extract", "clarify")
+    ]
+    loop = ToolAgentLoop(llm=None, tools=read_only_tools)
+    prompt = loop._prompt_for_state({"messages": [_HM(content="read X")]})
+
+    sysmsgs = [m for m in prompt if isinstance(m, SystemMessage)]
+    body = sysmsgs[0].content
+
+    # Bound tools appear in the Tools section.
+    assert "`read_file`" in body
+    assert "`web_search`" in body
+    # Unbound tools must NOT appear in the Tools section description list.
+    # (They CAN appear in the "NOT available" mode-restriction note, which is
+    # the desired behavior — it tells the model what's off-limits.)
+    tools_section = body.split("## Environment")[0]
+    assert "`run_command`" not in tools_section, tools_section
+    assert "`write_file`" not in tools_section, tools_section
+    # And the mode-restriction note is present, naming the unavailable tools.
+    assert "Mode-restricted toolset" in body
+    assert "run_command" in body  # somewhere — in the restriction note
+    assert "write_file" in body
+    # The pip-install hint is gone when run_command isn't bound.
+    assert "pip install" not in body
+
+
+def test_prompt_for_state_full_mode_includes_everything():
+    """Default (no mode threaded) should still mention every tool — the
+    legacy single-agent loop and unit tests rely on this."""
+    from langchain_core.messages import HumanMessage as _HM, SystemMessage
+
+    loop = ToolAgentLoop(llm=None, tools=[])  # empty → falls back to SYSTEM_PROMPT
+    prompt = loop._prompt_for_state({"messages": [_HM(content="x")]})
+    body = next(m for m in prompt if isinstance(m, SystemMessage)).content
+    assert "`run_command`" in body
+    assert "`write_file`" in body
+    assert "`read_file`" in body

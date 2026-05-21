@@ -29,7 +29,11 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-_DEFAULT_TIMEOUT = 15
+# 30s (was 15s): 15s was too tight for users behind cross-border links to
+# duckduckgo.com / tavily.com — the call would routinely time out and the
+# user saw "web_search always fails". 30s still bounds the tool round trip
+# below the orchestrator's status-spinner attention budget.
+_DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 2_000_000
 
 
@@ -166,12 +170,20 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIM
 
 
 def _decode(body: bytes) -> str:
-    for enc in ("utf-8", "gbk", "latin-1"):
-        try:
-            return body.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return body.decode("utf-8", errors="replace")
+    """Decode response bytes, honoring the ``Content-Type`` charset hint where
+    possible. The previous heuristic (``utf-8 → gbk → latin-1``) silently
+    mis-decoded Korean/Russian pages into plausible-looking Chinese — better
+    to fall back to ``utf-8 errors='replace'`` which produces ``�``
+    placeholders that downstream prompts can see and ignore.
+
+    Callers that hold the ``Content-Type`` header can pre-pass it via
+    ``_decode_with_charset`` (kept private until a need for charset-aware
+    decoding actually surfaces — most pages serve UTF-8 today).
+    """
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +241,11 @@ def _search_tavily(query: str, limit: int, api_key: str) -> List[dict]:
         headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as resp:  # noqa: S310
+    # Use the shared OPENER so a Tavily-side compromise (or DNS hijack)
+    # can't 30x-redirect the request — with API key in the headers — to a
+    # private/loopback address. The seed URL is the known-good public host;
+    # SafeRedirectHandler covers the rest.
+    with OPENER.open(req, timeout=_DEFAULT_TIMEOUT) as resp:  # noqa: S310
         data = json.loads(resp.read().decode("utf-8"))
     return [
         {

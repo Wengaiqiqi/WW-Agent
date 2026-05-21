@@ -14,6 +14,9 @@ def test_orchestrator_dispatches_read_file_to_tool_agent(tmp_path):
     env["LANGCHAIN_AGENT_MODEL"] = "mock"
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
     env["PYTHONIOENCODING"] = "utf-8"
+    # ``_wrap_read_file`` now enforces the workspace boundary; widen it to the
+    # tmp_path so the e2e test's fixture file is in-scope.
+    env["LANGCHAIN_AGENT_WORKSPACE_ROOT"] = str(tmp_path)
 
     # Phase-5 stub planner parses 'CAPABILITY:ARG'
     prompt = f"read_file:{target}"
@@ -36,6 +39,7 @@ def test_multi_agent_repl_dispatches_turn_and_exits(tmp_path):
     env["LANGCHAIN_AGENT_MODEL"] = "mock"
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
     env["PYTHONIOENCODING"] = "utf-8"
+    env["LANGCHAIN_AGENT_WORKSPACE_ROOT"] = str(tmp_path)
 
     proc = subprocess.run(
         [sys.executable, "cli.py"],

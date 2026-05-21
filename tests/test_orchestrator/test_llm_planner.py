@@ -6,32 +6,35 @@ from agents.shared.mock_chat_model import MockChatModel
 
 
 def test_llm_planner_emits_structured_decision():
-    llm = MockChatModel(responses=[
-        '{"capability": "read_file", "arguments": {"path": "README.md"}}'
-    ])
-    planner = LLMPlanner(llm=llm, available_capabilities=["read_file", "skill.ppt-master"])
+    llm = MockChatModel(
+        responses=['{"capability": "read_file", "arguments": {"path": "README.md"}}']
+    )
+    planner = LLMPlanner(
+        llm=llm,
+        available_capabilities=["read_file", "skill.baidu-ecommerce-search"],
+    )
     decision = planner({"user_input": "read the readme", "trace_id": "t"})
     assert decision["capability"] == "read_file"
     assert decision["arguments"]["path"] == "README.md"
 
 
 def test_llm_planner_strips_code_fences():
-    llm = MockChatModel(responses=[
-        '```json\n{"capability": "read_file", "arguments": {"path": "x"}}\n```'
-    ])
+    llm = MockChatModel(
+        responses=['```json\n{"capability": "read_file", "arguments": {"path": "x"}}\n```']
+    )
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
     decision = planner({"user_input": "read x", "trace_id": "t"})
     assert decision["capability"] == "read_file"
 
 
 def test_llm_planner_returns_conversational_response():
-    llm = MockChatModel(responses=[
-        '{"capability": "", "response": "你好！我是智能助手，有什么可以帮你的？"}'
-    ])
+    llm = MockChatModel(
+        responses=['{"capability": "", "response": "Hello, how can I help?"}']
+    )
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
-    decision = planner({"user_input": "你好", "trace_id": "t"})
+    decision = planner({"user_input": "hello", "trace_id": "t"})
     assert decision["capability"] == ""
-    assert "你好" in decision["response"]
+    assert "Hello" in decision["response"]
 
 
 def test_llm_planner_raises_on_empty_llm_response():
@@ -46,10 +49,10 @@ def test_llm_planner_raises_on_empty_llm_response():
 
 def test_llm_planner_wraps_non_json_as_conversational():
     """Creative writing / prose responses are wrapped as conversational, not rejected."""
-    essay = "窗外的风景真美。春去秋来，我总爱在窗边看风景。"
+    essay = "The view outside the window is beautiful."
     llm = MockChatModel(responses=[essay])
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
-    decision = planner({"user_input": "写一个作文", "trace_id": "t"})
+    decision = planner({"user_input": "write an essay", "trace_id": "t"})
     assert decision["capability"] == ""
     assert decision["response"] == essay
 
@@ -65,9 +68,7 @@ def test_llm_planner_sync_wraps_malformed_json_as_conversational():
 
 @pytest.mark.asyncio
 async def test_llm_planner_astream_plan_falls_back_to_tool_task_on_malformed_json():
-    """When the planner emits broken JSON during streaming, never dump the raw
-    bytes to the user. Hand the original request to tool-agent instead."""
-    # Long content with a literal newline inside a JSON string — invalid JSON.
+    """Broken streaming JSON is routed to tool.task instead of leaking to the UI."""
     broken = (
         '{"capability": "write_file", "arguments": {"path": "x.txt", "content": "line1\n'
         'line2"}}'
@@ -90,13 +91,13 @@ async def test_llm_planner_astream_plan_falls_back_to_tool_task_on_malformed_jso
 
 @pytest.mark.asyncio
 async def test_llm_planner_astream_plan_streams_prose():
-    essay = "窗外有一只小鸟在唱歌，阳光透过玻璃洒在书桌上。"
+    essay = "The view outside the window is beautiful."
     llm = MockChatModel(responses=[essay], chunk_size=4)
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
 
     text_chunks: list[str] = []
     decision: dict = {}
-    async for event in planner.astream_plan({"user_input": "写一篇短文"}):
+    async for event in planner.astream_plan({"user_input": "write a short essay"}):
         if event["type"] == "text":
             text_chunks.append(event["chunk"])
         elif event["type"] == "decision":
@@ -126,14 +127,103 @@ async def test_llm_planner_astream_plan_suppresses_json_chunks():
     assert decision["arguments"]["path"] == "x.md"
 
 
+# ---------------------------------------------------------------------------
+# <think> / <thinking> / <reasoning> block stripping.
+# ---------------------------------------------------------------------------
+# Reasoning models (DeepSeek R1, Qwen-thinking, MiMo, Gemini reasoning)
+# emit thought blocks BEFORE the actual response. Without stripping, the
+# leading "<" makes the streaming classifier route the whole reply as prose
+# and the eventual JSON dispatch silently leaks to the UI instead of being
+# dispatched.
+
+
+def test_strip_think_blocks_removes_closed_pairs():
+    raw = "<think>plan: read</think>{\"capability\": \"read_file\"}"
+    assert LLMPlanner._strip_think_blocks(raw) == '{"capability": "read_file"}'
+
+
+def test_strip_think_blocks_handles_multiple_blocks():
+    raw = "<think>one</think>middle<thinking>two</thinking>tail"
+    assert LLMPlanner._strip_think_blocks(raw) == "middletail"
+
+
+def test_strip_think_blocks_is_case_insensitive():
+    raw = "<THINK>x</THINK>after"
+    assert LLMPlanner._strip_think_blocks(raw) == "after"
+
+
+def test_strip_code_fences_runs_think_strip_first():
+    """A common shape from reasoning models: <think>...</think> followed
+    by a fenced ```json block. The pipeline must strip the think block AND
+    the fence before the planner classifier sees the JSON."""
+    raw = "<think>let's pick the read tool</think>\n```json\n{\"capability\": \"read_file\"}\n```"
+    cleaned = LLMPlanner._strip_code_fences(raw)
+    assert cleaned == '{"capability": "read_file"}'
+
+
+@pytest.mark.asyncio
+async def test_astream_plan_with_think_block_routes_as_json():
+    """Regression for the streaming classifier: a leading <think>...</think>
+    used to flip mode to 'prose' (because the first non-whitespace token was
+    '<'), and the eventual JSON would be rendered as plain text instead of
+    dispatched. After the fix, the think block is invisible to the
+    classifier and the JSON path wins."""
+    response = "<think>user wants the readme</think>{\"capability\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}"
+    llm = MockChatModel(responses=[response], chunk_size=4)
+    planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
+
+    text_chunks: list[str] = []
+    decision: dict = {}
+    async for event in planner.astream_plan({"user_input": "read it"}):
+        if event["type"] == "text":
+            text_chunks.append(event["chunk"])
+        elif event["type"] == "decision":
+            decision = event["decision"]
+
+    assert text_chunks == [], (
+        "think-tag-prefixed JSON must NOT bleed into the UI; got chunks: "
+        f"{text_chunks!r}"
+    )
+    assert decision["capability"] == "read_file"
+    assert decision["arguments"]["path"] == "README.md"
+
+
+@pytest.mark.asyncio
+async def test_astream_plan_handles_two_consecutive_think_blocks():
+    """The substring-containment state machine missed this case: a model
+    emits one think block, opens another mid-prose. With count-based
+    matching, the second open is detected and the partial second block
+    doesn't leak into the user-visible stream."""
+    # Two complete think blocks interleaved with prose. After stripping,
+    # only the prose tails ("hello " and " world") should survive.
+    response = "<think>first thought</think>hello <thinking>second thought</thinking>world"
+    llm = MockChatModel(responses=[response], chunk_size=5)
+    planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
+
+    text_chunks: list[str] = []
+    decision: dict = {}
+    async for event in planner.astream_plan({"user_input": "chat"}):
+        if event["type"] == "text":
+            text_chunks.append(event["chunk"])
+        elif event["type"] == "decision":
+            decision = event["decision"]
+
+    combined = "".join(text_chunks)
+    # The final response is prose, so SOMETHING is streamed. What MUST NOT
+    # appear is the raw "thinking" substring — the user should never see the
+    # model's scratch work.
+    assert "first thought" not in combined, combined
+    assert "second thought" not in combined, combined
+    # And the final decision is conversational (no capability dispatched).
+    assert decision.get("capability") == ""
+
+
 def test_llm_planner_synthesize_returns_natural_response():
-    llm = MockChatModel(responses=[
-        "文件内容为：\"你在干什么\"，只有1行。用户问的是查看文件，已成功读取。"
-    ])
+    llm = MockChatModel(responses=['The file says: "hello".'])
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
     result = planner.synthesize(
-        user_input="查看你好.txt",
+        user_input="read hello.txt",
         capability="read_file",
-        tool_result='{"type":"text","file":{"filePath":"你好.txt","content":"你在干什么\n","numLines":1}}',
+        tool_result='{"type":"text","file":{"filePath":"hello.txt","content":"hello\\n","numLines":1}}',
     )
-    assert "你在干什么" in result
+    assert "hello" in result

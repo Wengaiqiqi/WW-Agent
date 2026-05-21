@@ -18,6 +18,17 @@ import pytest
 from tool import tool_vision
 
 
+@pytest.fixture(autouse=True)
+def _widen_workspace(tmp_path, monkeypatch):
+    """Most vision tests stash fixtures in ``tmp_path`` and pass absolute
+    paths to ``vision_analyze``. Since the wrapper now enforces the
+    workspace boundary (security fix — see #37), widen the boundary to
+    ``tmp_path`` for the whole file. Tests that need a NARROWER workspace
+    (e.g. the explicit out-of-workspace refusal test) set the env var
+    again inside the test."""
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
+
+
 # ---------------------------------------------------------------------------
 # Fake HTTP layer
 # ---------------------------------------------------------------------------
@@ -122,7 +133,12 @@ def test_validate_image_url_rejects_other_schemes():
 # ---------------------------------------------------------------------------
 
 
-def test_load_image_from_local_file(tmp_path):
+def test_load_image_from_local_file(tmp_path, monkeypatch):
+    # ``_load_image_as_data_url`` now enforces the workspace boundary on
+    # local paths to prevent prompt-injected exfiltration of ``~/.ssh/id_rsa``
+    # & friends via base64-into-LLM-payload. Widen the sandbox to tmp_path
+    # so the test fixture is in-scope.
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
     path = tmp_path / "img.png"
     path.write_bytes(_PNG_BYTES)
     data_url = tool_vision._load_image_as_data_url(str(path))
@@ -131,17 +147,33 @@ def test_load_image_from_local_file(tmp_path):
     assert decoded == _PNG_BYTES
 
 
-def test_load_image_from_missing_local_file(tmp_path):
+def test_load_image_from_missing_local_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
     with pytest.raises(FileNotFoundError):
         tool_vision._load_image_as_data_url(str(tmp_path / "nope.png"))
 
 
 def test_load_image_local_size_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr(tool_vision, "_MAX_DOWNLOAD_BYTES", 100)
     path = tmp_path / "big.png"
     path.write_bytes(_PNG_BYTES + b"\x00" * 200)
     with pytest.raises(ValueError, match="too large"):
         tool_vision._load_image_as_data_url(str(path))
+
+
+def test_load_image_outside_workspace_is_refused(tmp_path, monkeypatch):
+    """Regression: vision used to read any local path. After the fix, a
+    path outside ``LANGCHAIN_AGENT_WORKSPACE_ROOT`` is refused — preventing
+    a prompt-injected ``vision_analyze image="C:\\Users\\you\\.ssh\\id_rsa"``
+    from sneaking sensitive bytes into the LLM via base64."""
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(_PNG_BYTES)
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(inside))
+    with pytest.raises(PermissionError, match="outside workspace"):
+        tool_vision._load_image_as_data_url(str(outside))
 
 
 # ---------------------------------------------------------------------------

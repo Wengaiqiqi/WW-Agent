@@ -1,13 +1,13 @@
-import pytest
+﻿import pytest
 from orchestrator.router import CapabilityRouter, RoutingError
 
 
 def test_router_resolves_unique_capability():
     r = CapabilityRouter()
     r.register("tool-agent", ["read_file", "write_file"])
-    r.register("skill-agent", ["ppt-master"])
+    r.register("skill-agent", ["baidu-ecommerce-search"])
     assert r.resolve("read_file") == "tool-agent"
-    assert r.resolve("ppt-master") == "skill-agent"
+    assert r.resolve("baidu-ecommerce-search") == "skill-agent"
 
 
 def test_router_raises_on_unknown_capability():

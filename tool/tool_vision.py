@@ -99,8 +99,16 @@ def _load_image_as_data_url(source: str) -> str:
             raise ValueError(f"Image too large (> {_MAX_DOWNLOAD_BYTES} bytes)")
         mime = _detect_mime(data, fallback_suffix=Path(parsed.path).suffix)
     else:
-        path = Path(source).expanduser()
-        if not path.exists() or not path.is_file():
+        # Run the local path through the workspace-boundary check so a
+        # prompt-injected ``vision_analyze image="C:\Users\xxx\.ssh\id_rsa"``
+        # can't exfiltrate arbitrary files by base64-encoding them into an
+        # LLM payload. Matches the policy enforced by the file_ops wrappers.
+        # ``LANGCHAIN_AGENT_WORKSPACE_ROOT`` widens the sandbox for tests
+        # and operators who legitimately need to read images outside cwd.
+        from tool.tool_file_ops import resolve_workspace_path
+
+        path = resolve_workspace_path(str(Path(source).expanduser()))
+        if not path.is_file():
             raise FileNotFoundError(f"Image not found: {source}")
         if path.stat().st_size > _MAX_DOWNLOAD_BYTES:
             raise ValueError(f"Image too large (> {_MAX_DOWNLOAD_BYTES} bytes)")

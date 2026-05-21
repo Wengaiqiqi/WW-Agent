@@ -30,3 +30,12 @@ Thumbs.db
 /agent/
 /*.docx
 /yanghui_triangle.py
+
+# Scratch and legacy code kept locally for reference but not part of the
+# shipped surface. ``try/`` is a sandbox for one-off experiments; ``legacy/``
+# preserves the pre-multi-agent in-process loop for comparison. Both have
+# been showing up in `git status` noise — gitignore them and surface them
+# explicitly when someone actually intends to commit.
+/try/
+/legacy/
+/.mypy_cache/

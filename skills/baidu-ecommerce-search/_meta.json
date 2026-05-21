@@ -29,5 +29,9 @@
   "requiresEnv": [
     "BAIDU_EC_SEARCH_TOKEN",
     "BAIDU_EC_SEARCH_QPS"
+  ],
+  "requiresTools": [
+    "run_command",
+    "read_file"
   ]
 }

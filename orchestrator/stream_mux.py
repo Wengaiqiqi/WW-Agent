@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sys
+from collections import OrderedDict
 from typing import TextIO
 
 
@@ -15,6 +16,13 @@ _AGENT_TAG = {
 }
 
 
+# Cap on retained per-(agent, trace) line-start state. Each turn mints a
+# fresh trace_id, so without a cap a multi-day session would grow this dict
+# by one entry per turn forever. 256 entries is well past any plausible
+# in-flight overlap and the LRU eviction is O(1) on each emit.
+_MAX_TRACE_ENTRIES = 256
+
+
 class StreamMux:
     """Writes tagged chunks to the terminal. Each line start gets a tag based
     on which agent produced it; mid-line continuations are NOT re-tagged."""
@@ -22,8 +30,9 @@ class StreamMux:
     def __init__(self, out: TextIO | None = None):
         self._out = out or sys.stdout
         # Track per-(agent_id, trace_id) whether the last char was a newline,
-        # so we know to prepend a tag on the next chunk.
-        self._at_line_start: dict[tuple[str, str], bool] = {}
+        # so we know to prepend a tag on the next chunk. Bounded LRU so a
+        # long-lived session doesn't accumulate one entry per turn forever.
+        self._at_line_start: OrderedDict[tuple[str, str], bool] = OrderedDict()
 
     def emit(self, *, agent_id: str, trace_id: str, chunk: str) -> None:
         key = (agent_id, trace_id)
@@ -37,4 +46,8 @@ class StreamMux:
             self._out.write(line)
             at_start = line.endswith("\n")
         self._at_line_start[key] = at_start
+        # LRU eviction: move-to-end on touch, evict oldest if over cap.
+        self._at_line_start.move_to_end(key)
+        while len(self._at_line_start) > _MAX_TRACE_ENTRIES:
+            self._at_line_start.popitem(last=False)
         self._out.flush()

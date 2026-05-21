@@ -305,11 +305,29 @@ async def _run_turn_locked(
     user_id: str = "",
 ) -> str:
     """Orchestrator-bootstrap-and-dispatch core. Caller holds the lock."""
+    from pathlib import Path
+
     from gateway import session_store
 
     # Snapshot env BEFORE the try so the finally has a consistent baseline
     # even if anything below raises.
     prev_user_env = os.environ.get("LANGCHAIN_AGENT_MEMORY_USER")
+
+    # Snapshot peers.json BEFORE bootstrap. The gateway's per-turn
+    # MCPHost.spawn writes its subprocesses' a2a URLs to the shared
+    # .agent/runtime/peers.json -- which is exactly the file the REPL's
+    # ``delegate_task`` reads later to find ITS OWN tool-agent. After the
+    # gateway turn we kill our subprocesses, but peers.json keeps pointing
+    # at the dead URLs -- the REPL then fails with "All connection
+    # attempts failed" on the next /tools or tool-task request. Save now,
+    # restore in finally.
+    peers_path = Path(".agent/runtime/peers.json")
+    saved_peers: Optional[str] = None
+    try:
+        if peers_path.exists():
+            saved_peers = peers_path.read_text(encoding="utf-8")
+    except OSError:
+        saved_peers = None
 
     hmac_key = secrets.token_urlsafe(32)
     host = MCPHost(hmac_key=hmac_key)
@@ -355,6 +373,16 @@ async def _run_turn_locked(
         if stop_tail is not None:
             await stop_tail()
         await host.shutdown_all()
+        # Restore peers.json to whatever the REPL bootstrap left there
+        # (or remove it entirely if there wasn't one to begin with). See
+        # the "Snapshot peers.json" comment above for why this matters.
+        try:
+            if saved_peers is not None:
+                peers_path.write_text(saved_peers, encoding="utf-8")
+            elif peers_path.exists():
+                peers_path.unlink()
+        except OSError:
+            pass
         # Persist the turn even when the reply was an error -- a future turn
         # might still want to refer to it ("you said you couldn't do that").
         if session_key and reply_text:

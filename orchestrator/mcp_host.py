@@ -40,6 +40,10 @@ _OS_PASSTHROUGH = {
     # App config (not secrets)
     "LANGCHAIN_AGENT_MODEL", "LANGCHAIN_AGENT_CONFIG_DIR",
     "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+    # WORKSPACE_ROOT controls the sandbox tool-agent applies to file ops.
+    # Must reach the subprocess; otherwise tool-agent falls back to its
+    # own ``os.getcwd()`` and the orchestrator's intended boundary is lost.
+    "LANGCHAIN_AGENT_WORKSPACE_ROOT",
 }
 
 

@@ -162,7 +162,7 @@ async def test_tool_results_are_fed_back_as_user_role(monkeypatch):
     ``skill LLM error: 'tool_call_id'``. Tool results must therefore come
     back as ``role: user`` so all providers accept them."""
 
-    async def fake_remote(tool_name, arguments, meta):
+    async def fake_remote(tool_name, arguments, meta, *, slug=None):
         return "RESULT-V"
 
     monkeypatch.setattr(skill_exec, "_call_remote_tool", fake_remote)
@@ -214,7 +214,7 @@ async def test_streaming_emits_tool_call_and_tool_result(monkeypatch):
     """tool_calls envelope → orchestrator-visible tool_call / tool_result events,
     routed through a fake peer-tool stub so the test stays in-process."""
 
-    async def fake_remote(tool_name, arguments, meta):
+    async def fake_remote(tool_name, arguments, meta, *, slug=None):
         assert tool_name == "read_file"
         assert arguments == {"path": "x.txt"}
         return "FILE-CONTENT"
@@ -254,7 +254,7 @@ async def test_streaming_emits_diagnostic_when_iteration_cap_exhausted(monkeypat
     # produce a `final`.
     monkeypatch.setattr(skill_exec, "MAX_ITERATIONS", 3)
 
-    async def fake_remote(tool_name, arguments, meta):
+    async def fake_remote(tool_name, arguments, meta, *, slug=None):
         return {"ok": True}
 
     monkeypatch.setattr(skill_exec, "_call_remote_tool", fake_remote)

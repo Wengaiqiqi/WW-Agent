@@ -213,3 +213,41 @@ def interactive_select(
         )
     )
     return result[0]
+
+
+async def interactive_select_async(
+    title: str,
+    options: list[tuple[str, str]],
+    default_index: int = 0,
+    instruction: str = "up/down move - enter select - esc cancel",
+) -> int | None:
+    """Async variant for slash-command handlers that run inside the REPL loop.
+
+    Implementation: delegates the *entire* picker to the synchronous
+    :func:`interactive_select` running in a worker thread via
+    ``asyncio.to_thread``. The worker has no running asyncio loop, so the
+    sync picker takes its "no outer loop" path -- a brand-new asyncio
+    loop is created INSIDE the worker thread just for the prompt_toolkit
+    Application, completely isolated from the REPL's main loop.
+
+    This sidesteps a real bug with the prior ``Application.run_async()``
+    approach: prompt_toolkit installs stdin / signal hooks on the loop
+    it runs on, and on exit doesn't always clean up perfectly. Doing it
+    on the REPL's main loop left residue that broke later async-generator
+    based work (notably the SSE stream :func:`_delegate_to_agent` uses to
+    talk to tool-agent). With the worker-thread approach, the loop with
+    those hooks is torn down completely when the picker exits.
+
+    The REPL's main loop continues processing OTHER tasks (gateway
+    WebSocket reads, reply POSTs) during ``await asyncio.to_thread(...)``
+    because to_thread just suspends the awaiting task. So the original
+    motivation -- "gateway must keep ticking while menu is up" -- still
+    holds.
+    """
+    return await asyncio.to_thread(
+        interactive_select,
+        title,
+        options,
+        default_index=default_index,
+        instruction=instruction,
+    )

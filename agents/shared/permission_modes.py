@@ -21,12 +21,51 @@ _MODE_WHITELIST: dict[str, list[str]] = {
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "calculator", "current_datetime",
         "tool_manifest", "config", "clarify",
+        # ``tool.task`` is *delegation*, not a tool — it's always allowed.
+        # The inner tool set tool-agent then exposes to its ReAct loop is
+        # what's actually mode-gated (see ``tool_executor.tools_for_mode``).
+        # Without this entry, read-only users could never reach tool-agent at
+        # all, which would force every read-only request through the planner
+        # LLM's prose path — the planner can't even use ``read_file``.
+        "tool.task",
     ],
     "workspace-write": [
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "calculator", "current_datetime",
         "tool_manifest", "config", "clarify",
         "write_file", "edit_file", "apply_patch", "memory", "todo_write",
+        "tool.task",
+    ],
+    "danger-full-access": ["*"],
+}
+
+
+# Tools tool-agent's ReAct loop is allowed to invoke under each mode. Used by
+# ``agents.tool_agent.tool_executor.tools_for_mode`` to filter the
+# LangChain tool set BEFORE handing it to ``create_react_agent``.
+#
+# Wider than ``_MODE_WHITELIST`` for two reasons:
+#   1. ``run_python`` / ``run_command`` are not directly dispatchable by the
+#      planner (they're in ``_INTERNAL_ONLY``), but the ReAct loop legitimately
+#      needs them under workspace-write+ to install pip packages or extract
+#      binary file formats.
+#   2. ``clarify`` is internal-only at the planner level (would hang the
+#      synchronous MCP path) but is exactly the tool a ReAct loop wants when
+#      it hits ambiguity mid-task.
+#
+# Read-only stays strict: only the tools that don't mutate disk state or
+# execute foreign code. This is what makes ``read-only`` actually mean
+# read-only when a user delegates "保存到 a.txt" — tool-agent simply doesn't
+# have ``write_file`` bound, so the model can't call it.
+_TOOL_AGENT_MODE_TOOLS: dict[str, list[str]] = {
+    "read-only": [
+        "read_file", "grep_search", "glob_search", "list_directory",
+        "web_search", "web_extract", "web_crawl", "clarify",
+    ],
+    "workspace-write": [
+        "read_file", "grep_search", "glob_search", "list_directory",
+        "web_search", "web_extract", "web_crawl", "clarify",
+        "write_file", "run_python", "run_command",
     ],
     "danger-full-access": ["*"],
 }

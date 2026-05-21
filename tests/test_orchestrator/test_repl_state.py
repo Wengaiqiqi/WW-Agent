@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -174,9 +174,9 @@ def test_planner_context_aggregates_all_fields(tmp_path):
         content = "Always be careful."
 
     class _Skill:
-        name = "ppt-master"
-        title = "PowerPoint"
-        path = tmp_path / "skills" / "ppt-master"
+        name = "baidu-ecommerce-search"
+        title = "Baidu E-commerce Search"
+        path = tmp_path / "skills" / "baidu-ecommerce-search"
 
     state = MultiAgentSessionState.from_runtime(
         active_cfg=_Cfg(),
@@ -190,13 +190,79 @@ def test_planner_context_aggregates_all_fields(tmp_path):
         owner="tool-agent", observation="README text", error=None,
     )
 
-    context = state.render_planner_context(["read_file", "skill.ppt-master"])
+    context = state.render_planner_context(["read_file", "skill.baidu-ecommerce-search"])
 
     assert "mock" in context
     assert "mock-default" in context
     assert "read_file" in context
-    assert "skill.ppt-master" in context
+    assert "skill.baidu-ecommerce-search" in context
     assert "Always be careful." in context
     assert "Remember user prefers concise answers." in context
-    assert "ppt-master" in context
+    assert "baidu-ecommerce-search" in context
     assert "README text" in context
+
+
+def test_history_for_peer_empty_on_fresh_state(tmp_path):
+    state = MultiAgentSessionState.from_runtime(
+        active_cfg=_Cfg(),
+        skills=[],
+        instruction_files=[],
+        memory_snapshot="memory",
+        workspace=tmp_path,
+    )
+    assert state.render_history_for_peer() == ""
+
+
+def test_history_for_peer_shows_user_and_owner_output(tmp_path):
+    state = MultiAgentSessionState.from_runtime(
+        active_cfg=_Cfg(),
+        skills=[],
+        instruction_files=[],
+        memory_snapshot="memory",
+        workspace=tmp_path,
+    )
+    state.record_turn(
+        user_input="写一首诗",
+        capability="",
+        owner="orchestrator",
+        observation="窗外是一棵老槐树。",
+        error=None,
+    )
+    state.record_turn(
+        user_input="保存到 a.txt",
+        capability="tool.task",
+        owner="tool-agent",
+        observation="wrote 12 bytes",
+        error=None,
+    )
+
+    rendered = state.render_history_for_peer()
+
+    assert "写一首诗" in rendered
+    assert "窗外是一棵老槐树。" in rendered
+    assert "保存到 a.txt" in rendered
+    assert "tool-agent (tool.task)" in rendered
+    assert "wrote 12 bytes" in rendered
+
+
+def test_history_for_peer_truncates_long_observation(tmp_path):
+    state = MultiAgentSessionState.from_runtime(
+        active_cfg=_Cfg(),
+        skills=[],
+        instruction_files=[],
+        memory_snapshot="memory",
+        workspace=tmp_path,
+    )
+    long_text = "x" * 5000
+    state.record_turn(
+        user_input="dump",
+        capability="",
+        owner="orchestrator",
+        observation=long_text,
+        error=None,
+    )
+
+    rendered = state.render_history_for_peer()
+    # Must not embed the entire 5KB observation in the peer prompt.
+    assert len(rendered) < 1000
+    assert "truncated" in rendered.lower()

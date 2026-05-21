@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -173,6 +174,40 @@ class QQGateway:
         self._heartbeat_interval: float = 30.0
         self._seen_msg_ids: dict[str, float] = {}
         self._ws = None  # type: ignore[var-annotated]
+        # Cooperative stop signal -- ``threading.Event`` because the manager
+        # sets it from the REPL's main thread while ``_loop`` runs inside a
+        # worker thread (see ``manager.start_qq``). The inner loop polls
+        # this on every iteration and a small watcher task closes the WS
+        # when it fires, so the ``async for`` reading loop exits promptly
+        # instead of waiting for the next inbound frame.
+        self._stop_event = threading.Event()
+
+    def request_stop(self) -> None:
+        """Ask the gateway to shut down cooperatively.
+
+        Cross-thread safe: callable from any thread. The internal loop will
+        observe the flag on its next iteration AND a watcher task closes
+        the WebSocket, which makes the read loop exit immediately rather
+        than waiting up to ~30s for the next message frame.
+        """
+        self._stop_event.set()
+
+    async def _stop_watcher(self, ws: Any) -> None:
+        """Poll the stop event and close the WS when it fires.
+
+        Lives one per WS connection. ``asyncio.sleep`` yields to other
+        tasks so it doesn't starve the read loop. When the event is set,
+        we close the WS, which makes ``async for raw in ws`` raise
+        ``ConnectionClosed`` -- ``_read_loop`` propagates that and
+        ``_loop`` checks ``_stop_event`` to decide whether to reconnect
+        or return.
+        """
+        while not self._stop_event.is_set():
+            await asyncio.sleep(0.2)
+        try:
+            await ws.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- HTTP --------------------------------------------------------------
 
@@ -183,44 +218,57 @@ class QQGateway:
         url = f"{self._cfg['api_base']}{path}"
         body_preview = json.dumps(json_body, ensure_ascii=False) if json_body else "<none>"
         log.info("qq api %s %s -> requesting body=%s", method, path, body_preview[:300])
-        # We use a *sync* httpx client run on a worker thread (via
-        # ``asyncio.to_thread``) rather than an AsyncClient on the main
-        # event loop. Reason: on Windows the asyncio path for outbound
-        # POSTs to the QQ messaging endpoint hangs indefinitely while an
-        # active WebSocket connection shares the same event loop. Even
-        # ``asyncio.wait_for`` could not always interrupt it. Synchronous
-        # httpx in a worker thread uses plain blocking I/O which has its
-        # own well-behaved timeout, completely sidestepping the loop
-        # interaction.
+        # Bulletproof HTTP path: raw ``threading.Thread`` (NOT
+        # ``asyncio.to_thread``) + manual ``asyncio.sleep`` poll loop.
+        # The previous ``asyncio.wait_for(asyncio.to_thread(...), 20)``
+        # silently failed to time out in REPL mode -- whatever was on the
+        # event loop (picker UI / WS reader) prevented the wait_for timer
+        # from firing. asyncio.sleep(0.1) in a poll loop is a primitive
+        # we can rely on across every loop type and policy.
         headers = {
             "Authorization": f"QQBot {token}",
             "Content-Type": "application/json",
         }
+        result_box: Dict[str, Any] = {}
 
-        def _sync_request() -> Dict[str, Any]:
-            with httpx.Client() as client:
-                response = client.request(
-                    method, url, headers=headers, json=json_body, timeout=15.0,
-                )
-            return {
-                "status": response.status_code,
-                "json": _safe_json(response),
-                "text": response.text,
-            }
+        def _worker() -> None:
+            try:
+                with httpx.Client() as client:
+                    response = client.request(
+                        method, url, headers=headers, json=json_body, timeout=15.0,
+                    )
+                result_box["packed"] = {
+                    "status": response.status_code,
+                    "json": _safe_json(response),
+                    "text": response.text,
+                }
+            except Exception as exc:  # noqa: BLE001
+                result_box["error"] = exc
 
-        try:
-            packed = await asyncio.wait_for(
-                asyncio.to_thread(_sync_request), timeout=20.0,
-            )
-        except asyncio.TimeoutError:
+        thread = threading.Thread(
+            target=_worker, name=f"qq-api-{path[-20:]}", daemon=True,
+        )
+        thread.start()
+
+        deadline = time.monotonic() + 20.0
+        while thread.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+
+        if thread.is_alive():
             log.error(
-                "qq api %s %s -> HARD TIMEOUT after 20s", method, path,
+                "qq api %s %s -> HARD TIMEOUT after 20s (thread still alive)",
+                method, path,
             )
             return {"code": -1, "message": "client-side timeout"}
-        except Exception as exc:  # noqa: BLE001
-            log.error("qq api %s %s -> request raised: %s", method, path, exc)
-            return {"code": -1, "message": f"request error: {exc}"}
 
+        if "error" in result_box:
+            log.error(
+                "qq api %s %s -> request raised: %s",
+                method, path, result_box["error"],
+            )
+            return {"code": -1, "message": f"request error: {result_box['error']}"}
+
+        packed = result_box["packed"]
         status = packed["status"]
         data = packed["json"] if packed["json"] is not None else {"_raw": packed["text"]}
         if status >= 300:
@@ -399,17 +447,39 @@ class QQGateway:
             from websockets.client import connect as ws_connect  # type: ignore
 
         backoff = 2
-        while True:
+        while not self._stop_event.is_set():
+            watcher: Optional[asyncio.Task] = None
             try:
                 url = await self._get_gateway_url()
                 log.info("qq: connecting to %s", url)
                 async with ws_connect(url, max_size=2**22) as ws:
                     self._ws = ws
-                    await self._read_loop(ws)
+                    # Side task: closes the WS as soon as request_stop()
+                    # fires. Without this, ``async for raw in ws`` would
+                    # block until the next inbound frame (potentially
+                    # minutes) before we'd notice the stop signal.
+                    watcher = asyncio.create_task(self._stop_watcher(ws))
+                    try:
+                        await self._read_loop(ws)
+                    finally:
+                        if watcher is not None:
+                            watcher.cancel()
+                            try:
+                                await watcher
+                            except (asyncio.CancelledError, Exception):
+                                pass
             except asyncio.CancelledError:
                 return
             except Exception as exc:  # noqa: BLE001
+                if self._stop_event.is_set():
+                    # The exception is almost certainly the watcher closing
+                    # the WS; don't log it as an "error", we asked for it.
+                    log.info("qq: ws closed by stop request")
+                    return
                 log.warning("qq ws error: %s (reconnect in %ds)", exc, backoff)
+            if self._stop_event.is_set():
+                log.info("qq: stop requested, exiting reconnect loop")
+                return
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 

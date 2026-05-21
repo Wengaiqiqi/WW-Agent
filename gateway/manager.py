@@ -71,6 +71,11 @@ class _Slot:
     task: Optional[asyncio.Task] = None
     meta: Dict[str, Any] = field(default_factory=dict)
     server: Any = None  # uvicorn.Server, set for the feishu slot
+    # The QQGateway instance, kept so ``stop()`` can call ``request_stop``
+    # for cooperative shutdown (since asyncio.to_thread can't interrupt the
+    # underlying worker thread). None for feishu (the lark-oapi SDK has no
+    # equivalent stop hook).
+    gateway: Any = None
 
 
 class GatewayManager:
@@ -211,8 +216,40 @@ class GatewayManager:
         gateway = QQGateway(cfg)
 
         async def _serve() -> None:
+            # Run the entire QQ gateway in a worker thread with its OWN
+            # asyncio loop. This matches Feishu's pattern (lark-oapi's
+            # ws_client.start internally creates its own loop on its own
+            # thread). Without this, the WS read + reply POST timers live
+            # on the REPL's main event loop, where they can be starved by
+            # prompt_toolkit's picker UI -- the standalone path works
+            # because there's no picker competing for the loop. The cost
+            # is a single dedicated thread per gateway; chat-bot QPS
+            # makes that negligible.
+            log.info("gateway[qq] [v3-isolated] serve task entered")
+
+            def _run_in_isolated_loop() -> None:
+                log.info("gateway[qq] [v3-isolated] worker thread started, creating loop")
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    log.info("gateway[qq] [v3-isolated] loop=%s policy=%s",
+                             type(loop).__name__,
+                             type(asyncio.get_event_loop_policy()).__name__)
+                    loop.run_until_complete(gateway.run())
+                except asyncio.CancelledError:
+                    log.info("gateway[qq] [v3-isolated] inner loop cancelled")
+                except Exception:  # noqa: BLE001
+                    log.exception("gateway[qq] [v3-isolated] inner loop crashed")
+                finally:
+                    log.info("gateway[qq] [v3-isolated] worker thread closing loop")
+                    try:
+                        loop.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    log.info("gateway[qq] [v3-isolated] worker thread exit")
+
             try:
-                await gateway.run()
+                await asyncio.to_thread(_run_in_isolated_loop)
             except asyncio.CancelledError:
                 raise
 
@@ -220,6 +257,7 @@ class GatewayManager:
         task = asyncio.get_event_loop().create_task(_serve())
         self._slots["qq"] = _Slot(
             task=task,
+            gateway=gateway,
             meta={
                 "sandbox": gateway._cfg.get("sandbox", False),
                 "log": str(log_path),
@@ -237,13 +275,29 @@ class GatewayManager:
             # lock behind (e.g. the SDK thread won't actually exit but the
             # user wants to re-acquire the slot from this same REPL).
             self._release_lock(platform)
+            self._slots.pop(platform, None)
             return "not running"
         # Feishu: ask uvicorn to drain cleanly so in-flight webhooks return a
-        # response. Cancelling the task alone is enough for QQ.
+        # response.
         if platform == "feishu" and slot.server is not None:
             slot.server.should_exit = True
+        # QQ: signal the in-thread gateway to break out of its WS read +
+        # reconnect loop and exit cleanly. Without this the worker thread
+        # keeps a live WS connection (because asyncio.to_thread can't
+        # cancel an already-running thread) and a subsequent Start would
+        # cause two clients to receive the same events.
+        if platform == "qq" and slot.gateway is not None:
+            try:
+                slot.gateway.request_stop()
+            except Exception:  # noqa: BLE001
+                log.exception("qq: request_stop raised")
         slot.task.cancel()
         self._release_lock(platform)
+        # Drop the slot immediately so ``is_running`` returns False on the
+        # next check (the menu uses that to choose Start vs Stop labels).
+        # The task itself may take another loop tick to actually finish,
+        # but for UX the user should see "stopped" right away.
+        del self._slots[platform]
         return "stop signal sent"
 
     async def shutdown_all(self) -> None:
@@ -253,6 +307,11 @@ class GatewayManager:
                 continue
             if platform == "feishu" and slot.server is not None:
                 slot.server.should_exit = True
+            if platform == "qq" and slot.gateway is not None:
+                try:
+                    slot.gateway.request_stop()
+                except Exception:  # noqa: BLE001
+                    pass
             slot.task.cancel()
             try:
                 await asyncio.wait_for(slot.task, timeout=5.0)

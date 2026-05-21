@@ -95,26 +95,75 @@ def prewarm_llm() -> None:
         _llm_future = asyncio.ensure_future(asyncio.to_thread(_build_agent_llm_sync))
 
 
-async def _run_agent_nonstreaming(task: str) -> dict:
-    """Run the agent loop and return the final done event as a dict result."""
-    llm = await get_llm()
-    tools = make_langchain_tools()
-    agent = ToolAgentLoop(llm=llm, tools=tools)
+async def handle_tool_task_stream(payload: dict) -> AsyncIterator[dict[str, Any]]:
+    """Top-level streaming dispatch for the ``tool.task`` A2A endpoint.
 
-    final_text = ""
-    error_msg = ""
-    async for event in agent.run(task=task):
-        if event["type"] == "done":
-            final_text = event.get("text", "")
-        elif event["type"] == "error":
-            error_msg = event.get("message", "")
-            break
-    if error_msg:
-        return {"error": error_msg}
-    return {"result": final_text or task}
+    Extracted out of ``amain``'s inner closure so tests can ``await`` the
+    real production code path directly (the previous test had to re-implement
+    the logic, which meant a regression in the closure wouldn't be caught).
+
+    Sequence:
+      1. Extract ``task`` / ``context`` / ``meta`` from the payload shape
+         that ``A2AServer.stream_endpoint`` produces.
+      2. Verify the orchestrator-minted authz_grant (refuses unauthenticated
+         calls when ``AUTHZ_HMAC_KEY`` is set — i.e. in production).
+      3. Validate the grant's ``permission_mode`` claim against the known
+         whitelist; reject unknown modes (fail-loud rather than fail-quiet).
+      4. Forward to ``_run_agent_streaming`` with the validated mode.
+    """
+    task = payload.get("task", "")
+    if not task:
+        yield {"type": "error", "message": "missing 'task' in payload"}
+        return
+    context = payload.get("context", "") or ""
+
+    meta = payload.get("meta") or {}
+    grant = meta.get("authz_grant")
+    key = os.environ.get("AUTHZ_HMAC_KEY")
+    if grant is not None and key:
+        from agents.shared.authz import verify_grant
+        try:
+            claims = verify_grant(grant, key=key, requested_tool="tool.task")
+        except Exception as exc:
+            yield {"type": "error", "message": f"authz: {exc}"}
+            return
+        permission_mode = str(claims.get("permission_mode") or "danger-full-access")
+        # The PermissionGate that minted this grant rejects unknown modes at
+        # sign() time — but a forged/tampered grant could still carry one,
+        # and an unknown mode would silently degrade to "no tools bound"
+        # which the user would experience as a mute / confused agent. Fail
+        # loud instead so the operator sees the cause.
+        from agents.shared.permission_modes import _MODE_WHITELIST
+        if permission_mode not in _MODE_WHITELIST:
+            yield {
+                "type": "error",
+                "message": (
+                    f"authz: unknown permission_mode {permission_mode!r} in grant; "
+                    f"expected one of {sorted(_MODE_WHITELIST)}."
+                ),
+            }
+            return
+    elif key:
+        yield {
+            "type": "error",
+            "message": (
+                "tool-agent refused tool.task: no authz_grant in payload meta. "
+                "Orchestrator should mint one via PermissionGate.sign()."
+            ),
+        }
+        return
+    else:
+        permission_mode = "danger-full-access"
+
+    async for event in _run_agent_streaming(
+        task, context=context, permission_mode=permission_mode,
+    ):
+        yield event
 
 
-async def _run_agent_streaming(task: str) -> AsyncIterator[dict[str, Any]]:
+async def _run_agent_streaming(
+    task: str, *, context: str = "", permission_mode: str = "danger-full-access",
+) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events for SSE consumption.
 
     Yields ``{"type": "thinking"}`` IMMEDIATELY, before any of the heavy
@@ -134,8 +183,8 @@ async def _run_agent_streaming(task: str) -> AsyncIterator[dict[str, Any]]:
 
     try:
         llm = await get_llm()
-        tools = make_langchain_tools()
-        agent = ToolAgentLoop(llm=llm, tools=tools)
+        tools = make_langchain_tools(mode=permission_mode)
+        agent = ToolAgentLoop(llm=llm, tools=tools, context=context)
     except Exception as exc:
         log.exception("tool-agent setup failed before agent.run")
         yield {"type": "error", "message": f"tool-agent setup failed: {exc}"}
@@ -197,10 +246,20 @@ async def amain() -> None:
             return {"resolved": ok}
 
         if skill_id == "tool.task":
-            task = input.get("task", "")
-            if not task:
-                return {"error": "missing 'task' in input for tool.task"}
-            return await _run_agent_nonstreaming(task)
+            # ``tool.task`` MUST go through the streaming dispatch
+            # (``handle_tool_task_stream``), which verifies the authz_grant
+            # and mode-gates the tool set. The non-streaming RPC variant
+            # used to default to ``danger-full-access`` and had no
+            # production caller — removed to close that latent escape
+            # hatch. Anyone hitting this branch should switch to the
+            # streaming endpoint instead.
+            return {
+                "error": (
+                    "tool.task is only available via the streaming endpoint "
+                    "(/a2a/stream). The non-streaming RPC path does not "
+                    "enforce permission-mode gating and has been removed."
+                ),
+            }
 
         if not skill_id.startswith("tool."):
             return {"error": f"tool-agent does not expose {skill_id}"}
@@ -217,18 +276,12 @@ async def amain() -> None:
         result = await execute_tool(tool_name, args)
         return {"result": result}
 
-    # Streaming dispatch for agent-level delegation.
-    async def a2a_stream_dispatch(payload: dict) -> AsyncIterator[dict[str, Any]]:
-        task = payload.get("task", "")
-        if not task:
-            yield {"type": "error", "message": "missing 'task' in payload"}
-            return
-        async for event in _run_agent_streaming(task):
-            yield event
-
+    # Streaming dispatch delegates to the module-level ``handle_tool_task_stream``
+    # so the same code path is reachable from unit tests (without spinning up
+    # the full ``amain`` entrypoint or re-implementing the auth logic).
     a2a = A2AServer(
         handler=A2AHandler(handler=a2a_dispatch),
-        stream_handler=A2AStreamHandler(handler=a2a_stream_dispatch),
+        stream_handler=A2AStreamHandler(handler=handle_tool_task_stream),
     )
     await a2a.start()
 

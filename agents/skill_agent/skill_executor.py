@@ -298,10 +298,29 @@ async def execute_skill_streaming(
         yield {"type": "error", "message": "AUTHZ_HMAC_KEY not set"}
         return
     try:
-        verify_grant(grant, key=key, requested_tool=f"skill.{slug}")
+        claims = verify_grant(grant, key=key, requested_tool=f"skill.{slug}")
     except Exception as exc:
         yield {"type": "error", "message": f"authz: {exc}"}
         return
+    # Pin the permission_mode to the value the orchestrator signed into the
+    # grant rather than reading it from the (untrusted) meta dict. Single
+    # source of truth — tool-agent already does this for ``tool.task``, and
+    # having skill-agent read from a different field was a drift risk.
+    inherited_mode = str(claims.get("permission_mode") or "workspace-write")
+    from agents.shared.permission_modes import _MODE_WHITELIST
+    if inherited_mode not in _MODE_WHITELIST:
+        yield {
+            "type": "error",
+            "message": (
+                f"authz: unknown permission_mode {inherited_mode!r} in grant; "
+                f"expected one of {sorted(_MODE_WHITELIST)}."
+            ),
+        }
+        return
+    # Rewrite the meta we forward to sub-grant mint so it reflects the
+    # claim-derived mode, not whatever the caller put in meta. Defensive
+    # copy so we don't mutate the caller's dict.
+    meta = {**meta, "permission_mode": inherited_mode}
 
     try:
         skill_md = _load_skill_md(slug)
@@ -396,7 +415,9 @@ async def execute_skill_streaming(
                 continue
             yield {"type": "tool_call", "name": tool_name, "args": arguments}
             try:
-                output = await _call_remote_tool(tool_name, arguments, meta)
+                output = await _call_remote_tool(
+                    tool_name, arguments, meta, slug=slug,
+                )
             except Exception as exc:
                 logger.warning("skill tool %s failed: %s", tool_name, exc)
                 output = {"error": str(exc)}
@@ -515,24 +536,24 @@ _AUDITED_INNER_TOOLS = frozenset({"run_command", "run_python", "write_file",
                                    "edit_file", "apply_patch"})
 
 
-def _mint_tool_grant(tool_name: str, meta: dict) -> str:
+def _mint_tool_grant(tool_name: str, meta: dict, slug: str | None = None) -> str:
     """Mint a short-lived JWT granting access to a specific tool on tool-agent.
 
-    Uses the *inner* whitelist (``_SKILL_INNER_WHITELIST``) rather than the
-    *outer* one (``_MODE_WHITELIST``). The two answer different questions:
+    Two layers of gating apply, both must pass:
 
-    * Outer (``_MODE_WHITELIST``): "what can the planner DIRECTLY dispatch
-      from a user message?" — restrictive, so workspace-write users don't
-      accidentally get a shell.
-    * Inner (``_SKILL_INNER_WHITELIST``): "what can an ALREADY-ALLOWED skill
-      call to do its job?" — permissive, because the user invoked the skill
-      by name and curated skills under ``skills/<slug>/`` legitimately need
-      to shell out to their own domain scripts.
+    * **Mode** (``_SKILL_INNER_WHITELIST``): whether the user's mode permits
+      any skill execution at all. Read-only blocks everything; workspace-write+
+      lets the skill *potentially* reach any tool — but only the next layer
+      decides which.
+    * **Per-skill declaration** (``effective_requires_tools``): the skill's
+      own ``_meta.json::requiresTools`` field. A skill that didn't declare
+      ``run_command`` cannot call it — even under ``danger-full-access`` —
+      because the call would land outside the skill author's stated needs.
+      This downgrades the old "workspace-write ⇒ `*`" universal grant to
+      least privilege per-skill.
 
-    Skills under ``read-only`` are blocked upstream by the orchestrator's
-    PermissionGate, so this function only ever sees workspace-write or
-    danger-full-access in practice — but we keep the read-only entry for
-    defence-in-depth.
+    A missing slug (legacy caller / no slug threaded through) is treated as
+    "trust nothing extra" and falls back to the default toolset.
     """
     import time
     import jwt as pyjwt
@@ -549,6 +570,35 @@ def _mint_tool_grant(tool_name: str, meta: dict) -> str:
             f"mode {inherited_mode!r} does not permit any skill execution. "
             f"Skills are disabled under read-only; switch to workspace-write."
         )
+
+    # Per-skill declaration check. Look the skill up by slug and consult its
+    # effective requiresTools set. Failure to load is a denial — better than
+    # falling through to the legacy "*" grant.
+    if slug:
+        try:
+            from skills.skill_loader import load_skills, effective_requires_tools
+            skills = load_skills()
+            skill = next((s for s in skills if s.name == slug), None)
+            if skill is None:
+                raise PermissionDenied(
+                    f"skill {slug!r} not found at grant-mint time; refusing to "
+                    f"mint inner grant for {tool_name!r}."
+                )
+            declared = effective_requires_tools(skill)
+            if tool_name not in declared:
+                raise PermissionDenied(
+                    f"skill {slug!r} requested {tool_name!r} but its "
+                    f"_meta.json/requiresTools only lists {sorted(declared)}. "
+                    f"Add {tool_name!r} to requiresTools if the skill needs it."
+                )
+        except PermissionDenied:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("skill_loader lookup failed during grant mint: %s", exc)
+            raise PermissionDenied(
+                f"could not verify skill {slug!r}'s requiresTools — denying "
+                f"to fail closed instead of escalating."
+            ) from exc
 
     if tool_name in _AUDITED_INNER_TOOLS:
         logger.info(
@@ -569,11 +619,18 @@ def _mint_tool_grant(tool_name: str, meta: dict) -> str:
     return pyjwt.encode(payload, key, algorithm="HS256")
 
 
-async def _call_remote_tool(tool_name: str, arguments: dict, meta: dict) -> Any:
-    """Call ``tool.<tool_name>`` on the peer tool-agent via A2A."""
+async def _call_remote_tool(
+    tool_name: str, arguments: dict, meta: dict, *, slug: str | None = None,
+) -> Any:
+    """Call ``tool.<tool_name>`` on the peer tool-agent via A2A.
+
+    *slug* is the calling skill's name (from ``skill.<slug>``). Passed
+    through to ``_mint_tool_grant`` so per-skill requiresTools enforcement
+    can run; falls back to the legacy mode-only check when omitted.
+    """
     from agents.skill_agent.a2a_client import call_peer
 
-    tool_grant = _mint_tool_grant(tool_name, meta)
+    tool_grant = _mint_tool_grant(tool_name, meta, slug=slug)
     tool_meta = {**meta, "authz_grant": tool_grant, "agent_caller": "skill-agent"}
     out = await call_peer(
         peer_id="tool-agent",
