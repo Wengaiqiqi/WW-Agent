@@ -457,9 +457,18 @@ def serve(cfg: Optional[Dict[str, Any]] = None) -> None:
     def _on_message(event):
         _handle_message(resolved, event)
 
+    def _on_chat_entered(event):
+        # Fires every time a user opens the bot's P2P chat window (before
+        # they send anything). We don't need to react -- but registering a
+        # no-op handler silences the SDK's "processor not found" ERROR
+        # line in gateway.log, which otherwise looks alarming to anyone
+        # tailing the log.
+        return
+
     handler = (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(_on_message)
+        .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(_on_chat_entered)
         .build()
     )
 
