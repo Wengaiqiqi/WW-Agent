@@ -535,6 +535,21 @@ class ReplCommandHandler:
     async def _gw_platform_menu(self, platform: str) -> bool:
         """Action menu for one platform. Returns True to redraw the platform list."""
         from orchestrator.picker import interactive_select_async
+        from agent_paths import config_dir
+        from gateway.log_tail import read_tail
+
+        log_path = config_dir() / "gateway.log"
+
+        def _footer() -> list[str]:
+            # Truncate at console width - 4 so the panel never wraps and
+            # break the picker layout. Width is sampled per call so the
+            # user can resize the terminal during the session.
+            return read_tail(
+                log_path,
+                platform=platform,
+                max_lines=8,
+                max_width=max(20, self.ui.console.width - 4),
+            )
 
         while True:
             from gateway import credentials as gw_creds
@@ -575,6 +590,9 @@ class ReplCommandHandler:
                 rows,
                 default_index=0,
                 instruction="up/down move - enter run - esc back",
+                footer_lines=_footer,
+                footer_title="Recent log (last 8 lines, filtered)",
+                footer_refresh_seconds=0.2,
             )
             if idx is None:
                 return True
