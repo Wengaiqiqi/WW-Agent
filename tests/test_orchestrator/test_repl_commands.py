@@ -164,10 +164,20 @@ def test_non_slash_input_returns_none(tmp_path):
     assert result is None
 
 
-def test_model_command_shows_placeholder(tmp_path):
+def test_model_command_unknown_provider_errors(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert _call(handler,"/model openai") == LoopAction.CONTINUE
-    assert "--single" in buf.getvalue()
+    # ``bogus-provider`` isn't in PROVIDERS, so the wizard short-circuits
+    # before touching the picker (which would need a TTY).
+    assert _call(handler, "/model bogus-provider") == LoopAction.CONTINUE
+    assert "Unknown provider" in buf.getvalue()
+
+
+def test_model_command_requires_tty(tmp_path):
+    handler, ui, state, buf = _handler(tmp_path)
+    # Non-TTY harness path: no provider hint -> reaches the TTY check
+    # before any blocking input would be needed.
+    assert _call(handler, "/model") == LoopAction.CONTINUE
+    assert "requires a TTY" in buf.getvalue() or "--single" in buf.getvalue()
 
 
 def test_skills_renders_when_empty(tmp_path):
