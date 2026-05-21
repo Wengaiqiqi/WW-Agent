@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 from pathlib import Path
@@ -11,6 +12,14 @@ from orchestrator.repl_commands import ReplCommandHandler
 from orchestrator.repl_state import MultiAgentSessionState
 from orchestrator.repl_types import LoopAction
 from orchestrator.repl_ui import ReplUI
+
+
+def _call(handler: ReplCommandHandler, line: str):
+    """Sync wrapper: ``handle`` became async when ``/gateway`` started
+    awaiting an interactive picker. The original sync call sites here only
+    care about the terminal LoopAction, so a per-call ``asyncio.run`` is
+    fine -- no test exercises the picker path."""
+    return asyncio.run(handler.handle(line))
 
 
 class _Cfg:
@@ -61,26 +70,26 @@ def _handler(tmp_path):
 
 def test_help_continues_and_renders(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    result = handler.handle("/help")
+    result = _call(handler,"/help")
     assert result == LoopAction.CONTINUE
     assert "Slash Commands" in buf.getvalue()
 
 
 def test_exit_and_quit_return_exit(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/exit") == LoopAction.EXIT
-    assert handler.handle("/quit") == LoopAction.EXIT
+    assert _call(handler,"/exit") == LoopAction.EXIT
+    assert _call(handler,"/quit") == LoopAction.EXIT
 
 
 def test_agents_renders_table(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/agents") == LoopAction.CONTINUE
+    assert _call(handler,"/agents") == LoopAction.CONTINUE
     assert "tool-agent" in buf.getvalue()
 
 
 def test_tools_renders_capabilities(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/tools") == LoopAction.CONTINUE
+    assert _call(handler,"/tools") == LoopAction.CONTINUE
     text = buf.getvalue()
     assert "read_file" in text
     assert "write_file" in text
@@ -88,27 +97,27 @@ def test_tools_renders_capabilities(tmp_path):
 
 def test_permissions_shows_current(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/permissions") == LoopAction.CONTINUE
+    assert _call(handler,"/permissions") == LoopAction.CONTINUE
     assert "workspace-write" in buf.getvalue()
 
 
 def test_permissions_updates_state(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/permissions read-only") == LoopAction.CONTINUE
+    assert _call(handler,"/permissions read-only") == LoopAction.CONTINUE
     assert state.permission_mode == "read-only"
     assert "read-only" in buf.getvalue()
 
 
 def test_permissions_invalid_mode(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/permissions bogus") == LoopAction.CONTINUE
+    assert _call(handler,"/permissions bogus") == LoopAction.CONTINUE
     assert "Invalid" in buf.getvalue()
     assert state.permission_mode == "workspace-write"
 
 
 def test_config_renders_table(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/config") == LoopAction.CONTINUE
+    assert _call(handler,"/config") == LoopAction.CONTINUE
     text = buf.getvalue()
     assert "mock" in text
     assert "mock-model" in text
@@ -116,7 +125,7 @@ def test_config_renders_table(tmp_path):
 
 def test_status_renders_session_summary(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/status") == LoopAction.CONTINUE
+    assert _call(handler,"/status") == LoopAction.CONTINUE
     text = buf.getvalue()
     # Heading + a few key fields drawn from state / host / router.
     assert "Session Status" in text
@@ -128,7 +137,7 @@ def test_status_renders_session_summary(tmp_path):
 
 def test_clear_returns_continue(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/clear") == LoopAction.CONTINUE
+    assert _call(handler,"/clear") == LoopAction.CONTINUE
 
 
 def test_compact_resets_history(tmp_path):
@@ -137,7 +146,7 @@ def test_compact_resets_history(tmp_path):
         user_input="x", capability="read_file",
         owner="tool-agent", observation="y", error=None,
     )
-    assert handler.handle("/compact") == LoopAction.CONTINUE
+    assert _call(handler,"/compact") == LoopAction.CONTINUE
     assert state.recent_history == []
     assert state.thread_id == "multi-agent-session-2"
     assert "Compacted" in buf.getvalue()
@@ -145,31 +154,31 @@ def test_compact_resets_history(tmp_path):
 
 def test_unknown_command_warns(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/nope") == LoopAction.CONTINUE
+    assert _call(handler,"/nope") == LoopAction.CONTINUE
     assert "Unknown command" in buf.getvalue()
 
 
 def test_non_slash_input_returns_none(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    result = handler.handle("hello world")
+    result = _call(handler,"hello world")
     assert result is None
 
 
 def test_model_command_shows_placeholder(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/model openai") == LoopAction.CONTINUE
+    assert _call(handler,"/model openai") == LoopAction.CONTINUE
     assert "--single" in buf.getvalue()
 
 
 def test_skills_renders_when_empty(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/skills") == LoopAction.CONTINUE
+    assert _call(handler,"/skills") == LoopAction.CONTINUE
     assert "Installed Skills" in buf.getvalue()
 
 
 def test_instructions_renders_when_empty(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    assert handler.handle("/instructions") == LoopAction.CONTINUE
+    assert _call(handler,"/instructions") == LoopAction.CONTINUE
     assert "Project Instructions" in buf.getvalue()
 
 
@@ -183,7 +192,7 @@ def test_command_exception_is_caught(tmp_path):
 
     handler._cmd_help = _broken
     try:
-        result = handler.handle("/help")
+        result = _call(handler,"/help")
         assert result == LoopAction.CONTINUE
         assert "boom" in buf.getvalue()
     finally:

@@ -28,7 +28,7 @@ def test_command_list_has_all_expected_commands():
     assert set(COMMANDS) == {
         "/help", "/exit", "/quit", "/status", "/agents", "/tools",
         "/permissions", "/config", "/model", "/skills",
-        "/instructions", "/clear", "/compact",
+        "/instructions", "/clear", "/compact", "/gateway",
     }
 
 
