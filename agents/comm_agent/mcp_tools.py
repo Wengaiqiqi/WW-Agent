@@ -196,4 +196,143 @@ def build_comm_tool_specs(
             handler=peer_card,
         ),
     ]
+
+    # ---- comm.delegate ----
+    async def delegate(args: dict) -> str:
+        peer_id = args.get("peer_id", "")
+        task = args.get("task", "")
+        stream = args.get("stream", True)
+        if not peer_id or not task:
+            return _err("peer_id and task are required")
+        peer = reg.get(peer_id)
+        if peer is None:
+            return _err(f"unknown peer {peer_id!r}; run comm.add_peer first")
+        try:
+            secret = reg.resolve_secret(peer)
+        except PeerRegistryError as exc:
+            return _err(str(exc))
+        client = _make_client_for(peer, secret, my_peer_id, transport=_transport())
+        # Always exercise the SSE stream (cheaper than maintaining two code
+        # paths); we collect events when stream=False and return a summary.
+        start = asyncio.get_event_loop().time()
+        events: list[dict] = []
+        final: Any = None
+        async for event in client.stream(method="message/stream", params={
+            "message": {"role": "user", "parts": [{"text": task}]},
+            "context_id": args.get("context"),
+        }, skill="task.delegate"):
+            events.append(event)
+            if event.get("type") == "task" and event.get("state") == "completed":
+                final = event.get("result")
+        duration_ms = int((asyncio.get_event_loop().time() - start) * 1000)
+        if stream:
+            # Return ALL events as one JSON blob — orchestrator's stream_mux
+            # consumes this and re-renders. (See Task 11 for the live-stream
+            # variant using MCP progress notifications; this MVP returns the
+            # full transcript in one shot.)
+            return json.dumps({
+                "ok": True, "events": events,
+                "final_result": final, "duration_ms": duration_ms,
+            }, ensure_ascii=False)
+        return json.dumps({
+            "ok": True,
+            "events_count": len(events),
+            "final_result": final,
+            "duration_ms": duration_ms,
+        }, ensure_ascii=False)
+
+    # ---- comm.chat ----
+    async def chat(args: dict) -> str:
+        peer_id = args.get("peer_id", "")
+        message = args.get("message", "")
+        context_id = args.get("context_id")
+        if not peer_id or not message:
+            return _err("peer_id and message are required")
+        peer = reg.get(peer_id)
+        if peer is None:
+            return _err(f"unknown peer {peer_id!r}; run comm.add_peer first")
+        try:
+            secret = reg.resolve_secret(peer)
+        except PeerRegistryError as exc:
+            return _err(str(exc))
+        client = _make_client_for(peer, secret, my_peer_id, transport=_transport())
+        try:
+            result = await client.call(method="message/send", params={
+                "message": {"role": "user", "parts": [{"text": message}]},
+                "context_id": context_id,
+            }, skill="chat.message")
+        except A2AClientError as exc:
+            return _err(str(exc))
+        return json.dumps({
+            "ok": True,
+            "reply": result.get("reply", ""),
+            "context_id": result.get("context_id"),
+        }, ensure_ascii=False)
+
+    # ---- comm.status ----
+    async def status(args: dict) -> str:
+        peer_id = args.get("peer_id", "")
+        peer = reg.get(peer_id)
+        if peer is None:
+            return _err(f"unknown peer {peer_id!r}; run comm.add_peer first")
+        try:
+            secret = reg.resolve_secret(peer)
+        except PeerRegistryError as exc:
+            return _err(str(exc))
+        client = _make_client_for(peer, secret, my_peer_id, transport=_transport())
+        try:
+            result = await client.call(method="status/query", params={}, skill="status.query")
+        except A2AClientError as exc:
+            return _err(str(exc))
+        return json.dumps({"ok": True, "status": result}, ensure_ascii=False)
+
+    specs.extend([
+        ToolSpec(
+            name="comm.delegate",
+            description=(
+                "Delegate a free-form task to a remote A2A agent. When stream=true "
+                "(default) returns all SSE events in one blob; when stream=false "
+                "returns only the final result + counts."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "peer_id": {"type": "string"},
+                    "task": {"type": "string"},
+                    "context": {"type": "string"},
+                    "stream": {"type": "boolean"},
+                },
+                "required": ["peer_id", "task"],
+            },
+            handler=delegate,
+        ),
+        ToolSpec(
+            name="comm.chat",
+            description=(
+                "Append one turn to a chat session with a remote A2A agent. Pass "
+                "context_id=null first time; server returns one to keep for "
+                "subsequent turns."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "peer_id": {"type": "string"},
+                    "message": {"type": "string"},
+                    "context_id": {"type": ["string", "null"]},
+                },
+                "required": ["peer_id", "message"],
+            },
+            handler=chat,
+        ),
+        ToolSpec(
+            name="comm.status",
+            description="Query the current state of a remote A2A agent.",
+            input_schema={
+                "type": "object",
+                "properties": {"peer_id": {"type": "string"}},
+                "required": ["peer_id"],
+            },
+            handler=status,
+        ),
+    ])
     return specs
