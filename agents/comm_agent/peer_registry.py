@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -76,7 +76,7 @@ class PeerRegistry:
         data["peers"] = [
             d for d in data.get("peers", []) if d.get("peer_id") != peer.peer_id
         ]
-        data["peers"].append(asdict(peer))
+        data["peers"].append(_peer_to_dict(peer))
         self._save(data)
 
     def remove(self, peer_id: str) -> bool:
@@ -106,6 +106,19 @@ class PeerRegistry:
                 f"export it before starting comm-agent"
             )
         return value
+
+
+def _peer_to_dict(p: Peer) -> dict:
+    """Serialise a Peer to the spec §3.5 nested JSON shape."""
+    return {
+        "peer_id": p.peer_id,
+        "display_name": p.display_name,
+        "url": p.url,
+        "hmac_secret_ref": p.hmac_secret_ref,
+        "tls": {"verify": p.tls_verify, "pinned_sha256": p.tls_pinned_sha256},
+        "added_at": p.added_at,
+        "last_seen": p.last_seen,
+    }
 
 
 def _peer_from_dict(d: dict) -> Peer:
