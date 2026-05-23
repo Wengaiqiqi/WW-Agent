@@ -124,3 +124,70 @@ class A2AClient:
         raise A2AClientError(
             f"peer unreachable: {self._peer.url} (retried {len(self._retry_backoff)}): {last_exc!r}"
         )
+
+    async def stream(
+        self, *, method: str, params: dict, skill: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """SSE stream. Yields parsed event dicts in chronological order.
+
+        On truncation (connection drop mid-frame, unexpected EOF), yields a
+        final ``{"type": "error", "message": "stream truncated after N events"}``
+        instead of raising — spec §5 says do not crash the calling tool.
+        """
+        body, grant = self._build_envelope(method, params, skill or method)
+        events_seen = 0
+        try:
+            async with self._client() as c:
+                async with c.stream(
+                    "POST",
+                    f"{self._peer.url}/a2a/stream",
+                    json=body,
+                    headers={
+                        "Authorization": f"A2A-HMAC {grant}",
+                        "Accept": "text/event-stream",
+                    },
+                ) as r:
+                    if r.status_code != 200:
+                        text = await r.aread()
+                        yield {
+                            "type": "error",
+                            "message": f"HTTP {r.status_code}: {text.decode(errors='replace')}",
+                        }
+                        return
+                    buffer = ""
+                    async for chunk in r.aiter_text():
+                        buffer += chunk
+                        # Split on the SSE frame terminator (blank line = \n\n).
+                        while "\n\n" in buffer:
+                            frame, buffer = buffer.split("\n\n", 1)
+                            event = _parse_sse_frame(frame)
+                            if event is not None:
+                                events_seen += 1
+                                yield event
+                    # Anything left in the buffer after the response ended is
+                    # an incomplete frame — yield a truncation marker.
+                    if buffer.strip():
+                        yield {
+                            "type": "error",
+                            "message": f"stream truncated after {events_seen} events",
+                        }
+        except (httpx.ConnectError, httpx.ReadError) as exc:
+            yield {
+                "type": "error",
+                "message": f"stream connect/read error after {events_seen} events: {exc}",
+            }
+
+
+def _parse_sse_frame(frame: str) -> dict | None:
+    """Parse a single SSE frame. Returns None for comments / non-data frames."""
+    for line in frame.splitlines():
+        line = line.rstrip("\r")
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            payload = line[len("data:"):].lstrip()
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                return {"type": "error", "message": f"bad SSE JSON: {payload[:80]}"}
+    return None
