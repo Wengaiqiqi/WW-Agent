@@ -38,7 +38,7 @@ async def test_loopback_stream(tls_ca) -> None:
             secret="s", my_peer_id="caller",
         )
         events = [
-            e async for e in client.stream(method="message/stream", params={}, skill="message/stream")
+            e async for e in client.stream(method="message/stream", params={}, skill="task.delegate")
         ]
         assert events[-1]["state"] == "completed"
 

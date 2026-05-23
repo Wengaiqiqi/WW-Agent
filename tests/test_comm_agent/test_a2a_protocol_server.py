@@ -147,7 +147,7 @@ async def test_post_stream_yields_sse() -> None:
     )
     grant = sign_cross_machine_grant(
         my_peer_id="caller", target_peer_id="me",
-        requested_skill="message/stream", key=SECRET, ttl_seconds=60,
+        requested_skill="task.delegate", key=SECRET, ttl_seconds=60,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:

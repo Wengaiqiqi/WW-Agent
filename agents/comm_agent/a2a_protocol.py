@@ -205,6 +205,22 @@ SkillDispatcher = Callable[[str, dict, dict], Awaitable[dict]]
 StreamDispatcher = Callable[[str, dict, dict], AsyncIterator[dict]]
 
 
+# A2A JSON-RPC wire method → advertised skill id. Per spec §6.1 the HMAC grant
+# binds to the *skill id* (task.delegate / chat.message / status.query), not the
+# raw method name, so the verifier must resolve the method to its skill before
+# checking the grant. Unknown methods map to themselves so plain RPC methods
+# (e.g. "ping" in tests) still verify against a same-named grant.
+_METHOD_TO_SKILL = {
+    "message/stream": "task.delegate",
+    "message/send": "chat.message",
+    "status/query": "status.query",
+}
+
+
+def _skill_for_method(method: str) -> str:
+    return _METHOD_TO_SKILL.get(method, method)
+
+
 def build_app(
     *,
     self_card: dict,
@@ -250,7 +266,7 @@ def build_app(
         body = await req.json()
         method = body.get("method", "")
         params = body.get("params") or {}
-        claims = await _authenticate(body, req.headers, method)
+        claims = await _authenticate(body, req.headers, _skill_for_method(method))
         result = await skill_dispatcher(method, params, claims)
         return JSONResponse({
             "jsonrpc": "2.0", "id": body.get("id"), "result": result,
@@ -261,7 +277,7 @@ def build_app(
         body = await req.json()
         method = body.get("method", "")
         params = body.get("params") or {}
-        claims = await _authenticate(body, req.headers, method)
+        claims = await _authenticate(body, req.headers, _skill_for_method(method))
 
         async def gen() -> AsyncIterator[bytes]:
             async for event in stream_dispatcher(method, params, claims):

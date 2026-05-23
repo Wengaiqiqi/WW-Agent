@@ -32,7 +32,7 @@ async def test_stream_truncated(tls_ca) -> None:
             ),
             secret="s", my_peer_id="caller",
         )
-        events = [e async for e in client.stream(method="message/stream", params={}, skill="message/stream")]
+        events = [e async for e in client.stream(method="message/stream", params={}, skill="task.delegate")]
         # Got at least the "working" event; final event is an error marker.
         assert events[0]["type"] == "task"
         # Truncation or stream-error event present at end.
