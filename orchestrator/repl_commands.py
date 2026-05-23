@@ -540,16 +540,32 @@ class ReplCommandHandler:
 
         log_path = config_dir() / "gateway.log"
 
+        # Stat-cache so the 5 Hz refresh doesn't re-read + re-decode the
+        # whole log file every tick when nothing has changed. mtime_ns +
+        # size together catch both edits and truncation/rotation.
+        last_sig: tuple[int, int] | None = None
+        last_lines: list[str] = []
+
         def _footer() -> list[str]:
+            nonlocal last_sig, last_lines
+            try:
+                st = log_path.stat()
+            except OSError:
+                return []
+            sig = (st.st_mtime_ns, st.st_size)
+            if sig == last_sig:
+                return last_lines
             # Truncate at console width - 4 so the panel never wraps and
-            # break the picker layout. Width is sampled per call so the
-            # user can resize the terminal during the session.
-            return read_tail(
+            # breaks the picker layout. Sampled only on actual log churn,
+            # so a mid-session resize is picked up on the next new line.
+            last_lines = read_tail(
                 log_path,
-                platform=platform,
+                platform=platform,  # type: ignore[arg-type]
                 max_lines=8,
                 max_width=max(20, self.ui.console.width - 4),
             )
+            last_sig = sig
+            return last_lines
 
         while True:
             from gateway import credentials as gw_creds
@@ -593,6 +609,7 @@ class ReplCommandHandler:
                 footer_lines=_footer,
                 footer_title="Recent log (last 8 lines, filtered)",
                 footer_refresh_seconds=0.2,
+                footer_empty_message="(no log yet — start the gateway to see activity)",
             )
             if idx is None:
                 return True

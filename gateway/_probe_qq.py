@@ -24,12 +24,10 @@ import uuid
 import httpx
 
 from gateway import credentials as gw_creds
+from gateway._constants import LOG_FORMAT
 from gateway.qq import _coerce, _msg_seq
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-)
+logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
 # Quiet noisy libs
 logging.getLogger("httpcore").setLevel(logging.INFO)
 

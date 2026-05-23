@@ -501,8 +501,7 @@ def serve(cfg: Optional[Dict[str, Any]] = None) -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-    )
+    from gateway._constants import LOG_FORMAT
+
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     serve()

@@ -42,15 +42,24 @@ def _install_file_logging() -> Path:
 
     from agent_paths import config_dir
 
+    from gateway._constants import LOG_FORMAT
+
     path = config_dir() / "gateway.log"
     if _FILE_HANDLER_INSTALLED:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(path, encoding="utf-8")
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
+    # Rotate at 2 MB × 3 backups (gateway.log + .1/.2/.3 ⇒ ≤8 MB total).
+    # Without rotation, long-running QQ/Feishu adapters grow the file
+    # indefinitely — uvicorn access logs alone are ~100 bytes per request.
+    from logging.handlers import RotatingFileHandler
+    handler = RotatingFileHandler(
+        path,
+        maxBytes=2 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
     )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
     for name in (
         "gateway",
         "uvicorn",

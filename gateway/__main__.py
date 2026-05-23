@@ -47,10 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("qq", help="Run the QQ Official Bot WebSocket adapter")
 
     args = p.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-    )
+    from gateway._constants import LOG_FORMAT
+
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
     # Prefer credentials saved via the REPL's ``/gateway setup`` wizard. Env
     # vars (QQ_APP_ID etc.) are still honoured as a fallback so headless

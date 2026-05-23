@@ -76,6 +76,7 @@ def interactive_select(
     footer_lines: Callable[[], list[str]] | None = None,
     footer_title: str | None = None,
     footer_refresh_seconds: float | None = None,
+    footer_empty_message: str | None = None,
 ) -> int | None:
     """Inline arrow-key picker built on prompt_toolkit.
 
@@ -90,9 +91,12 @@ def interactive_select(
       to display below the picker body. ``None`` (default) hides the
       footer entirely — layout unchanged for legacy callers.
     - ``footer_title``: single-line header rendered above the footer.
-    - ``footer_refresh_seconds``: when set, the picker schedules a periodic
-      ``app.invalidate()`` so the footer re-runs ``footer_lines`` even when
-      the user isn't pressing keys.
+    - ``footer_refresh_seconds``: when set, the prompt_toolkit
+      ``Application`` is constructed with this ``refresh_interval``, which
+      re-invalidates the screen on a timer so ``footer_lines`` is re-run
+      even when the user isn't pressing keys.
+    - ``footer_empty_message``: text to show when ``footer_lines`` returns
+      no rows (e.g. log file empty). ``None`` leaves the footer blank.
     """
     if not options:
         return None
@@ -234,9 +238,9 @@ def interactive_select(
             except Exception:  # noqa: BLE001 - footer must not crash the UI
                 lines = []
             if not lines:
-                return FormattedText([
-                    ("class:dim", "(no log yet — start the gateway to see activity)\n"),
-                ])
+                if footer_empty_message:
+                    return FormattedText([("class:dim", footer_empty_message + "\n")])
+                return FormattedText([("", "")])
             return FormattedText([("class:dim", "\n".join(lines) + "\n")])
 
         if footer_title:
@@ -248,31 +252,16 @@ def interactive_select(
 
     layout = Layout(HSplit(windows))
 
-    app = Application(
-        layout=layout, key_bindings=kb, style=style, full_screen=False,
+    refresh_interval = (
+        footer_refresh_seconds if footer_lines is not None else None
     )
-
-    if footer_lines is not None and footer_refresh_seconds is not None:
-        async def _ticker() -> None:
-            try:
-                while True:
-                    await asyncio.sleep(footer_refresh_seconds)
-                    app.invalidate()
-            except asyncio.CancelledError:
-                raise
-
-        # Install the refresh task on the first paint — by then the
-        # application has its asyncio loop bound and ``create_background_task``
-        # is safe to call. The flag prevents re-installation on every render.
-        installed: list[bool] = [False]
-
-        def _install_once(_app) -> None:
-            if installed[0]:
-                return
-            installed[0] = True
-            app.create_background_task(_ticker())
-
-        app.before_render += _install_once
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        style=style,
+        full_screen=False,
+        refresh_interval=refresh_interval,
+    )
 
     _run_blocking_app(app)
     return result[0]
@@ -287,6 +276,7 @@ async def interactive_select_async(
     footer_lines: Callable[[], list[str]] | None = None,
     footer_title: str | None = None,
     footer_refresh_seconds: float | None = None,
+    footer_empty_message: str | None = None,
 ) -> int | None:
     """Async variant for slash-command handlers that run inside the REPL loop.
 
@@ -322,4 +312,5 @@ async def interactive_select_async(
         footer_lines=footer_lines,
         footer_title=footer_title,
         footer_refresh_seconds=footer_refresh_seconds,
+        footer_empty_message=footer_empty_message,
     )

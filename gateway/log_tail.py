@@ -10,11 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from gateway._constants import GatewayPlatform
+
 # Per-platform filter rules. A line is accepted if EITHER:
 #   - the raw line contains any "marker" substring, OR
-#   - the logger-name field (3rd whitespace-separated column of the formatter
-#     "%(asctime)s %(levelname)-7s %(name)s | %(message)s") starts with one
-#     of the listed prefixes OR equals one of the exact names.
+#   - the logger-name field (the 4th whitespace-separated token of a line
+#     produced by gateway._constants.LOG_FORMAT) starts with one of the
+#     listed prefixes OR equals one of the exact names.
 #
 # Keeping this as plain string ops (no regex) is intentional: the function
 # runs ~5 times/sec from the picker's render loop.
@@ -65,7 +67,7 @@ def _truncate(line: str, max_width: int | None) -> str:
 def read_tail(
     path: Path,
     *,
-    platform: str,
+    platform: GatewayPlatform,
     max_lines: int = 8,
     max_width: int | None = None,
 ) -> list[str]:
@@ -84,7 +86,7 @@ def read_tail(
         return []
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-    except (FileNotFoundError, OSError, PermissionError):
+    except OSError:
         return []
     if not text:
         return []
