@@ -44,8 +44,12 @@
 
 ## 4. 底层调用
 
-- 统一通过 `await self.host.call_tool("comm-agent", "comm.<tool>", args)`,从返回 `result.content[0].text` 取 JSON 字符串后 `json.loads` 再渲染。`"comm-agent"` 来自 card id,定义为模块常量。
-- comm-agent 未运行 / 调用异常时,捕获并渲染友好提示("comm-agent 未运行,检查 `.agent/agents/` 与启动日志"),不抛出。
+- 统一通过 `await self.host.call_tool("comm-agent", "comm.<tool>", args)`。`"comm-agent"` 来自 card id,定义为模块常量。
+- **返回是异构的,且 `call_tool` 几乎不抛异常**(仅透传 `CancelledError`),必须按下面处理:
+  - 成功:返回 MCP SDK 的 `CallToolResult` **对象** —— `result.content[0].text`(属性访问)、`result.isError`。
+  - specialist 不可用 / 崩溃 / 出错:返回普通 **dict** —— `result["content"][0]["text"]`(下标访问)、`result["isError"] == True`。
+  - 因此写一个归一化 helper `_unwrap(result) -> tuple[bool, str]`:兼容对象与 dict,取出 `is_error` 与首个文本块。
+- 处理流程:`is_error` 为真 → 渲染友好提示("comm-agent 未运行或调用失败,检查 `.agent/agents/` 与启动日志"),不抛出;否则把文本当 JSON `json.loads` 后按 §6 渲染。`json.loads` 失败也走友好提示。
 
 各命令对应的底层工具:
 
@@ -74,13 +78,15 @@
 
 - `/task`:用 `stream=false` 调用,显示**目标对端 + 最终结果 + 耗时**。说明:底层 `comm.delegate` 为 MVP 的"一次性返回完整记录",非逐字推流,因此展示的是任务跑完后的结果,不是实时滚动。
 - `/chat`:显示**目标对端 + reply**,并记下 `context_id`。
+- `/comm add` 成功后:除"已注册并设为当前对端"外,**显式展示底层返回的 `note`**(`export COMM_PEER_<ID>_HMAC=...`),提醒用户持久化密钥(否则重启失效,见 §7)。
 - `/comm list`:表格(对端名、display_name、URL、`★`当前标记)。
 - **防误发**:`/task`、`/chat` 的输出顶部回显 `→ 发送给 <peer> (<url>)`,让目标始终可见。
 - 斜杠命令输出沿用现有 `ui.render_text` / `render_table` / `render_command_error` 风格(不套 Panel 框,框留给运行态错误)。
 
 ## 7. 边界与错误
 
-- 交互式 `/comm add` 需要 TTY(与现有 `/model`、`/gateway` 一致);非 TTY 时给提示并中止。
+- 交互式 `/comm add` 需要 TTY:用现成的 `can_use_interactive_picker()` 判断(与 `/model` 一致),非 TTY 时给提示并中止。
+- **密钥重启失效局限**:`comm.add_peer` 把密钥写进 comm-agent 子进程的环境变量(进程级)。orchestrator/comm-agent 重启后,注册表文件仍在(`/comm list` 照常列出对端),但密钥变量丢失,`/task`/`/chat` 会因 `resolve_secret` 失败返回 `{ok:false}`。缓解:`/comm add` 展示持久化 `note`(见 §6);彻底持久化(写 shell profile / `.env` 加载)由用户完成,本期不自动做。
 - **长任务局限**:`/task` 是同步 `await` 调用,委派长任务时(a) REPL 输入阻塞至返回;(b) 受 `A2AClient` 默认 30s 超时限制,超时则失败。后台化(类似 `/gateway`)留作后续,本期不做。
 - comm 工具本身永不抛(返回 `{ok:false,error}`),命令层把它渲染成友好错误。
 - 在 `COMMANDS` 注册表(`/help` 与输入补全用)补 `/comm`、`/task`、`/chat` 的帮助文本。
@@ -99,7 +105,7 @@
 - `/comm rm <当前>` 清空当前对端与 context。
 - `/task` 无当前对端时提示;有当前对端时以正确 `peer_id`+`stream=false` 调用并回显目标。
 - `/chat` 首轮 `context_id=None`,续传时带上次返回的 `context_id`;切换对端 context 独立。
-- comm-agent 调用异常时渲染友好错误、不抛。
+- `_unwrap` 归一化:对成功的 `CallToolResult` 对象与失败的 `isError` dict 都能取出首个文本;`isError` 为真时渲染友好错误、不抛;`json.loads` 失败也走友好错误。
 
 `tests/test_comm_agent/test_mcp_tools.py`(扩展):
 - `comm.add_peer` 传 `tls_pinned_sha256` + `tls_verify=False` 时,注册表落地为嵌套 `tls.verify=false / pinned_sha256=<指纹>`。
@@ -109,7 +115,7 @@
 
 - `agents/comm_agent/mcp_tools.py` —— `add_peer` 新增 `tls_verify` / `tls_pinned_sha256` 参数。
 - `orchestrator/repl_commands.py` —— `/comm` 子命令 + `/task` + `/chat` + 会话状态字段。
-- `orchestrator/repl_ui.py`(或 `COMMANDS` 所在处)—— 补帮助文本。
+- `orchestrator/repl_ui.py` —— 在 `COMMANDS`(`repl_ui.py:16`,平 `dict[str,str]`)补 `/comm`、`/task`、`/chat` 三条(子命令在 `/comm` 描述里列)。
 - `tests/test_orchestrator/` —— 斜杠命令测试。
 - `tests/test_comm_agent/test_mcp_tools.py` —— add_peer 指纹分支测试。
 
