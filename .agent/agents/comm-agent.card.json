@@ -1,0 +1,15 @@
+{
+  "id": "comm-agent",
+  "display_name": "Communication Specialist",
+  "version": "1.0.0",
+  "entrypoint": {
+    "type": "python",
+    "module": "agents.comm_agent.main",
+    "args": []
+  },
+  "mcp": { "transport": "stdio" },
+  "a2a": { "transport": "http", "port_strategy": "ephemeral", "streaming": true },
+  "capabilities_hint": ["comm", "comm.delegate", "comm.chat", "comm.status"],
+  "optional": true,
+  "model_override": null
+}
