@@ -191,3 +191,82 @@ def _parse_sse_frame(frame: str) -> dict | None:
             except json.JSONDecodeError:
                 return {"type": "error", "message": f"bad SSE JSON: {payload[:80]}"}
     return None
+
+
+from fastapi import FastAPI, HTTPException, Request
+from starlette.responses import JSONResponse, StreamingResponse
+
+
+SkillDispatcher = Callable[[str, dict, dict], Awaitable[dict]]
+StreamDispatcher = Callable[[str, dict, dict], AsyncIterator[dict]]
+
+
+def build_app(
+    *,
+    self_card: dict,
+    hmac_secret: str,
+    my_peer_id: str,
+    skill_dispatcher: SkillDispatcher,
+    stream_dispatcher: StreamDispatcher,
+    nonce_cache: NonceCache | None = None,
+) -> FastAPI:
+    """Build the public-facing FastAPI app for our A2A endpoints."""
+    app = FastAPI()
+    cache = nonce_cache or NonceCache()
+
+    @app.get("/.well-known/agent.json")
+    async def get_card() -> dict:
+        return self_card
+
+    def _extract_grant(body: dict, headers) -> str:
+        """Spec §6.1 double-write: header OR body param _meta."""
+        h = headers.get("authorization", "")
+        if h.startswith("A2A-HMAC "):
+            return h[len("A2A-HMAC "):]
+        meta = (body.get("params") or {}).get("_meta") or {}
+        return meta.get("authz_grant", "")
+
+    async def _authenticate(body: dict, headers, skill: str) -> dict:
+        grant = _extract_grant(body, headers)
+        if not grant:
+            raise HTTPException(401, detail="missing authz_grant")
+        try:
+            claims = verify_cross_machine_grant(
+                grant, key=hmac_secret,
+                my_peer_id=my_peer_id, requested_skill=skill,
+            )
+        except AuthzError as exc:
+            raise HTTPException(401, detail=str(exc)) from exc
+        if not cache.check_and_remember(claims.get("nonce", "")):
+            raise HTTPException(401, detail="replay detected")
+        return claims
+
+    @app.post("/a2a")
+    async def post_a2a(req: Request) -> JSONResponse:
+        body = await req.json()
+        method = body.get("method", "")
+        params = body.get("params") or {}
+        claims = await _authenticate(body, req.headers, method)
+        result = await skill_dispatcher(method, params, claims)
+        return JSONResponse({
+            "jsonrpc": "2.0", "id": body.get("id"), "result": result,
+        })
+
+    @app.post("/a2a/stream")
+    async def post_stream(req: Request) -> StreamingResponse:
+        body = await req.json()
+        method = body.get("method", "")
+        params = body.get("params") or {}
+        claims = await _authenticate(body, req.headers, method)
+
+        async def gen() -> AsyncIterator[bytes]:
+            async for event in stream_dispatcher(method, params, claims):
+                # Compact separators (no spaces) keep SSE frames small and match
+                # the wire format the client-side parser tests assert against.
+                payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                line = "data: " + payload + "\n\n"
+                yield line.encode("utf-8")
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    return app
