@@ -171,10 +171,14 @@ class A2AClient:
                             "type": "error",
                             "message": f"stream truncated after {events_seen} events",
                         }
-        except (httpx.ConnectError, httpx.ReadError) as exc:
+        except httpx.TransportError as exc:
+            # TransportError is the common base of ConnectError, ReadError AND
+            # RemoteProtocolError (incomplete chunked read when the peer drops
+            # mid-stream). Spec §5: never crash the calling tool — surface a
+            # final error event instead of propagating.
             yield {
                 "type": "error",
-                "message": f"stream connect/read error after {events_seen} events: {exc}",
+                "message": f"stream transport error after {events_seen} events: {exc}",
             }
 
 
