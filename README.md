@@ -30,6 +30,7 @@ python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
 - [工具架构](#工具架构-tool-architecture)
 - [记忆架构](#记忆架构-memory-architecture)
 - [聊天平台网关](#聊天平台网关-chat-platform-gateways)
+- [Comm-agent 跨机通信](#comm-agent-跨机通信-cross-machine-a2a)
 - [技能系统](#技能系统-skills)
 - [安全模型](#安全模型-security-model)
 - [技术栈](#技术栈-tech-stack)
@@ -408,6 +409,60 @@ QQ open platform           本机 gateway
 | **反馈** | `message.reaction` ("Typing") | 无公开 reaction API |
 | **跑在哪** | 工作线程 + lark SDK 自带 loop | 工作线程 + 自建 isolated loop |
 | **干净停** | SDK 无 stop API,只能进程退 | `threading.Event` 协作式取消 |
+
+---
+
+## Comm-agent 跨机通信 (cross-machine A2A)
+
+The `comm-agent` specialist speaks Google A2A v0.3 over HTTPS so your
+main REPL can delegate tasks to or chat with agents running on other
+machines (e.g. an OpenClaw or Hermes instance).
+
+**Tools exposed:** `comm.list_peers`, `comm.add_peer`, `comm.remove_peer`,
+`comm.peer_card`, `comm.delegate`, `comm.chat`, `comm.status`.
+
+**Quick start (host side):**
+
+1. Install Caddy (used for TLS): https://caddyserver.com/docs/install
+2. Set the inbound HMAC secret env var:
+   ```bash
+   export COMM_AGENT_SELF_HMAC=$(openssl rand -hex 32)
+   ```
+3. Start the REPL — the comm-agent specialist auto-spawns when present in
+   `.agent/agents/`.
+
+**Connecting a remote OpenClaw (the example case):**
+
+On the remote machine, run our install script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/<repo>/main/scripts/install_openclaw_a2a.sh \
+  | bash -s -- \
+      --my-peer-id openclaw-home \
+      --your-peer-id agent-last-laptop \
+      --public-host home.example.com \
+      --hmac-secret "$(openssl rand -hex 32)"
+```
+
+The script prints the HMAC secret once. Back in the host REPL, register
+the remote:
+
+```
+comm.add_peer peer_id=openclaw-home url=https://home.example.com:8443 hmac_secret_value=<the-secret>
+```
+
+After that, the orchestrator can delegate via `comm.delegate peer_id=openclaw-home task="..."`.
+
+**Security model:**
+
+- Every cross-machine call carries an HMAC-SHA256 grant scoped to
+  `(my_peer_id, target_peer_id, requested_skill, nonce, 60s exp)`. Replay
+  is blocked by a 10k-entry LRU on the verifier.
+- TLS is handled by Caddy (ACME by default; self-signed for LAN/VPN).
+- The peer registry stores only env-var **names**; the secret value lives
+  in process env only. Persist via your shell profile or a `.env` loader.
+
+See `docs/superpowers/specs/2026-05-23-comm-agent-design.md` for the full design.
 
 ---
 
