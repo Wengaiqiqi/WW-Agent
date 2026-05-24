@@ -97,8 +97,8 @@ class HermesACPClient:
     async def aclose(self) -> None:
         proc = self._proc
         self._proc = None
-        if self._reader_task is not None:
-            self._reader_task.cancel()
+        reader = self._reader_task
+        self._reader_task = None
         if proc is not None and proc.returncode is None:
             try:
                 proc.terminate()
@@ -108,6 +108,15 @@ class HermesACPClient:
                     proc.kill()
                 except ProcessLookupError:
                     pass
+        # Await the reader so its finally-block (which fails pending futures)
+        # has run before we return — avoids "Task pending" warnings and leaves
+        # no caller awaiting a future that will never settle.
+        if reader is not None:
+            reader.cancel()
+            try:
+                await reader
+            except (asyncio.CancelledError, Exception):
+                pass
 
     # ---- JSON-RPC plumbing --------------------------------------------------
 
@@ -120,9 +129,13 @@ class HermesACPClient:
         rid = self._next_id
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
-        self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-        assert self._proc is not None and self._proc.stdin is not None
-        await self._proc.stdin.drain()
+        try:
+            self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+            assert self._proc is not None and self._proc.stdin is not None
+            await self._proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            self._pending.pop(rid, None)
+            raise ACPError(f"hermes acp write failed: {exc}") from exc
         return await fut
 
     async def _read_loop(self) -> None:
@@ -167,8 +180,11 @@ class HermesACPClient:
                 if q is not None:
                     await q.put(ev)
             return
-        # Server->client request — must answer (it carries an id).
+        # Server->client request — must answer (it carries an id). A bare
+        # notification (no id) we don't handle is dropped: never reply to one.
         mid = msg.get("id")
+        if mid is None:
+            return
         if method == "session/request_permission":
             outcome: dict
             if self._auto_approve:
