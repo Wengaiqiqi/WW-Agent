@@ -66,3 +66,40 @@ async def test_stream_dispatcher_rejects_disallowed_caller():
     ]
     assert events == [{"type": "task", "state": "failed", "error": "caller peer not allowed"}]
     assert acp.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_skill_dispatcher_chat_first_turn_allocates_context():
+    acp = FakeACP()
+    skill, _stream = make_dispatchers(acp)
+    out = await skill("message/send", _params("hi"), {"peer_id": "caller"})
+    assert out["reply"] == "echo: hi"
+    assert out["context_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_skill_dispatcher_chat_reuses_context():
+    acp = FakeACP()
+    skill, _stream = make_dispatchers(acp)
+    first = await skill("message/send", _params("hi"), {"peer_id": "caller"})
+    second = await skill("message/send",
+                         _params("again", context_id=first["context_id"]),
+                         {"peer_id": "caller"})
+    assert second["context_id"] == first["context_id"]   # same ACP session
+    assert [sid for sid, _ in acp.prompts] == ["s1", "s1"]
+
+
+@pytest.mark.asyncio
+async def test_skill_dispatcher_status():
+    acp = FakeACP()
+    skill, _stream = make_dispatchers(acp)
+    out = await skill("status/query", {}, {"peer_id": "caller"})
+    assert out["state"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_skill_dispatcher_unsupported_method():
+    acp = FakeACP()
+    skill, _stream = make_dispatchers(acp)
+    out = await skill("message/bogus", _params("x"), {"peer_id": "caller"})
+    assert "unsupported" in out["error"]
