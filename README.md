@@ -453,6 +453,11 @@ comm.add_peer peer_id=openclaw-home url=https://home.example.com:8443 hmac_secre
 
 After that, the orchestrator can delegate via `comm.delegate peer_id=openclaw-home task="..."`.
 
+**Connecting a remote Hermes:** Hermes speaks stdio ACP (not A2A), so it needs
+the A2A↔ACP bridge — run `scripts/install_hermes_a2a.sh` (or `.ps1`) on the
+Hermes host, then `comm.add_peer` exactly as above. See
+`agents/comm_agent/README.md` → "对接 Hermes（A2A↔ACP 桥接）".
+
 **Security model:**
 
 - Every cross-machine call carries an HMAC-SHA256 grant scoped to

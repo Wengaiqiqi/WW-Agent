@@ -259,7 +259,38 @@ Next step on your laptop:
 
 照着 `agents/comm_agent/a2a_protocol.py` 的 `build_app()` 实现即可（它本身就是一份可参考的 A2A v0.3 服务端）。
 
-> **Hermes 不在此列。** Hermes（NousResearch/hermes-agent）对外走的是 **stdio 上的 ACP**（Agent Client Protocol，编辑器集成那套），**不说 A2A**，无法靠"满足 A2A 契约"直连。对接 Hermes 需要在它那台机器上跑一个 **A2A↔ACP 桥接**（对外说 A2A、对内 spawn `hermes acp`），配套专门的 `install_hermes_a2a` 安装脚本。该能力**规划中**，文档与脚本会随实现一起补上。
+> **Hermes 走 ACP，不说 A2A。** Hermes（NousResearch/hermes-agent）对外只暴露 **stdio 上的 ACP**，不满足 A2A 契约，不能直连。对接方式见下方「对接 Hermes（A2A↔ACP 桥接）」。
+
+### 对接 Hermes（A2A↔ACP 桥接）
+
+Hermes 那台机器上要跑一个**桥接进程**：对外说 comm-agent 的 A2A v0.3，对内 spawn 本地 `hermes acp` 用 stdio ACP 驱动 Hermes。agent-last 侧零改动——注册个 peer 就能用。
+
+**前置（Hermes 机器）**：装好 Hermes 且 `hermes` 在 PATH；Hermes 的 ACP 依赖已装（`pip install -e '.[acp]'`）；装好 Caddy；有公网主机名。
+
+**一键安装**（在 Hermes 机器执行）：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/<your-repo>/main/scripts/install_hermes_a2a.sh \
+  | bash -s -- \
+      --my-peer-id    hermes-home \
+      --your-peer-id  agent-last-laptop \
+      --public-host   home.example.com \
+      --hmac-secret   "$(openssl rand -hex 32)"
+```
+
+Windows 用 `scripts/install_hermes_a2a.ps1`（参数同名）。脚本会：拉 agent-last（复用其 A2A 服务端模块）、装桥接依赖、写 `~/.hermes-a2a/bridge.env`、渲染 Caddyfile，并打印主机端要跑的 `comm.add_peer` 行。
+
+**协议映射**：`task.delegate`→ACP `session/new`+`session/prompt`（流式）；`chat.message`→复用 ACP session（`context_id`↔`sessionId`）；`status.query`→桥接自记运行态。
+
+**注册后照常用**：
+
+```
+comm.add_peer peer_id=hermes-home url=https://home.example.com:8443 hmac_secret_value=<密钥>
+comm.delegate peer_id=hermes-home task="..."
+comm.chat     peer_id=hermes-home message="..."
+```
+
+**限制**：危险操作审批默认**拒**（远端无人值守），放行需在桥接端设 `HERMES_A2A_AUTO_APPROVE=1`；仅透传文本（ACP image/resource 块本期不接）；受 `A2AClient` 30s 超时限制。
 
 ---
 
