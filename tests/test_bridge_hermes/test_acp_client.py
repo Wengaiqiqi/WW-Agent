@@ -84,3 +84,29 @@ async def test_status_idle_then_reports_sessions(fake_acp_argv):
         assert st["sessions"] == 1
     finally:
         await acp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_by_default_still_completes(fake_acp_argv, monkeypatch):
+    monkeypatch.setenv("FAKE_ACP_ASK_PERMISSION", "1")
+    acp = HermesACPClient(argv=fake_acp_argv)  # auto_approve defaults to False
+    try:
+        sid = await acp.ensure_session(None)
+        events = [ev async for ev in acp.run_prompt(sid, "needs perm")]
+    finally:
+        await acp.aclose()
+    # The stub continues to completion regardless; the point is the bridge
+    # answered the request_permission RPC so the prompt did not deadlock.
+    assert any(e.get("state") == "completed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_permission_auto_approve(fake_acp_argv, monkeypatch):
+    monkeypatch.setenv("FAKE_ACP_ASK_PERMISSION", "1")
+    acp = HermesACPClient(argv=fake_acp_argv, auto_approve=True)
+    try:
+        sid = await acp.ensure_session(None)
+        events = [ev async for ev in acp.run_prompt(sid, "needs perm")]
+    finally:
+        await acp.aclose()
+    assert any(e.get("state") == "completed" for e in events)
