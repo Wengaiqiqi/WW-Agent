@@ -232,3 +232,40 @@ class HermesACPClient:
             raise ACPError("hermes acp did not return a sessionId")
         self._known_sessions.add(sid)
         return sid
+
+    async def run_prompt(self, session_id: str, text: str) -> AsyncIterator[dict]:
+        """Run one ACP turn; yield translated A2A events ending in a terminal
+        task event (completed or failed). Never raises — failures become a
+        {"type":"task","state":"failed"} event."""
+        await self._ensure_started()
+        q: asyncio.Queue = asyncio.Queue()
+        self._session_queues[session_id] = q
+        self._session_text[session_id] = ""
+        self._session_prompt[session_id] = text
+        self._running[session_id] = True
+        done = object()
+
+        async def _drive() -> None:
+            try:
+                await self._request("session/prompt", {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": text}],
+                })
+                await q.put({"type": "task", "state": "completed",
+                             "result": self._session_text.get(session_id, "")})
+            except Exception as exc:  # noqa: BLE001 — surface, don't crash the SSE
+                await q.put({"type": "task", "state": "failed", "error": str(exc)})
+            finally:
+                await q.put(done)
+
+        drive_task = asyncio.create_task(_drive())
+        try:
+            while True:
+                ev = await q.get()
+                if ev is done:
+                    break
+                yield ev
+        finally:
+            self._running[session_id] = False
+            self._session_queues.pop(session_id, None)
+            await drive_task
