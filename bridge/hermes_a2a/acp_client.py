@@ -269,3 +269,25 @@ class HermesACPClient:
             self._running[session_id] = False
             self._session_queues.pop(session_id, None)
             await drive_task
+
+    async def prompt_collect(self, session_id: str, text: str) -> str:
+        """Run one turn and return only the final assistant text. Raises
+        ACPError if the turn failed (used by the synchronous chat path)."""
+        final = ""
+        async for ev in self.run_prompt(session_id, text):
+            if ev.get("type") == "task" and ev.get("state") == "completed":
+                final = ev.get("result", "")
+            elif ev.get("type") == "task" and ev.get("state") == "failed":
+                raise ACPError(ev.get("error", "prompt failed"))
+        return final
+
+    def status(self) -> dict:
+        """Snapshot of bridge-tracked run state (ACP has no native status)."""
+        running = [sid for sid, r in self._running.items() if r]
+        return {
+            "state": "working" if running else "idle",
+            "current_task": (self._session_prompt.get(running[0], "")[:200]
+                             if running else None),
+            "sessions": len(self._known_sessions),
+            "last_error": None,
+        }

@@ -48,3 +48,39 @@ async def test_run_prompt_failure_yields_failed_event(fake_acp_argv, monkeypatch
         await acp.aclose()
     assert any(e.get("type") == "task" and e.get("state") == "failed" for e in events)
     assert not any(e.get("state") == "completed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_prompt_collect_returns_final_text(fake_acp_argv):
+    acp = HermesACPClient(argv=fake_acp_argv)
+    try:
+        sid = await acp.ensure_session(None)
+        reply = await acp.prompt_collect(sid, "ping")
+    finally:
+        await acp.aclose()
+    assert reply == "echo: ping"
+
+
+@pytest.mark.asyncio
+async def test_prompt_collect_raises_on_failure(fake_acp_argv, monkeypatch):
+    monkeypatch.setenv("FAKE_ACP_FAIL_PROMPT", "1")
+    acp = HermesACPClient(argv=fake_acp_argv)
+    try:
+        sid = await acp.ensure_session(None)
+        with pytest.raises(ACPError):
+            await acp.prompt_collect(sid, "boom")
+    finally:
+        await acp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_status_idle_then_reports_sessions(fake_acp_argv):
+    acp = HermesACPClient(argv=fake_acp_argv)
+    try:
+        assert acp.status()["state"] == "idle"
+        await acp.ensure_session(None)
+        st = acp.status()
+        assert st["state"] == "idle"
+        assert st["sessions"] == 1
+    finally:
+        await acp.aclose()
