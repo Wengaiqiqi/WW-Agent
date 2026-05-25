@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import os
 import secrets
@@ -118,62 +117,25 @@ async def _delegate_via_a2a(
 ) -> str:
     """Stream a task to tool-agent or skill-agent via A2A and return the text.
 
-    Mirrors the bits of :meth:`REPLController._delegate_to_agent` that gateway
-    callers need -- mint a per-tool authz grant, post the task, collect
-    ``text`` deltas, return when ``done`` arrives.
+    Thin adapter over :func:`orchestrator.delegation.delegate_via_a2a` (the
+    single source of truth shared with the REPL controller and the one-shot
+    ``cli.py prompt`` path). Reads the gateway's permission mode from env and
+    forwards the planner's ``arguments``.
     """
-    from orchestrator.a2a_client import delegate_task
-    from orchestrator.permission_gate import PermissionGate
+    from orchestrator.delegation import delegate_via_a2a
 
     permission_mode = os.environ.get(
         "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
     )
-    gate = PermissionGate(mode=permission_mode, hmac_key=hmac_key, trace_id=trace_id)
-
-    if capability == "tool.task":
-        peer_id = "tool-agent"
-        task_text = (decision.get("arguments") or {}).get("task", user_input)
-        grant = gate.sign(target_specialist="tool-agent", tool="tool.task")
-        meta = {
-            "trace_id": trace_id,
-            "agent_caller": "orchestrator",
-            "permission_mode": permission_mode,
-            "authz_grant": grant,
-        }
-    else:  # skill.<slug>
-        peer_id = "skill-agent"
-        slug = capability[len("skill."):]
-        arguments = decision.get("arguments") or {}
-        if arguments:
-            task_text = (
-                f"{user_input}\n\n[Planner arguments] "
-                + json.dumps(arguments, ensure_ascii=False)
-            )
-        else:
-            task_text = user_input
-        grant = gate.sign(target_specialist="skill-agent", tool=capability)
-        meta = {
-            "trace_id": trace_id,
-            "agent_caller": "orchestrator",
-            "permission_mode": permission_mode,
-            "skill_slug": slug,
-            "authz_grant": grant,
-        }
-
-    text_buffer = ""
-    final_text = ""
-    async for event in delegate_task(
-        peer_id=peer_id, task=task_text, meta=meta, context=history_context,
-    ):
-        etype = event.get("type", "")
-        if etype == "text":
-            text_buffer += event.get("chunk", "")
-        elif etype == "done":
-            final_text = event.get("text", "") or text_buffer
-            break
-        elif etype == "error":
-            raise RuntimeError(event.get("message", "agent error"))
-    return (final_text or text_buffer).strip()
+    return await delegate_via_a2a(
+        capability=capability,
+        arguments=decision.get("arguments") or {},
+        user_input=user_input,
+        hmac_key=hmac_key,
+        trace_id=trace_id,
+        permission_mode=permission_mode,
+        history_context=history_context,
+    )
 
 
 def _apply_memory_user_env(user_id: str) -> None:
@@ -337,6 +299,7 @@ async def _run_turn_locked(
     mux = StreamMux(out=io.StringIO())
 
     reply_text = ""
+    is_slash_command = False
     stop_tail = None
     try:
         # CRITICAL: apply the per-user memory scope env BEFORE building the
@@ -349,6 +312,20 @@ async def _run_turn_locked(
         history_context, full_context = _build_planner_context(session_key)
 
         await _bootstrap(host, router)
+
+        # Slash commands (/task /chat /peers /help) for whitelisted users.
+        # A string reply short-circuits the planner; None falls through to
+        # normal chat. comm.* tools are available because _bootstrap spawned
+        # the comm-agent onto this per-turn host.
+        from gateway.slash import handle_slash
+        slash_reply = await handle_slash(
+            prompt, host=host, session_key=session_key, user_id=user_id,
+        )
+        if slash_reply is not None:
+            is_slash_command = True
+            reply_text = slash_reply
+            return reply_text
+
         planner = _build_planner(router, context_text=full_context)
         stop_tail = await _drive_telemetry_tail(mux)
 
@@ -385,7 +362,9 @@ async def _run_turn_locked(
             pass
         # Persist the turn even when the reply was an error -- a future turn
         # might still want to refer to it ("you said you couldn't do that").
-        if session_key and reply_text:
+        # Slash commands are operator actions / remote conversations, not local
+        # chat, so they are deliberately excluded from the planner's history.
+        if session_key and reply_text and not is_slash_command:
             session_store.append(session_key, prompt, reply_text)
         # Restore the env var the way we found it; without this a subsequent
         # REPL turn in the same process would inherit the gateway's scoping.

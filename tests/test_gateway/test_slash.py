@@ -192,3 +192,53 @@ async def test_chat_missing_args_shows_usage(tmp_config_dir):
     reply = await slash.handle_slash("/chat openclaw-home", host=host, session_key="qq:1", user_id="ou_a")
     assert "用法" in reply
     assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_turn_routes_slash_and_skips_history(tmp_config_dir, monkeypatch):
+    """A slash command is handled by handle_slash and NOT appended to the
+    25-turn session history (it must not pollute planner context)."""
+    from gateway import runner, session_store
+
+    async def fake_bootstrap(host, router):
+        return None
+
+    async def fake_handle_slash(line, *, host, session_key, user_id):
+        assert line == "/peers"
+        return "SLASH_REPLY"
+
+    monkeypatch.setattr(runner, "_bootstrap", fake_bootstrap)
+    monkeypatch.setattr("gateway.slash.handle_slash", fake_handle_slash)
+
+    reply = await runner.run_turn(
+        "/peers", session_key="qq:42", user_id="ou_a",
+    )
+    assert reply == "SLASH_REPLY"
+    assert session_store.load("qq:42") == []
+
+
+@pytest.mark.asyncio
+async def test_run_turn_non_slash_still_reaches_planner(tmp_config_dir, monkeypatch):
+    """A None from handle_slash must fall through to the normal planner path."""
+    from gateway import runner
+
+    async def fake_bootstrap(host, router):
+        return None
+
+    async def fake_handle_slash(line, *, host, session_key, user_id):
+        return None
+
+    called = {"dispatch": False}
+
+    async def fake_dispatch(**kwargs):
+        called["dispatch"] = True
+        return "PLANNER_REPLY"
+
+    monkeypatch.setattr(runner, "_bootstrap", fake_bootstrap)
+    monkeypatch.setattr("gateway.slash.handle_slash", fake_handle_slash)
+    monkeypatch.setattr(runner, "_build_planner", lambda router, context_text="": (lambda state: {"capability": "", "response": "PLANNER_REPLY"}))
+    monkeypatch.setattr(runner, "_dispatch_decision", fake_dispatch)
+
+    reply = await runner.run_turn("ordinary message", session_key="qq:7", user_id="ou_a")
+    assert called["dispatch"] is True
+    assert reply == "PLANNER_REPLY"
