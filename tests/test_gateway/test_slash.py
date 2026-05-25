@@ -42,3 +42,68 @@ def test_is_authorized_accepts_json_list(tmp_config_dir):
 
     gw_creds.save("feishu", {"allowed_users": ["ou_a", "ou_b"]})
     assert slash._is_authorized("feishu:c", "ou_b") is True
+
+
+class _FakeHost:
+    """Stands in for MCPHost.call_tool; returns canned comm.* JSON envelopes."""
+
+    def __init__(self, responses: dict[str, dict] | None = None):
+        self._responses = responses or {}
+        self.calls: list[tuple[str, str, dict]] = []
+
+    async def call_tool(self, agent_id: str, name: str, arguments: dict):
+        self.calls.append((agent_id, name, arguments))
+        payload = self._responses.get(name, {"ok": True})
+        return {
+            "isError": False,
+            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+        }
+
+
+def _authorize(tmp_config_dir, platform="qq", user="ou_a"):
+    from gateway import credentials as gw_creds
+    gw_creds.save(platform, {"allowed_users": user})
+
+
+@pytest.mark.asyncio
+async def test_non_slash_returns_none(tmp_config_dir):
+    host = _FakeHost()
+    assert await slash.handle_slash("你好", host=host, session_key="qq:1", user_id="ou_a") is None
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_returns_none(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost()
+    assert await slash.handle_slash("/wat now", host=host, session_key="qq:1", user_id="ou_a") is None
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_user_refused(tmp_config_dir):
+    _authorize(tmp_config_dir, user="ou_owner")
+    host = _FakeHost()
+    reply = await slash.handle_slash("/peers", host=host, session_key="qq:1", user_id="ou_intruder")
+    assert reply is not None
+    assert "权限" in reply
+    assert host.calls == []  # no comm tool touched
+
+
+@pytest.mark.asyncio
+async def test_help_lists_commands(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost()
+    reply = await slash.handle_slash("/help", host=host, session_key="qq:1", user_id="ou_a")
+    assert "/task" in reply and "/chat" in reply and "/peers" in reply
+
+
+@pytest.mark.asyncio
+async def test_peers_lists_registered(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost({"comm.list_peers": {"peers": [
+        {"peer_id": "openclaw-home", "display_name": "Home box"},
+    ]}})
+    reply = await slash.handle_slash("/peers", host=host, session_key="qq:1", user_id="ou_a")
+    assert "openclaw-home" in reply
+    assert host.calls[0][1] == "comm.list_peers"

@@ -50,3 +50,94 @@ def _is_authorized(session_key: str, user_id: str) -> bool:
     if not user_id:
         return False
     return user_id in _allowed_users(_platform_from_session_key(session_key))
+
+
+def _unwrap(result: Any) -> tuple[bool, str]:
+    """Normalize call_tool result into (is_error, text). Mirrors the REPL handler."""
+    try:
+        is_error = bool(getattr(result, "isError", False))
+        content = getattr(result, "content", None)
+        if content and hasattr(content[0], "text"):
+            return is_error, content[0].text
+    except (IndexError, TypeError, AttributeError):
+        pass
+    try:
+        is_error = bool(result.get("isError", False))
+        content = result.get("content", [])
+        if content:
+            return is_error, content[0].get("text", "")
+    except (AttributeError, IndexError, TypeError):
+        pass
+    return True, "unexpected call_tool result format"
+
+
+async def _call_comm(host, tool: str, args: dict) -> tuple[bool, dict]:
+    """Call a comm.* tool; return (ok, data). data carries {'error': ...} on failure."""
+    result = await host.call_tool(COMM_AGENT_ID, tool, args)
+    is_error, text = _unwrap(result)
+    if is_error:
+        return False, {"error": text or "comm-agent unavailable"}
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return False, {"error": f"invalid comm response: {text!r}"}
+    if not data.get("ok", True):
+        return False, {"error": data.get("error", str(data))}
+    return True, data
+
+
+_USAGE = (
+    "可用命令:\n"
+    "/task <peer_id> <任务>  — 委托一次性任务给远程 peer\n"
+    "/chat <peer_id> <消息>  — 与远程 peer 多轮对话\n"
+    "/peers                  — 列出已注册的 peer\n"
+    "/help                   — 显示本帮助"
+)
+
+
+async def _do_peers(host) -> str:
+    ok, data = await _call_comm(host, "comm.list_peers", {})
+    if not ok:
+        return f"获取 peer 列表失败:{data.get('error')}"
+    peers = data.get("peers", [])
+    if not peers:
+        return "还没有注册任何 peer。(在 REPL 里用 /comm add 添加)"
+    lines = ["已注册的 peer:"]
+    for p in peers:
+        lines.append(f"- {p.get('peer_id', '')} — {p.get('display_name', '')}")
+    return "\n".join(lines)
+
+
+async def _do_task(host, parts: list[str]) -> str:  # replaced in Task 3
+    return "(task not implemented)"
+
+
+async def _do_chat(host, parts: list[str], session_key: str) -> str:  # replaced in Task 4
+    return "(chat not implemented)"
+
+
+async def handle_slash(line: str, *, host, session_key: str, user_id: str) -> str | None:
+    """Dispatch a chat-platform slash command. See module docstring for contract."""
+    line = (line or "").strip()
+    if not line.startswith("/"):
+        return None
+    parts = line.split(maxsplit=2)
+    command = parts[0].lower()
+    if command not in _RECOGNIZED:
+        return None  # unknown slash -> planner fall-through (today's behaviour)
+
+    if not _is_authorized(session_key, user_id):
+        return (
+            "抱歉,你没有权限使用这个命令。"
+            "(管理员可在 /gateway setup 的 allowed_users 里添加你的 user_id)"
+        )
+
+    if command == "/help":
+        return _USAGE
+    if command == "/peers":
+        return await _do_peers(host)
+    if command == "/task":
+        return await _do_task(host, parts)
+    if command == "/chat":
+        return await _do_chat(host, parts, session_key)
+    return None  # unreachable (command in _RECOGNIZED)
