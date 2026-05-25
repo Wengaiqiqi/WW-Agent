@@ -107,3 +107,45 @@ async def test_peers_lists_registered(tmp_config_dir):
     reply = await slash.handle_slash("/peers", host=host, session_key="qq:1", user_id="ou_a")
     assert "openclaw-home" in reply
     assert host.calls[0][1] == "comm.list_peers"
+
+
+@pytest.mark.asyncio
+async def test_task_delegates_and_renders_result(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost({"comm.delegate": {"final_result": "已总结:3 个要点", "events_count": 4}})
+    reply = await slash.handle_slash(
+        "/task openclaw-home 总结 ~/notes.md", host=host, session_key="qq:1", user_id="ou_a",
+    )
+    agent_id, tool, args = host.calls[0]
+    assert tool == "comm.delegate"
+    assert args["peer_id"] == "openclaw-home"
+    assert args["task"] == "总结 ~/notes.md"
+    assert args["stream"] is False
+    assert "已总结:3 个要点" in reply
+
+
+@pytest.mark.asyncio
+async def test_task_renders_parts_dict_result(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost({"comm.delegate": {"final_result": {"parts": [{"text": "part-A"}, {"text": "part-B"}]}}})
+    reply = await slash.handle_slash(
+        "/task p hello", host=host, session_key="qq:1", user_id="ou_a",
+    )
+    assert "part-A" in reply and "part-B" in reply
+
+
+@pytest.mark.asyncio
+async def test_task_missing_args_shows_usage(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost()
+    reply = await slash.handle_slash("/task openclaw-home", host=host, session_key="qq:1", user_id="ou_a")
+    assert "用法" in reply
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_surfaces_comm_error(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost({"comm.delegate": {"ok": False, "error": "unknown peer 'p'"}})
+    reply = await slash.handle_slash("/task p do it", host=host, session_key="qq:1", user_id="ou_a")
+    assert "unknown peer" in reply

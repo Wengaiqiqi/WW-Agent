@@ -108,8 +108,30 @@ async def _do_peers(host) -> str:
     return "\n".join(lines)
 
 
-async def _do_task(host, parts: list[str]) -> str:  # replaced in Task 3
-    return "(task not implemented)"
+def _render_final(final: Any) -> str:
+    """comm.delegate final_result may be a dict with A2A parts, a str, or None."""
+    if isinstance(final, dict):
+        parts_list = final.get("parts", [])
+        joined = "\n".join(
+            p.get("text", "") for p in parts_list
+            if isinstance(p, dict) and p.get("text")
+        )
+        return joined or json.dumps(final, ensure_ascii=False)
+    if final is None:
+        return "(无结果)"
+    return str(final)
+
+
+async def _do_task(host, parts: list[str]) -> str:
+    if len(parts) < 3 or not parts[2].strip():
+        return "用法:/task <peer_id> <任务>"
+    peer_id, task = parts[1], parts[2]
+    ok, data = await _call_comm(host, "comm.delegate", {
+        "peer_id": peer_id, "task": task, "stream": False,
+    })
+    if not ok:
+        return f"委托失败:{data.get('error')}"
+    return f"[{peer_id}] {_render_final(data.get('final_result'))}"
 
 
 async def _do_chat(host, parts: list[str], session_key: str) -> str:  # replaced in Task 4
