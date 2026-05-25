@@ -149,3 +149,46 @@ async def test_task_surfaces_comm_error(tmp_config_dir):
     host = _FakeHost({"comm.delegate": {"ok": False, "error": "unknown peer 'p'"}})
     reply = await slash.handle_slash("/task p do it", host=host, session_key="qq:1", user_id="ou_a")
     assert "unknown peer" in reply
+
+
+@pytest.mark.asyncio
+async def test_chat_replies_and_persists_context(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost({"comm.chat": {"reply": "你好呀", "context_id": "ctx-1"}})
+    reply = await slash.handle_slash(
+        "/chat openclaw-home 在吗", host=host, session_key="qq:1", user_id="ou_a",
+    )
+    _agent, tool, args = host.calls[0]
+    assert tool == "comm.chat"
+    assert args["peer_id"] == "openclaw-home"
+    assert args["message"] == "在吗"
+    assert args["context_id"] is None  # first turn: no prior context
+    assert "你好呀" in reply
+    assert slash._load_chat_context("qq:1", "openclaw-home") == "ctx-1"
+
+
+@pytest.mark.asyncio
+async def test_chat_reuses_saved_context(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    slash._save_chat_context("qq:1", "openclaw-home", "ctx-existing")
+    host = _FakeHost({"comm.chat": {"reply": "继续", "context_id": "ctx-existing"}})
+    await slash.handle_slash(
+        "/chat openclaw-home 接着聊", host=host, session_key="qq:1", user_id="ou_a",
+    )
+    assert host.calls[0][2]["context_id"] == "ctx-existing"
+
+
+@pytest.mark.asyncio
+async def test_chat_context_isolated_per_session_and_peer(tmp_config_dir):
+    slash._save_chat_context("qq:1", "peerA", "ctxA")
+    assert slash._load_chat_context("qq:1", "peerB") is None
+    assert slash._load_chat_context("qq:2", "peerA") is None
+
+
+@pytest.mark.asyncio
+async def test_chat_missing_args_shows_usage(tmp_config_dir):
+    _authorize(tmp_config_dir)
+    host = _FakeHost()
+    reply = await slash.handle_slash("/chat openclaw-home", host=host, session_key="qq:1", user_id="ou_a")
+    assert "用法" in reply
+    assert host.calls == []

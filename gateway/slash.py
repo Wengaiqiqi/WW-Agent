@@ -134,8 +134,49 @@ async def _do_task(host, parts: list[str]) -> str:
     return f"[{peer_id}] {_render_final(data.get('final_result'))}"
 
 
-async def _do_chat(host, parts: list[str], session_key: str) -> str:  # replaced in Task 4
-    return "(chat not implemented)"
+def _context_store_path() -> Path:
+    from agent_paths import config_dir
+    return config_dir() / "comm_chat_contexts.json"
+
+
+def _load_chat_context(session_key: str, peer_id: str) -> str | None:
+    p = _context_store_path()
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data.get(f"{session_key}::{peer_id}")
+
+
+def _save_chat_context(session_key: str, peer_id: str, context_id: str) -> None:
+    p = _context_store_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data[f"{session_key}::{peer_id}"] = context_id
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def _do_chat(host, parts: list[str], session_key: str) -> str:
+    if len(parts) < 3 or not parts[2].strip():
+        return "用法:/chat <peer_id> <消息>"
+    peer_id, message = parts[1], parts[2]
+    ctx = _load_chat_context(session_key, peer_id)
+    ok, data = await _call_comm(host, "comm.chat", {
+        "peer_id": peer_id, "message": message, "context_id": ctx,
+    })
+    if not ok:
+        return f"对话失败:{data.get('error')}"
+    new_ctx = data.get("context_id")
+    if new_ctx:
+        _save_chat_context(session_key, peer_id, new_ctx)
+    return f"[{peer_id}] {data.get('reply') or '(空回复)'}"
 
 
 async def handle_slash(line: str, *, host, session_key: str, user_id: str) -> str | None:
