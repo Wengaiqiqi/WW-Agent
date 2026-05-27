@@ -4,7 +4,7 @@
 >
 > 命令行优先的多 Agent 框架,自带飞书 / QQ 聊天网关 + 每用户持久化记忆。
 
-[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)](#测试-tests)
+[![Tests](https://img.shields.io/badge/tests-645%20passing-brightgreen)](#测试-tests)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#依赖-dependencies)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -18,6 +18,7 @@ python cli.py                      # 多 Agent REPL(默认)
 python cli.py --single             # 单 Agent 兼容模式
 python -m gateway feishu           # 飞书机器人(长连接,无需公网)
 python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
+python -m web                      # 浏览器多用户聊天界面(公网可部署)
 ```
 
 ---
@@ -30,6 +31,7 @@ python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
 - [工具架构](#工具架构-tool-architecture)
 - [记忆架构](#记忆架构-memory-architecture)
 - [聊天平台网关](#聊天平台网关-chat-platform-gateways)
+- [Web 界面](#web-界面-web-ui)
 - [Comm-agent 跨机通信](#comm-agent-跨机通信-cross-machine-a2a)
 - [技能系统](#技能系统-skills)
 - [安全模型](#安全模型-security-model)
@@ -91,7 +93,7 @@ python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
 | **tool-agent** | 工作区 + Web 专家;一个 ReAct loop 自主调工具直到拿到答案 | ReAct: 调 `read_file` → 看内容 → 调 `grep` → 答 |
 | **skill-agent** | 跑 `skills/<slug>/SKILL.md` 里定义的领域工作流 | 跑"百度全网比价"那种带 API key 的封装流程 |
 
-### 三种入口
+### 四种入口
 
 ```
 ┌─────────────────────────┐
@@ -104,6 +106,10 @@ python -m gateway qq               # QQ 官方机器人(沙箱 / 正式皆可)
 
 ┌─────────────────────────┐
 │ python -m gateway xx    │  ← 聊天平台网关(独立进程)
+└─────────────────────────┘
+
+┌─────────────────────────┐
+│ python -m web           │  ← 浏览器多用户聊天界面(公网可部署)
 └─────────────────────────┘
 
   REPL 内部还能 /gateway 子菜单
@@ -398,6 +404,21 @@ QQ open platform           本机 gateway
    POST .../messages ─────────  ws 回复给用户
 ```
 
+### 聊天里的 slash 命令(/chat /task)
+
+白名单用户可在 QQ / 飞书里直接驱动远程 A2A peer:
+
+| 命令 | 作用 |
+|---|---|
+| `/task <peer_id> <任务>` | 一次性委托(comm.delegate) |
+| `/chat <peer_id> <消息>` | 多轮对话(comm.chat,按 chat+peer 保留上下文) |
+| `/peers` | 列出已注册的 peer_id |
+| `/help` | 用法 |
+
+- peer 需先在 REPL 里用 `/comm add` 注册;聊天里只能**使用**,不能注册。
+- **权限**:仅 `gateways.json` 里该平台 `allowed_users`(逗号分隔的 open_id / openid)中的用户可用;**留空 = 全部拒绝**(fail-safe)。在 `/gateway setup` 向导里设置。
+- 非 slash 的普通消息行为不变,仍走 planner。
+
 ### 网关之间的设计差异
 
 | | Feishu | QQ |
@@ -409,6 +430,47 @@ QQ open platform           本机 gateway
 | **反馈** | `message.reaction` ("Typing") | 无公开 reaction API |
 | **跑在哪** | 工作线程 + lark SDK 自带 loop | 工作线程 + 自建 isolated loop |
 | **干净停** | SDK 无 stop API,只能进程退 | `threading.Event` 协作式取消 |
+
+---
+
+## Web 界面 Web UI
+
+公网可部署的多用户浏览器聊天界面(第四交互表面)。复用 orchestrator 核心(planner +
+A2A dispatch),把网关那套「丢弃中间流、只回最终文本」改成 **SSE 流式转发**给浏览器。
+账号用 SQLite + pbkdf2 + JWT(httponly cookie);每轮服务端强制 `workspace-write`
+权限档 + 每用户独立工作区。前端是 FastAPI 托管的原生 HTML/JS(marked.js + highlight.js
+走 CDN),无构建步骤。
+
+```powershell
+# 开发(本地 http、临时密钥)
+.\start_web.ps1                  # http://127.0.0.1:8080
+.\start_web.ps1 -Port 9000       # 换端口
+python -m web                    # 等价直跑(默认 0.0.0.0:8080)
+
+# 生产
+$env:WEB_AUTH_SECRET = "<openssl rand -hex 32>"   # 强烈建议:否则用临时密钥,重启后 token 全失效
+$env:WEB_SIGNUP_CODE = "<给用户的注册码>"           # 公网必设,限制注册
+python -m web
+```
+
+**功能**:用户名 / 密码账号、多会话(ChatGPT 式侧栏)、流式逐字输出 + 可折叠的
+thinking / 工具过程、Markdown 渲染、用户可选模型(仅列出服务端已配置凭据的 provider)。
+
+**⚠️ 安全(务必读)**:Web 用户跑在 `workspace-write` 档,**含 `run_python` /
+`run_command`——即注册用户能在服务器上执行代码**。因此:
+
+- **必须**把 `python -m web` 跑在隔离容器 / VM 里,环境内不放任何密钥或有价值数据。
+- 公网**必须**设 `WEB_SIGNUP_CODE` 限制注册。
+- 每个用户的文件操作被隔离在 `<config_dir>/web/workspaces/<user_id>/`(每轮自动设置)。
+- TLS 由前置反代(Caddy / nginx)终结,转发到本地端口。
+
+| Env | 作用 | 默认 |
+|---|---|---|
+| `WEB_AUTH_SECRET` | JWT 签名密钥 | 未设=每进程临时密钥(重启失效,带告警) |
+| `WEB_SIGNUP_CODE` | 注册码闸门 | 空=开放注册 |
+| `WEB_HOST` / `WEB_PORT` | 监听地址 | `0.0.0.0` / `8080`(`start_web.ps1` 默认 `127.0.0.1`) |
+| `WEB_RATE_LIMIT_PER_MIN` | 每用户每分钟轮数 | `20` |
+| `WEB_COOKIE_SECURE` | session cookie 的 Secure 标记 | `1`(http dev 设 `0`) |
 
 ---
 
@@ -533,7 +595,7 @@ skills/baidu-ecommerce-search/
 └── cryptography                       ── 飞书 encrypt mode AES-256-CBC
 
 测试
-└── pytest + pytest-cov                ── 116 个 gateway 单测
+└── pytest + pytest-cov                ── 136 个 gateway 单测
 ```
 
 模型 provider 都在 `config/_providers.py`:OpenAI、Anthropic、DeepSeek、Gemini、xAI、Moonshot、阿里、腾讯 TokenHub、OpenRouter、AI Gateway 等 20+ 个,统一抽象为 OpenAI-chat / Anthropic 两种协议。
@@ -543,11 +605,14 @@ skills/baidu-ecommerce-search/
 ## 测试 Tests
 
 ```bash
-pytest                              # 全套 (~45 个测试文件)
-pytest tests/test_gateway/          # 只跑 gateway 模块 (116 个用例 ~ 1.5s)
+pip install -e '.[dev]'             # 测试需要 dev 依赖(pytest、trustme 等)
+pytest                              # 全套 (77 个测试文件 / 645 用例)
+pytest tests/test_gateway/          # 只跑 gateway 模块 (136 个用例 ~ 1s)
 pytest -k "not e2e"                 # 跳过 subprocess-spawn 的 e2e 测试
 pytest --cov=gateway --cov-report=term-missing
 ```
+
+> 注:comm-agent 的 TLS 测试依赖 `trustme`(在 `[dev]` extras 里)。未安装时这些用例会**跳过**而非中断整个收集——先 `pip install -e '.[dev]'`。
 
 Gateway 模块的覆盖率:
 
@@ -627,8 +692,8 @@ agent/
 │   ├── _pidlock.py              防双开
 │   └── __main__.py              `python -m gateway xx`
 │
-└── tests/                       45 个测试文件
-    └── test_gateway/            116 个 gateway 单测
+└── tests/                       77 个测试文件 / 645 用例
+    └── test_gateway/            136 个 gateway 单测
 ```
 
 ---
