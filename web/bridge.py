@@ -223,6 +223,67 @@ async def _stream_off_loop(
         await asyncio.to_thread(thread.join)
 
 
+async def _plan_and_dispatch(
+    planner: Any,
+    *,
+    prompt: str,
+    host: Any,
+    router: Any,
+    hmac_key: str,
+    trace_id: str,
+    history_context: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream the planner, then the reply — mirrors the CLI.
+
+    If the planner answers in prose, its tokens ARE the reply and stream live
+    token-by-token (the model's ``<think>`` scratch work is hidden by
+    ``astream_plan``, same as the terminal). If it picks a capability, hand off
+    to the specialist dispatch, which streams the specialist's ``thinking`` /
+    ``tool_call`` / ``tool_result`` events plus the final text."""
+    state = {"user_input": prompt, "trace_id": trace_id}
+    astream = getattr(planner, "astream_plan", None)
+
+    decision: Optional[dict] = None
+    prose = ""
+    if astream is not None:
+        async for ev in astream(state):
+            if ev.get("type") == "text":
+                chunk = ev.get("chunk", "")
+                prose += chunk
+                yield {"type": "text", "chunk": chunk}
+            elif ev.get("type") == "decision":
+                decision = ev.get("decision")
+    else:
+        # Non-streaming planner (e.g. the mock/stub): no token streaming.
+        decision = planner(state)
+
+    decision = decision or {"capability": "", "response": ""}
+    capability = (decision.get("capability") or "").strip()
+
+    if not capability:
+        # Prose answer. A streaming planner already emitted the tokens; a
+        # non-streaming one hands over the whole thing here.
+        if astream is None:
+            prose = (decision.get("response") or "").strip()
+            if prose:
+                yield {"type": "text", "chunk": prose}
+        yield {"type": "done", "text": prose.strip()}
+        return
+
+    # Capability -> specialist dispatch (A2A / MCP), which streams its own
+    # thinking / tool_call / tool_result / text / done events.
+    async for ev in dispatch_decision_stream(
+        decision=decision,
+        prompt=prompt,
+        host=host,
+        router=router,
+        hmac_key=hmac_key,
+        trace_id=trace_id,
+        history_context=history_context,
+    ):
+        yield ev
+
+
 async def _run_streaming_locked(
     prompt: str, *, trace_id: str, session_key: str, user_id: str, model_id: str
 ) -> AsyncIterator[dict[str, Any]]:
@@ -248,27 +309,25 @@ async def _run_streaming_locked(
             await _bootstrap(host, router)
             planner = _build_planner(router, context_text=full_context)
             try:
-                decision = planner({"user_input": prompt, "trace_id": trace_id})
+                async for ev in _plan_and_dispatch(
+                    planner,
+                    prompt=prompt,
+                    host=host,
+                    router=router,
+                    hmac_key=hmac_key,
+                    trace_id=trace_id,
+                    history_context=history_context,
+                ):
+                    if ev.get("type") == "text":
+                        final_text += ev.get("chunk", "")
+                    elif ev.get("type") == "done" and ev.get("text"):
+                        final_text = ev["text"]
+                    yield ev
             except Exception as exc:  # noqa: BLE001
-                log.exception("web: planner failed")
+                log.exception("web: planner/dispatch failed")
                 yield {"type": "error", "message": f"planner: {exc}"}
                 yield {"type": "done", "text": ""}
                 return
-
-            async for ev in dispatch_decision_stream(
-                decision=decision,
-                prompt=prompt,
-                host=host,
-                router=router,
-                hmac_key=hmac_key,
-                trace_id=trace_id,
-                history_context=history_context,
-            ):
-                if ev.get("type") == "text":
-                    final_text += ev.get("chunk", "")
-                elif ev.get("type") == "done" and ev.get("text"):
-                    final_text = ev["text"]
-                yield ev
         finally:
             await host.shutdown_all()
             if session_key and final_text:

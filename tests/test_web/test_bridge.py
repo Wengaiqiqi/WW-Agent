@@ -96,6 +96,43 @@ def test_dispatch_branch_b_error_event_emitted():
     assert any(e["type"] == "error" and "kaboom" in e["message"] for e in events)
 
 
+def test_plan_and_dispatch_streams_prose_token_by_token():
+    """A direct (prose) answer must stream token-by-token, not arrive as one
+    blob — same as the CLI."""
+
+    class FakePlanner:
+        async def astream_plan(self, state):
+            yield {"type": "text", "chunk": "你"}
+            yield {"type": "text", "chunk": "好"}
+            yield {"type": "decision", "decision": {"capability": "", "response": "你好"}}
+
+    events = _collect(bridge_mod._plan_and_dispatch(
+        FakePlanner(), prompt="hi", host=None, router=None,
+        hmac_key="k", trace_id="t", history_context="",
+    ))
+    assert events == [
+        {"type": "text", "chunk": "你"},
+        {"type": "text", "chunk": "好"},
+        {"type": "done", "text": "你好"},
+    ]
+
+
+def test_plan_and_dispatch_non_streaming_planner_prose():
+    """A non-streaming planner (mock/stub) still yields the prose + done."""
+
+    def stub(state):
+        return {"capability": "", "response": "  完整答案  "}
+
+    events = _collect(bridge_mod._plan_and_dispatch(
+        stub, prompt="hi", host=None, router=None,
+        hmac_key="k", trace_id="t", history_context="",
+    ))
+    assert events == [
+        {"type": "text", "chunk": "完整答案"},
+        {"type": "done", "text": "完整答案"},
+    ]
+
+
 def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
     """A turn does blocking work (planner LLM ``.invoke``, subprocess bootstrap)
     that must NOT run on uvicorn's serving loop -- otherwise the whole server
