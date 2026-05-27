@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const api = (path, opts = {}) =>
   fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opts });
 
-let state = { user: null, convs: [], activeConv: null, models: [] };
+let state = { user: null, convs: [], activeConv: null, models: [], domCache: {} };
 
 async function init() {
   const me = await api("/api/me");
@@ -65,41 +65,70 @@ function renderConvList() {
 
 async function newConv() {
   const r = await api("/api/conversations", { method: "POST", body: JSON.stringify({}) });
-  if (r.ok) { const c = await r.json(); state.convs.unshift(c); state.activeConv = c.id;
-              renderConvList(); $("messages").innerHTML = ""; $("conv-title").textContent = c.title; }
+  if (r.ok) {
+    const c = await r.json();
+    stashMessages();              // keep the conversation we're leaving
+    state.convs.unshift(c);
+    state.activeConv = c.id;
+    state.domCache[c.id] = [];    // brand new, nothing to load
+    renderConvList();
+    $("messages").replaceChildren();
+    $("conv-title").textContent = c.title;
+  }
 }
 
 async function deleteConv(id) {
   await api(`/api/conversations/${id}`, { method: "DELETE" });
-  if (state.activeConv === id) { state.activeConv = null; $("messages").innerHTML = ""; }
+  delete state.domCache[id];
+  if (state.activeConv === id) { state.activeConv = null; $("messages").replaceChildren(); }
   await loadConversations();
 }
 
+// Detach the active conversation's rendered nodes so we can re-show them later
+// instantly — no fetch, no markdown re-parse, no re-highlight.
+function stashMessages() {
+  if (state.activeConv) {
+    state.domCache[state.activeConv] = Array.from($("messages").children);
+  }
+}
+
 async function selectConv(id) {
-  if (state.activeConv === id && $("messages").childElementCount) return;
+  if (state.activeConv === id) return;
+  stashMessages();                        // keep the conversation we're leaving
   state.activeConv = id;
   const c = state.convs.find((x) => x.id === id);
   $("conv-title").textContent = c ? c.title : "";
   renderConvList();
+  const box = $("messages");
+
+  // Already rendered this session -> instant node swap, no fetch / parse /
+  // highlight. This is what makes switching back and forth feel instant.
+  if (state.domCache[id]) {
+    box.replaceChildren(...state.domCache[id]);
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+
+  // First visit: fetch + render once. The backend GET is ~5ms; the cost is the
+  // markdown parse + syntax highlight, which we now pay only this one time.
+  box.replaceChildren();                  // blank while the first load fetches
   const r = await api(`/api/conversations/${id}/messages`);
-  if (state.activeConv !== id) return;  // a newer switch won; drop this result
+  if (state.activeConv !== id) return;    // a newer switch won; drop this result
   const msgs = r.ok ? await r.json() : [];
   if (state.activeConv !== id) return;
-  // Build the whole list off-DOM and swap it in once. Appending each message
-  // to the live list and reading scrollHeight per message forces a reflow on
-  // every iteration (layout thrashing) — that's what made switching long
-  // conversations stutter.
+  // Build off-DOM and swap in once; reading scrollHeight per message while
+  // appending to the live list forced a reflow every iteration (jank).
   const frag = document.createDocumentFragment();
   for (const m of msgs) {
     const events = m.events_json ? JSON.parse(m.events_json) : [];
     frag.appendChild(buildMessage(m.role, m.content, events));
   }
-  const box = $("messages");
-  box.innerHTML = "";
-  box.appendChild(frag);
+  box.replaceChildren(frag);
   box.scrollTop = box.scrollHeight;
-  // Syntax-highlight after the frame paints so the switch feels instant.
-  requestAnimationFrame(() => highlightAndCopy(box));
+  // Highlight after the frame paints so the text shows instantly.
+  requestAnimationFrame(() => {
+    if (state.activeConv === id) highlightAndCopy(box);
+  });
 }
 
 function buildMessage(role, content, events = []) {
