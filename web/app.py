@@ -212,12 +212,26 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+class _NoCacheStatic(StaticFiles):
+    """StaticFiles that tells the browser to revalidate every time. The assets
+    still get ETag/Last-Modified (so unchanged files return a cheap 304), but a
+    code change shows up on a normal refresh — no more stale ``app.js`` served
+    from cache after a deploy."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 def _mount_static(app):
     static_dir = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/static", _NoCacheStatic(directory=str(static_dir)), name="static")
 
     @app.get("/")
     def index():
         from fastapi.responses import FileResponse
 
-        return FileResponse(str(static_dir / "index.html"))
+        return FileResponse(
+            str(static_dir / "index.html"), headers={"Cache-Control": "no-cache"}
+        )

@@ -180,3 +180,10 @@ def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "Agent Web UI" in r.text
+
+
+def test_static_assets_revalidate(client):
+    # index + static assets must not be cached aggressively, so a code change
+    # shows up on a normal refresh instead of serving a stale app.js.
+    assert client.get("/").headers.get("cache-control") == "no-cache"
+    assert client.get("/static/app.js").headers.get("cache-control") == "no-cache"
