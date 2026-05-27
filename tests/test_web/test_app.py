@@ -75,3 +75,37 @@ def test_signup_code_gate(db_path, web_secret, monkeypatch):
     ok = c.post("/api/auth/register",
                 json={"username": "dan", "password": "pw12345", "signup_code": "letmein"})
     assert ok.status_code == 200
+
+
+def _register(c, name="alice", pw="pw12345"):
+    assert c.post("/api/auth/register", json={"username": name, "password": pw}).status_code == 200
+
+
+def test_conversation_crud(client):
+    _register(client)
+    r = client.post("/api/conversations", json={"title": "first"})
+    assert r.status_code == 200
+    cid = r.json()["id"]
+    assert client.get("/api/conversations").json()[0]["id"] == cid
+    assert client.patch(f"/api/conversations/{cid}", json={"title": "renamed"}).status_code == 200
+    assert client.get("/api/conversations").json()[0]["title"] == "renamed"
+    assert client.delete(f"/api/conversations/{cid}").status_code == 200
+    assert client.get("/api/conversations").json() == []
+
+
+def test_cannot_touch_other_users_conversation(db_path, web_secret):
+    store.init_db(db_path)
+
+    async def fake_bridge(prompt, **kw):
+        yield {"type": "done", "text": ""}
+
+    app = create_app(db_path=db_path, secret=web_secret, bridge_fn=fake_bridge, cookie_secure=False)
+    alice = TestClient(app)
+    bob = TestClient(app)
+    _register(alice, "alice")
+    _register(bob, "bob")
+    cid = alice.post("/api/conversations", json={"title": "secret"}).json()["id"]
+    # bob must not see, read, rename, or delete alice's conversation
+    assert bob.get(f"/api/conversations/{cid}/messages").status_code == 404
+    assert bob.patch(f"/api/conversations/{cid}", json={"title": "hax"}).status_code == 404
+    assert bob.delete(f"/api/conversations/{cid}").status_code == 404

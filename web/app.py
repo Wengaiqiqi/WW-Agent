@@ -135,8 +135,33 @@ def _mount_auth_routes(app, db, secret, set_cookie):
         return resp
 
 
-def _mount_conversation_routes(app, db, current_user, owned):  # replaced in Task 13
-    pass
+def _mount_conversation_routes(app, db, current_user, owned):
+    @app.get("/api/conversations")
+    def list_conversations(user: dict = Depends(current_user)) -> list[dict]:
+        return store.list_conversations(db, user["id"])
+
+    @app.post("/api/conversations")
+    def create_conversation(req: ConvCreateReq, user: dict = Depends(current_user)) -> dict:
+        cid = store.create_conversation(db, user["id"], (req.title or "New chat").strip())
+        return store.get_conversation(db, cid)
+
+    @app.patch("/api/conversations/{conv_id}")
+    def rename_conversation(conv_id: str, req: ConvRenameReq,
+                            user: dict = Depends(current_user)) -> dict:
+        owned(conv_id, user)
+        store.rename_conversation(db, conv_id, req.title.strip() or "New chat")
+        return store.get_conversation(db, conv_id)
+
+    @app.delete("/api/conversations/{conv_id}")
+    def delete_conversation(conv_id: str, user: dict = Depends(current_user)) -> dict:
+        owned(conv_id, user)
+        store.delete_conversation(db, conv_id)
+        return {"ok": True}
+
+    @app.get("/api/conversations/{conv_id}/messages")
+    def list_messages(conv_id: str, user: dict = Depends(current_user)) -> list[dict]:
+        owned(conv_id, user)
+        return store.list_messages(db, conv_id)
 
 
 def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):  # replaced in Task 15
