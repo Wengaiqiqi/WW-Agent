@@ -37,6 +37,8 @@ body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 .msg .process { font-size: 12px; color: #9aa0aa; border-left: 2px solid #3a3f4b; padding-left: 10px;
                 margin-bottom: 8px; }
 .msg .process summary { cursor: pointer; }
+.msg .typing { color: #9aa0aa; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 .msg pre { background: #11141a; padding: 12px; border-radius: 8px; overflow-x: auto; position: relative; }
 .msg pre .copy { position: absolute; top: 6px; right: 6px; font-size: 11px; }
 
