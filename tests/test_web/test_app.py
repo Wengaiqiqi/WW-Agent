@@ -174,3 +174,9 @@ def test_chat_other_user_conversation_404(db_path, web_secret):
     cid = a.post("/api/conversations", json={}).json()["id"]
     r = b.post(f"/api/conversations/{cid}/messages", json={"content": "hi"})
     assert r.status_code == 404
+
+
+def test_index_served(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Agent Web UI" in r.text

@@ -212,5 +212,12 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _mount_static(app):  # replaced in Task 19
-    pass
+def _mount_static(app):
+    static_dir = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/")
+    def index():
+        from fastapi.responses import FileResponse
+
+        return FileResponse(str(static_dir / "index.html"))
