@@ -6,10 +6,12 @@ guard so a web turn and an in-process gateway turn never run concurrently
 (they share .agent/runtime files)."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
 import secrets
+import threading
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator, Optional
 
@@ -154,7 +156,7 @@ async def run_turn_streaming(
         return
 
     async with _CONCURRENCY_GUARD:
-        async for ev in _run_streaming_locked(
+        async for ev in _stream_off_loop(
             prompt,
             trace_id=trace_id,
             session_key=session_key,
@@ -162,6 +164,63 @@ async def run_turn_streaming(
             model_id=model_id,
         ):
             yield ev
+
+
+async def _stream_off_loop(
+    prompt: str, *, trace_id: str, session_key: str, user_id: str, model_id: str
+) -> AsyncIterator[dict[str, Any]]:
+    """Run the whole turn on a dedicated worker thread (with its own event
+    loop) and forward its events to the serving loop via a queue.
+
+    The orchestrator turn is sync-heavy — the planner is a blocking LLM
+    ``.invoke`` and bootstrap spawns specialist subprocesses. Driven directly
+    on uvicorn's single serving loop, every blocking step freezes the whole
+    server until it returns, so a browser switching conversations mid-turn just
+    hangs. Running the turn off the serving loop keeps that loop free to serve
+    other requests; the caller still holds ``_CONCURRENCY_GUARD`` for the
+    worker's full lifetime, so turns stay serialised (they share
+    ``.agent/runtime`` + process-global env)."""
+    serving_loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    done = object()
+
+    def _worker() -> None:
+        async def _produce() -> None:
+            try:
+                async for ev in _run_streaming_locked(
+                    prompt,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    user_id=user_id,
+                    model_id=model_id,
+                ):
+                    serving_loop.call_soon_threadsafe(queue.put_nowait, ev)
+            except Exception as exc:  # noqa: BLE001  — never drop the stream
+                log.exception("web: turn worker crashed")
+                serving_loop.call_soon_threadsafe(
+                    queue.put_nowait, {"type": "error", "message": str(exc)}
+                )
+                serving_loop.call_soon_threadsafe(
+                    queue.put_nowait, {"type": "done", "text": ""}
+                )
+            finally:
+                serving_loop.call_soon_threadsafe(queue.put_nowait, done)
+
+        asyncio.run(_produce())
+
+    thread = threading.Thread(target=_worker, name="web-turn", daemon=True)
+    thread.start()
+    try:
+        while True:
+            ev = await queue.get()
+            if ev is done:
+                break
+            yield ev
+    finally:
+        # Hold the turn open until the worker (and its subprocesses) finish,
+        # even if the client disconnected mid-stream — otherwise the guard would
+        # release and let a second turn clobber the shared runtime/env.
+        await asyncio.to_thread(thread.join)
 
 
 async def _run_streaming_locked(

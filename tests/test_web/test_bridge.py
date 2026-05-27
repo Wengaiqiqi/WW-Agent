@@ -94,3 +94,51 @@ def test_dispatch_branch_b_error_event_emitted():
     ))
     assert events[-1]["type"] == "done"
     assert any(e["type"] == "error" and "kaboom" in e["message"] for e in events)
+
+
+def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
+    """A turn does blocking work (planner LLM ``.invoke``, subprocess bootstrap)
+    that must NOT run on uvicorn's serving loop -- otherwise the whole server
+    freezes for the turn and concurrent requests (switching conversations,
+    loading messages) hang. ``run_turn_streaming`` must drive the turn off the
+    serving loop and forward events, so the loop keeps ticking throughout."""
+    import time
+
+    async def fake_locked(prompt, *, trace_id, session_key, user_id, model_id):
+        time.sleep(0.3)  # stand-in for the turn's blocking work
+        yield {"type": "text", "chunk": "hi"}
+        yield {"type": "done", "text": "hi"}
+
+    monkeypatch.setattr(bridge_mod, "_run_streaming_locked", fake_locked)
+
+    async def _run():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            try:
+                while True:
+                    ticks += 1
+                    await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                pass
+
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0)  # let the ticker start
+
+        events = []
+        async for ev in bridge_mod.run_turn_streaming(
+            "hello", session_key="", user_id="", model_id=""
+        ):
+            events.append(ev)
+
+        t.cancel()
+        await asyncio.gather(t, return_exceptions=True)
+        return events, ticks
+
+    events, ticks = asyncio.run(_run())
+    assert {"type": "text", "chunk": "hi"} in events
+    assert events[-1] == {"type": "done", "text": "hi"}
+    # On-loop: the 0.3s block stops the ticker (~0 ticks). Off-loop: it keeps
+    # ticking (~30 in 0.3s).
+    assert ticks > 5, f"event loop was blocked during the turn (ticks={ticks})"
