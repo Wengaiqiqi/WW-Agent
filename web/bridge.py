@@ -7,11 +7,14 @@ guard so a web turn and an in-process gateway turn never run concurrently
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from pathlib import Path
-from typing import Iterator
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from web import config
+
+log = logging.getLogger(__name__)
 
 
 def _user_workspace(user_id: str) -> Path:
@@ -53,3 +56,74 @@ def _web_turn_env(*, user_id: str, model_id: str) -> Iterator[Path]:
     finally:
         for k, v in prev.items():
             _set_or_clear(k, v)
+
+
+async def dispatch_decision_stream(
+    *,
+    decision: dict,
+    prompt: str,
+    host: Any,
+    router: Any,
+    hmac_key: str,
+    trace_id: str,
+    history_context: str,
+    delegate: Optional[Any] = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield SSE events for the planner's decision (mirrors runner's three
+    branches). On any error, yields an ``error`` event then a ``done`` so the
+    browser stream always terminates cleanly."""
+    capability = (decision.get("capability") or "").strip()
+
+    # Branch A: prose answer, no dispatch.
+    if not capability:
+        text = (decision.get("response") or "").strip()
+        yield {"type": "text", "chunk": text}
+        yield {"type": "done", "text": text}
+        return
+
+    # Branch B: A2A delegation -- forward the specialist's event stream.
+    if capability == "tool.task" or capability.startswith("skill."):
+        from orchestrator.delegation import delegate_via_a2a_stream
+
+        try:
+            async for event in delegate_via_a2a_stream(
+                capability=capability,
+                arguments=decision.get("arguments") or {},
+                user_input=prompt,
+                hmac_key=hmac_key,
+                trace_id=trace_id,
+                permission_mode=config.WEB_PERMISSION_MODE,
+                history_context=history_context,
+                delegate=delegate,
+            ):
+                yield event
+        except Exception as exc:  # noqa: BLE001
+            log.exception("web: A2A delegate failed")
+            yield {"type": "error", "message": f"{capability}: {exc}"}
+            yield {"type": "done", "text": ""}
+        return
+
+    # Branch C: simple MCP capability via TurnRunner (no token streaming).
+    from orchestrator.turns import TurnRunner
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key=hmac_key,
+        permission_mode_provider=lambda: config.WEB_PERMISSION_MODE,
+        planner=lambda _state, _d=decision: _d,
+    )
+    try:
+        result = await runner.run(prompt, trace_id=trace_id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("web: MCP dispatch failed")
+        yield {"type": "error", "message": f"{capability}: {exc}"}
+        yield {"type": "done", "text": ""}
+        return
+    if result.error:
+        yield {"type": "error", "message": result.error}
+        yield {"type": "done", "text": ""}
+        return
+    text = (result.text or "").strip()
+    yield {"type": "text", "chunk": text}
+    yield {"type": "done", "text": text}

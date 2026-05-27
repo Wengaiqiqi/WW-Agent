@@ -35,3 +35,62 @@ def test_web_turn_env_two_users_isolated(tmp_config_dir):
         pass
     assert Path(ws_a) != Path(ws_b)
     assert "u-alice" in str(ws_a) and "u-bob" in str(ws_b)
+
+
+import asyncio
+
+from web import bridge as bridge_mod
+
+
+def _collect(agen):
+    async def _run():
+        out = []
+        async for ev in agen:
+            out.append(ev)
+        return out
+    return asyncio.run(_run())
+
+
+def test_dispatch_branch_a_prose():
+    decision = {"capability": "", "response": "  just text  "}
+    events = _collect(bridge_mod.dispatch_decision_stream(
+        decision=decision, prompt="hi", host=None, router=None,
+        hmac_key="k", trace_id="t", history_context="", delegate=None,
+    ))
+    assert events == [
+        {"type": "text", "chunk": "just text"},
+        {"type": "done", "text": "just text"},
+    ]
+
+
+def test_dispatch_branch_b_forwards_a2a_events():
+    a2a_events = [
+        {"type": "thinking", "text": "hmm"},
+        {"type": "text", "chunk": "ans"},
+        {"type": "done", "text": "ans"},
+    ]
+
+    async def fake_delegate(*, peer_id, task, meta, context=""):
+        for ev in a2a_events:
+            yield ev
+
+    decision = {"capability": "tool.task", "arguments": {"task": "do"}}
+    events = _collect(bridge_mod.dispatch_decision_stream(
+        decision=decision, prompt="do it", host=None, router=None,
+        hmac_key="k", trace_id="t", history_context="ctx", delegate=fake_delegate,
+    ))
+    assert events == a2a_events
+
+
+def test_dispatch_branch_b_error_event_emitted():
+    async def fake_delegate(*, peer_id, task, meta, context=""):
+        raise RuntimeError("kaboom")
+        yield  # pragma: no cover
+
+    decision = {"capability": "tool.task", "arguments": {}}
+    events = _collect(bridge_mod.dispatch_decision_stream(
+        decision=decision, prompt="x", host=None, router=None,
+        hmac_key="k", trace_id="t", history_context="", delegate=fake_delegate,
+    ))
+    assert events[-1]["type"] == "done"
+    assert any(e["type"] == "error" and "kaboom" in e["message"] for e in events)
