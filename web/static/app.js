@@ -76,20 +76,33 @@ async function deleteConv(id) {
 }
 
 async function selectConv(id) {
+  if (state.activeConv === id && $("messages").childElementCount) return;
   state.activeConv = id;
   const c = state.convs.find((x) => x.id === id);
   $("conv-title").textContent = c ? c.title : "";
   renderConvList();
   const r = await api(`/api/conversations/${id}/messages`);
+  if (state.activeConv !== id) return;  // a newer switch won; drop this result
   const msgs = r.ok ? await r.json() : [];
-  $("messages").innerHTML = "";
+  if (state.activeConv !== id) return;
+  // Build the whole list off-DOM and swap it in once. Appending each message
+  // to the live list and reading scrollHeight per message forces a reflow on
+  // every iteration (layout thrashing) — that's what made switching long
+  // conversations stutter.
+  const frag = document.createDocumentFragment();
   for (const m of msgs) {
     const events = m.events_json ? JSON.parse(m.events_json) : [];
-    renderMessage(m.role, m.content, events);
+    frag.appendChild(buildMessage(m.role, m.content, events));
   }
+  const box = $("messages");
+  box.innerHTML = "";
+  box.appendChild(frag);
+  box.scrollTop = box.scrollHeight;
+  // Syntax-highlight after the frame paints so the switch feels instant.
+  requestAnimationFrame(() => highlightAndCopy(box));
 }
 
-function renderMessage(role, content, events = []) {
+function buildMessage(role, content, events = []) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (events.length) div.appendChild(renderProcess(events));
@@ -97,9 +110,15 @@ function renderMessage(role, content, events = []) {
   body.className = "body";
   body.innerHTML = role === "assistant" ? marked.parse(content || "") : escapeHtml(content);
   div.appendChild(body);
-  $("messages").appendChild(div);
+  return div;
+}
+
+function renderMessage(role, content, events = []) {
+  const div = buildMessage(role, content, events);
+  const box = $("messages");
+  box.appendChild(div);
   highlightAndCopy(div);
-  $("messages").scrollTop = $("messages").scrollHeight;
+  box.scrollTop = box.scrollHeight;
   return div;
 }
 
