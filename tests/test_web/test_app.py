@@ -109,3 +109,18 @@ def test_cannot_touch_other_users_conversation(db_path, web_secret):
     assert bob.get(f"/api/conversations/{cid}/messages").status_code == 404
     assert bob.patch(f"/api/conversations/{cid}", json={"title": "hax"}).status_code == 404
     assert bob.delete(f"/api/conversations/{cid}").status_code == 404
+
+
+def test_models_route(client, monkeypatch):
+    import web.models as models_mod
+    monkeypatch.setattr(models_mod, "available_models",
+                        lambda: [{"id": "anthropic/claude-opus-4-7", "provider": "anthropic",
+                                  "label": "Anthropic", "model": "claude-opus-4-7"}])
+    _register(client, "ed")
+    r = client.get("/api/models")
+    assert r.status_code == 200
+    assert r.json()[0]["id"] == "anthropic/claude-opus-4-7"
+
+
+def test_models_requires_auth(client):
+    assert client.get("/api/models").status_code == 401

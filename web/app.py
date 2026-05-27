@@ -93,6 +93,10 @@ def create_app(
     def me(user: dict = Depends(current_user)) -> dict:
         return {"id": user["id"], "username": user["username"], "role": user["role"]}
 
+    @app.get("/api/models")
+    def list_models(user: dict = Depends(current_user)) -> list[dict]:
+        return models.available_models()
+
     _mount_auth_routes(app, db, jwt_secret, _set_cookie)
     _mount_conversation_routes(app, db, current_user, _owned_conversation)
     _mount_chat_route(app, db, current_user, _owned_conversation, limiter, bridge_fn)
