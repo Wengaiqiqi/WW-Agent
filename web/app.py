@@ -100,8 +100,39 @@ def create_app(
     return app
 
 
-def _mount_auth_routes(app, db, secret, set_cookie):  # replaced in Task 12
-    pass
+def _mount_auth_routes(app, db, secret, set_cookie):
+    @app.post("/api/auth/register")
+    def register(req: RegisterReq) -> JSONResponse:
+        gate = config.signup_code()
+        if gate and (req.signup_code or "") != gate:
+            raise HTTPException(status_code=403, detail="invalid signup code")
+        if not req.username.strip() or len(req.password) < 6:
+            raise HTTPException(status_code=400, detail="username required, password >= 6 chars")
+        pwd_hash, salt = auth.hash_password(req.password)
+        try:
+            uid = store.create_user(db, req.username.strip(), pwd_hash, salt)
+        except store.DuplicateUsername:
+            raise HTTPException(status_code=409, detail="username taken")
+        token = auth.mint_token(user_id=uid, username=req.username.strip(), secret=secret)
+        resp = JSONResponse({"id": uid, "username": req.username.strip()})
+        set_cookie(resp, token)
+        return resp
+
+    @app.post("/api/auth/login")
+    def login(req: LoginReq) -> JSONResponse:
+        user = store.get_user_by_username(db, req.username.strip())
+        if not user or not auth.verify_password(req.password, user["pwd_hash"], user["salt"]):
+            raise HTTPException(status_code=401, detail="invalid credentials")
+        token = auth.mint_token(user_id=user["id"], username=user["username"], secret=secret)
+        resp = JSONResponse({"id": user["id"], "username": user["username"]})
+        set_cookie(resp, token)
+        return resp
+
+    @app.post("/api/auth/logout")
+    def logout() -> JSONResponse:
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(COOKIE_NAME, path="/")
+        return resp
 
 
 def _mount_conversation_routes(app, db, current_user, owned):  # replaced in Task 13
