@@ -101,3 +101,76 @@ def get_user(db_path: str, user_id: str) -> Optional[dict[str, Any]]:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def create_conversation(db_path: str, user_id: str, title: str) -> str:
+    cid = _new_id()
+    now = _now()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, user_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cid, user_id, title or "New chat", now, now),
+        )
+    return cid
+
+
+def list_conversations(db_path: str, user_id: str) -> list[dict[str, Any]]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversations WHERE user_id = ? "
+            "ORDER BY updated_at DESC, rowid DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_conversation(db_path: str, conv_id: str) -> Optional[dict[str, Any]]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conv_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def rename_conversation(db_path: str, conv_id: str, title: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+            (title, _now(), conv_id),
+        )
+
+
+def touch_conversation(db_path: str, conv_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?", (_now(), conv_id)
+        )
+
+
+def delete_conversation(db_path: str, conv_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+
+
+def add_message(
+    db_path: str, conv_id: str, role: str, content: str, events_json: str = "[]"
+) -> str:
+    mid = _new_id()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, events_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, conv_id, role, content, events_json, _now()),
+        )
+    return mid
+
+
+def list_messages(db_path: str, conv_id: str) -> list[dict[str, Any]]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (conv_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
