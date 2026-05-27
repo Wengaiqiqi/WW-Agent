@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Web UI</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+</head>
+<body>
+  <!-- Auth view -->
+  <div id="auth-view" class="auth-view hidden">
+    <div class="auth-card">
+      <h1>Agent</h1>
+      <input id="auth-username" placeholder="用户名" autocomplete="username" />
+      <input id="auth-password" type="password" placeholder="密码(≥6位)" autocomplete="current-password" />
+      <input id="auth-signup-code" placeholder="注册码(注册时可能需要)" />
+      <div class="auth-actions">
+        <button id="btn-login">登录</button>
+        <button id="btn-register">注册</button>
+      </div>
+      <div id="auth-error" class="error"></div>
+    </div>
+  </div>
+
+  <!-- App view -->
+  <div id="app-view" class="app-view hidden">
+    <aside class="sidebar">
+      <button id="btn-new-conv" class="new-conv">+ 新会话</button>
+      <ul id="conv-list" class="conv-list"></ul>
+      <div class="sidebar-footer">
+        <span id="me-name"></span>
+        <button id="btn-logout">登出</button>
+      </div>
+    </aside>
+    <main class="chat">
+      <header class="chat-header">
+        <select id="model-select"></select>
+        <span id="conv-title"></span>
+      </header>
+      <div id="messages" class="messages"></div>
+      <form id="composer" class="composer">
+        <textarea id="input" placeholder="发消息…(Enter 发送,Shift+Enter 换行)"></textarea>
+        <button type="submit" id="btn-send">发送</button>
+      </form>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
