@@ -174,7 +174,7 @@ async function sendMessage(text) {
   renderMessage("user", text);
   const assistantDiv = renderMessage("assistant", "");
   const body = assistantDiv.querySelector(".body");
-  body.innerHTML = '<span class="typing">思考中…</span>';  // until the first token
+  body.innerHTML = '<span class="typing">加载中…</span>';  // until the first token
   const procEvents = [];
   let acc = "";
   const resp = await api(`/api/conversations/${state.activeConv}/messages`, {
@@ -203,7 +203,7 @@ async function sendMessage(text) {
         if (existing) existing.replaceWith(fresh); else assistantDiv.prepend(fresh);
       } else if (ev.type === "done") {
         if (ev.text) { acc = ev.text; body.innerHTML = marked.parse(acc); }
-        else if (!acc) { body.innerHTML = ""; }  // clear the 思考中 indicator if nothing streamed
+        else if (!acc) { body.innerHTML = ""; }  // clear the 加载中 indicator if nothing streamed
       }
     }
     highlightAndCopy(assistantDiv);
