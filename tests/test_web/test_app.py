@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from web import store
+from web import config, store
 from web.app import create_app
 
 
@@ -124,3 +124,53 @@ def test_models_route(client, monkeypatch):
 
 def test_models_requires_auth(client):
     assert client.get("/api/models").status_code == 401
+
+
+def _sse_events(resp):
+    """Parse an SSE response body into a list of event dicts."""
+    out = []
+    for raw in resp.text.split("\n\n"):
+        raw = raw.strip()
+        if raw.startswith("data: "):
+            out.append(json.loads(raw[6:]))
+    return out
+
+
+def test_chat_streams_and_persists(client):
+    _register(client, "frank")
+    cid = client.post("/api/conversations", json={"title": "c"}).json()["id"]
+    r = client.post(f"/api/conversations/{cid}/messages",
+                    json={"content": "hello", "model": "mock"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(r)
+    assert {"type": "text", "chunk": "echo:hello"} in events
+    assert events[-1]["type"] == "done"
+    # persisted: user + assistant
+    msgs = client.get(f"/api/conversations/{cid}/messages").json()
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "hello"
+    assert msgs[1]["content"] == "echo:hello"
+
+
+def test_chat_rejects_overlong_message(client):
+    _register(client, "gwen")
+    cid = client.post("/api/conversations", json={}).json()["id"]
+    huge = "x" * (config.MAX_MESSAGE_CHARS + 1)
+    r = client.post(f"/api/conversations/{cid}/messages", json={"content": huge})
+    assert r.status_code == 413
+
+
+def test_chat_other_user_conversation_404(db_path, web_secret):
+    store.init_db(db_path)
+
+    async def fake_bridge(prompt, **kw):
+        yield {"type": "done", "text": "x"}
+
+    app = create_app(db_path=db_path, secret=web_secret, bridge_fn=fake_bridge, cookie_secure=False)
+    a, b = TestClient(app), TestClient(app)
+    _register(a, "a")
+    _register(b, "b")
+    cid = a.post("/api/conversations", json={}).json()["id"]
+    r = b.post(f"/api/conversations/{cid}/messages", json={"content": "hi"})
+    assert r.status_code == 404

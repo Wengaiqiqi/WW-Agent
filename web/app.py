@@ -168,8 +168,48 @@ def _mount_conversation_routes(app, db, current_user, owned):
         return store.list_messages(db, conv_id)
 
 
-def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):  # replaced in Task 15
-    pass
+def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
+    @app.post("/api/conversations/{conv_id}/messages")
+    def send_message(conv_id: str, req: MessageReq, user: dict = Depends(current_user)):
+        owned(conv_id, user)
+        content = (req.content or "").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="empty message")
+        if len(content) > config.MAX_MESSAGE_CHARS:
+            raise HTTPException(status_code=413, detail="message too long")
+        if not limiter.allow(user["id"]):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+        # Persist the user's message up front.
+        store.add_message(db, conv_id, "user", content, "[]")
+
+        async def event_stream():
+            collected: list[dict] = []
+            final_text = ""
+            try:
+                async for ev in bridge_fn(
+                    content,
+                    trace_id=f"web-{conv_id[:8]}",
+                    session_key=conv_id,
+                    user_id=user["id"],
+                    model_id=(req.model or ""),
+                ):
+                    etype = ev.get("type")
+                    if etype == "text":
+                        final_text += ev.get("chunk", "")
+                    elif etype == "done" and ev.get("text"):
+                        final_text = ev["text"]
+                    elif etype in ("thinking", "tool_call", "tool_result", "error", "warning"):
+                        collected.append(ev)
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            finally:
+                store.add_message(
+                    db, conv_id, "assistant", final_text.strip(),
+                    json.dumps(collected, ensure_ascii=False),
+                )
+                store.touch_conversation(db, conv_id)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _mount_static(app):  # replaced in Task 19
