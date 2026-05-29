@@ -42,6 +42,15 @@ class ConvRenameReq(BaseModel):
 class MessageReq(BaseModel):
     content: str
     model: str | None = None
+    endpoint_id: str | None = None
+
+
+class EndpointCreateReq(BaseModel):
+    label: str
+    base_url: str
+    api_key: str
+    model: str
+    protocol: str = "openai"
 
 
 def create_app(
@@ -99,6 +108,7 @@ def create_app(
 
     _mount_auth_routes(app, db, jwt_secret, _set_cookie)
     _mount_conversation_routes(app, db, current_user, _owned_conversation)
+    _mount_endpoint_routes(app, db, current_user)
     _mount_chat_route(app, db, current_user, _owned_conversation, limiter, bridge_fn)
     _mount_static(app)
     return app
@@ -168,6 +178,39 @@ def _mount_conversation_routes(app, db, current_user, owned):
         return store.list_messages(db, conv_id)
 
 
+def _mount_endpoint_routes(app, db, current_user):
+    @app.get("/api/endpoints")
+    def list_endpoints(user: dict = Depends(current_user)) -> list[dict]:
+        return store.list_endpoints(db, user["id"])
+
+    @app.post("/api/endpoints")
+    def create_endpoint(req: EndpointCreateReq,
+                        user: dict = Depends(current_user)) -> dict:
+        label = req.label.strip()
+        base_url = req.base_url.strip()
+        model = req.model.strip()
+        api_key = req.api_key.strip()
+        protocol = (req.protocol or "openai").strip()
+        if not (label and base_url and model and api_key):
+            raise HTTPException(status_code=400,
+                                detail="label, base_url, model, api_key required")
+        if protocol not in ("openai", "anthropic"):
+            raise HTTPException(status_code=400,
+                                detail="protocol must be 'openai' or 'anthropic'")
+        return store.create_endpoint(
+            db, user["id"], label, base_url, api_key, model, protocol
+        )
+
+    @app.delete("/api/endpoints/{endpoint_id}")
+    def delete_endpoint(endpoint_id: str,
+                        user: dict = Depends(current_user)) -> dict:
+        ep = store.get_endpoint(db, endpoint_id)
+        if not ep or ep["user_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="endpoint not found")
+        store.delete_endpoint(db, endpoint_id)
+        return {"ok": True}
+
+
 def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
     @app.post("/api/conversations/{conv_id}/messages")
     def send_message(conv_id: str, req: MessageReq, user: dict = Depends(current_user)):
@@ -179,6 +222,19 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
             raise HTTPException(status_code=413, detail="message too long")
         if not limiter.allow(user["id"]):
             raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+        if req.endpoint_id:
+            ep = store.get_endpoint(db, req.endpoint_id)
+            if not ep or ep["user_id"] != user["id"]:
+                raise HTTPException(status_code=404, detail="endpoint not found")
+            bridge_kwargs = {
+                "model_id": f"custom/{ep['model']}",
+                "base_url": ep["base_url"],
+                "api_key": ep["api_key"],
+                "protocol": ep["protocol"],
+            }
+        else:
+            bridge_kwargs = {"model_id": (req.model or "")}
 
         # Persist the user's message up front.
         store.add_message(db, conv_id, "user", content, "[]")
@@ -192,7 +248,7 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
                     trace_id=f"web-{conv_id[:8]}",
                     session_key=conv_id,
                     user_id=user["id"],
-                    model_id=(req.model or ""),
+                    **bridge_kwargs,
                 ):
                     etype = ev.get("type")
                     if etype == "text":

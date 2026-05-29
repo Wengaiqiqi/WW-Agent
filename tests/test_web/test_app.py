@@ -187,3 +187,81 @@ def test_static_assets_revalidate(client):
     # shows up on a normal refresh instead of serving a stale app.js.
     assert client.get("/").headers.get("cache-control") == "no-cache"
     assert client.get("/static/app.js").headers.get("cache-control") == "no-cache"
+
+
+def test_endpoint_routes_crud_and_no_key_leak(client):
+    _register(client, "ned")
+    r = client.post("/api/endpoints", json={
+        "label": "My LLM", "base_url": "https://x.test/v1",
+        "api_key": "sk-secret", "model": "gpt-5.4", "protocol": "openai",
+    })
+    assert r.status_code == 200
+    eid = r.json()["id"]
+    assert "api_key" not in r.json()
+    listed = client.get("/api/endpoints").json()
+    assert listed[0]["id"] == eid and "api_key" not in listed[0]
+    assert client.delete(f"/api/endpoints/{eid}").status_code == 200
+    assert client.get("/api/endpoints").json() == []
+
+
+def test_endpoint_create_validates(client):
+    _register(client, "nora")
+    assert client.post("/api/endpoints", json={
+        "label": "", "base_url": "https://x/v1", "api_key": "k", "model": "m",
+    }).status_code == 400
+    assert client.post("/api/endpoints", json={
+        "label": "L", "base_url": "https://x/v1", "api_key": "k", "model": "m",
+        "protocol": "weird",
+    }).status_code == 400
+
+
+def test_endpoints_require_auth(client):
+    assert client.get("/api/endpoints").status_code == 401
+
+
+def test_cannot_delete_other_users_endpoint(db_path, web_secret):
+    store.init_db(db_path)
+
+    async def fake_bridge(prompt, **kw):
+        yield {"type": "done", "text": ""}
+
+    app = create_app(db_path=db_path, secret=web_secret, bridge_fn=fake_bridge, cookie_secure=False)
+    alice, bob = TestClient(app), TestClient(app)
+    _register(alice, "alice")
+    _register(bob, "bob")
+    eid = alice.post("/api/endpoints", json={
+        "label": "L", "base_url": "https://x/v1", "api_key": "k", "model": "m",
+    }).json()["id"]
+    assert bob.delete(f"/api/endpoints/{eid}").status_code == 404
+
+
+def test_chat_with_endpoint_id_routes_endpoint_fields():
+    """Selecting a custom endpoint passes base_url/api_key/protocol + a
+    custom/<model> id into the bridge."""
+    import tempfile, os as _os
+    db = _os.path.join(tempfile.mkdtemp(), "app.db")
+    store.init_db(db)
+    captured = {}
+
+    async def fake_bridge(prompt, *, trace_id, session_key, user_id,
+                          model_id, base_url="", api_key="", protocol=""):
+        captured.update(model_id=model_id, base_url=base_url,
+                        api_key=api_key, protocol=protocol)
+        yield {"type": "done", "text": "ok"}
+
+    app = create_app(db_path=db, secret="test-secret-not-for-production",
+                     bridge_fn=fake_bridge, cookie_secure=False)
+    c = TestClient(app)
+    _register(c, "olivia")
+    eid = c.post("/api/endpoints", json={
+        "label": "L", "base_url": "https://x.test/v1", "api_key": "sk-z",
+        "model": "gpt-5.4", "protocol": "anthropic",
+    }).json()["id"]
+    cid = c.post("/api/conversations", json={}).json()["id"]
+    r = c.post(f"/api/conversations/{cid}/messages",
+               json={"content": "hi", "endpoint_id": eid})
+    assert r.status_code == 200
+    assert captured == {
+        "model_id": "custom/gpt-5.4", "base_url": "https://x.test/v1",
+        "api_key": "sk-z", "protocol": "anthropic",
+    }
