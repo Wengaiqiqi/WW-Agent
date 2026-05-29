@@ -25,14 +25,17 @@ logger = logging.getLogger(__name__)
 
 
 def load_active_config() -> ActiveConfig:
-    """Resolve which model should be active.
+    """Resolve which model should be active, then apply per-turn env overrides.
 
-    Order: ``LANGCHAIN_AGENT_MODEL`` env var (``provider`` or
-    ``provider/model``), then the ``model`` block in the project's
-    settings.json (default ``.langchain-agent/settings.json``, overridable
-    via ``LANGCHAIN_AGENT_CONFIG_DIR``), then ``DEFAULT_PROVIDER`` with
-    its first model.
+    Base resolution order: ``LANGCHAIN_AGENT_MODEL`` env > settings.json >
+    ``DEFAULT_PROVIDER``. After that, ``LANGCHAIN_AGENT_BASE_URL`` and
+    ``LANGCHAIN_AGENT_PROTOCOL`` (when set) override the resolved config — the
+    web "custom endpoint" feature sets these for the duration of a turn.
     """
+    return _apply_env_overrides(_resolve_base_config())
+
+
+def _resolve_base_config() -> ActiveConfig:
     env_choice = os.getenv("LANGCHAIN_AGENT_MODEL", "").strip()
     if env_choice:
         if "/" in env_choice:
@@ -54,10 +57,6 @@ def load_active_config() -> ActiveConfig:
                 api_key_env=str(model_block.get("api_key_env") or ""),
             )
     elif isinstance(model_block, str) and model_block:
-        # Legacy schema: settings.json["model"] used to be a preset name string
-        # (e.g. "mimo-pro"). The new schema stores a {provider, model, base_url,
-        # api_key_env} dict. Warn so the user knows their saved selection was
-        # dropped.
         logger.warning(
             "Ignoring legacy settings.json model entry %r; the schema is now a "
             "dict. Run /model to reconfigure (falling back to provider %r).",
@@ -65,6 +64,20 @@ def load_active_config() -> ActiveConfig:
         )
 
     return make_config(DEFAULT_PROVIDER)
+
+
+def _apply_env_overrides(cfg: ActiveConfig) -> ActiveConfig:
+    """Apply ``LANGCHAIN_AGENT_BASE_URL`` / ``LANGCHAIN_AGENT_PROTOCOL`` if set.
+
+    No-op when neither is present, so non-web callers are unaffected.
+    """
+    base_url = os.getenv("LANGCHAIN_AGENT_BASE_URL", "").strip()
+    protocol = os.getenv("LANGCHAIN_AGENT_PROTOCOL", "").strip()
+    if base_url:
+        cfg.base_url = base_url
+    if protocol:
+        cfg.protocol = protocol
+    return cfg
 
 
 def save_active_config(cfg: ActiveConfig) -> None:

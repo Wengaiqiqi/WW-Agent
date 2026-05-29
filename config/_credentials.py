@@ -80,7 +80,15 @@ def is_config_ready(cfg: ActiveConfig) -> bool:
 
 
 def get_api_key(cfg: ActiveConfig) -> str:
-    """Look up the API key for *cfg* from env then credentials file."""
+    """Look up the API key for *cfg*.
+
+    ``LANGCHAIN_AGENT_API_KEY`` (set per-turn by the web custom-endpoint flow)
+    wins; otherwise fall back to the provider's ``api_key_env`` then the
+    credentials file.
+    """
+    override = os.getenv("LANGCHAIN_AGENT_API_KEY", "").strip()
+    if override:
+        return override
     return os.getenv(cfg.api_key_env) or load_credentials().get(cfg.api_key_env, "")
 
 
