@@ -38,6 +38,7 @@
     <main class="chat">
       <header class="chat-header">
         <select id="model-select"></select>
+        <button id="btn-endpoints" class="icon-btn" title="自定义端点">⚙</button>
         <span id="conv-title"></span>
       </header>
       <div id="messages" class="messages"></div>
@@ -46,6 +47,25 @@
         <button type="submit" id="btn-send">发送</button>
       </form>
     </main>
+    <div id="endpoint-modal" class="modal hidden">
+      <div class="modal-card">
+        <button id="btn-close-endpoint" class="modal-close" aria-label="关闭">✕</button>
+        <h2>自定义端点</h2>
+        <ul id="endpoint-list" class="endpoint-list"></ul>
+        <div class="endpoint-form">
+          <input id="ep-label" placeholder="名称(如 My LLM)" />
+          <input id="ep-base-url" placeholder="Base URL(如 https://api.openai.com/v1)" />
+          <input id="ep-api-key" type="password" placeholder="API Key" />
+          <input id="ep-model" placeholder="模型名(如 gpt-5.4)" />
+          <select id="ep-protocol">
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+          <div id="ep-error" class="error"></div>
+          <button id="btn-save-endpoint">保存并使用</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>

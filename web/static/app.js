@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const api = (path, opts = {}) =>
   fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opts });
 
-let state = { user: null, convs: [], activeConv: null, models: [], domCache: {} };
+let state = { user: null, convs: [], activeConv: null, models: [], endpoints: [], domCache: {} };
 
 async function init() {
   const me = await api("/api/me");
@@ -33,10 +33,25 @@ async function enterApp() {
 }
 
 async function loadModels() {
-  const r = await api("/api/models");
-  state.models = r.ok ? await r.json() : [];
-  $("model-select").innerHTML = state.models
-    .map((m) => `<option value="${m.id}">${m.label} · ${m.model}</option>`).join("");
+  const [mr, er] = await Promise.all([api("/api/models"), api("/api/endpoints")]);
+  state.models = mr.ok ? await mr.json() : [];
+  state.endpoints = er.ok ? await er.json() : [];
+  renderModelSelect();
+}
+
+function renderModelSelect() {
+  const sel = $("model-select");
+  const prev = sel.value;
+  const presets = state.models
+    .map((m) => `<option value="preset:${m.id}">${escapeHtml(m.label)} · ${escapeHtml(m.model)}</option>`)
+    .join("");
+  const customs = state.endpoints
+    .map((e) => `<option value="endpoint:${e.id}">★ ${escapeHtml(e.label)} · ${escapeHtml(e.model)}</option>`)
+    .join("");
+  sel.innerHTML =
+    `<optgroup label="预置">${presets}</optgroup>` +
+    (customs ? `<optgroup label="自定义">${customs}</optgroup>` : "");
+  if (prev) sel.value = prev;  // keep the current selection across refreshes
 }
 
 async function loadConversations() {
@@ -151,6 +166,62 @@ function renderMessage(role, content, events = []) {
   return div;
 }
 
+function openEndpoints() {
+  renderEndpointList();
+  $("ep-error").textContent = "";
+  $("endpoint-modal").classList.remove("hidden");
+}
+function closeEndpoints() { $("endpoint-modal").classList.add("hidden"); }
+
+function renderEndpointList() {
+  const ul = $("endpoint-list");
+  ul.innerHTML = "";
+  if (!state.endpoints.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "暂无自定义端点";
+    ul.append(li);
+    return;
+  }
+  for (const e of state.endpoints) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = `${e.label} · ${e.model} · ${e.base_url}`;
+    const del = document.createElement("button");
+    del.className = "del";
+    del.textContent = "✕";
+    del.onclick = async () => {
+      await api(`/api/endpoints/${e.id}`, { method: "DELETE" });
+      await loadModels();
+      renderEndpointList();
+    };
+    li.append(span, del);
+    ul.append(li);
+  }
+}
+
+async function saveEndpoint() {
+  $("ep-error").textContent = "";
+  const body = {
+    label: $("ep-label").value.trim(),
+    base_url: $("ep-base-url").value.trim(),
+    api_key: $("ep-api-key").value,
+    model: $("ep-model").value.trim(),
+    protocol: $("ep-protocol").value,
+  };
+  const r = await api("/api/endpoints", { method: "POST", body: JSON.stringify(body) });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    $("ep-error").textContent = e.detail || "保存失败";
+    return;
+  }
+  const created = await r.json();
+  await loadModels();
+  $("model-select").value = `endpoint:${created.id}`;
+  for (const id of ["ep-label", "ep-base-url", "ep-api-key", "ep-model"]) $(id).value = "";
+  closeEndpoints();
+}
+
 function renderProcess(events) {
   const d = document.createElement("details");
   d.className = "process";
@@ -177,9 +248,16 @@ async function sendMessage(text) {
   body.innerHTML = '<span class="typing">加载中…</span>';  // until the first token
   const procEvents = [];
   let acc = "";
+  const raw = $("model-select").value || "";
+  const i = raw.indexOf(":");
+  const kind = i >= 0 ? raw.slice(0, i) : "";
+  const val = i >= 0 ? raw.slice(i + 1) : raw;
+  const payload = { content: text };
+  if (kind === "endpoint") payload.endpoint_id = val;
+  else payload.model = val;
   const resp = await api(`/api/conversations/${state.activeConv}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content: text, model: $("model-select").value }),
+    body: JSON.stringify(payload),
   });
   if (!resp.ok) { body.textContent = `[error] ${resp.status}`; return; }
 
@@ -234,6 +312,9 @@ $("btn-login").onclick = () => doAuth("/api/auth/login");
 $("btn-register").onclick = () => doAuth("/api/auth/register");
 $("btn-logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.reload(); };
 $("btn-new-conv").onclick = newConv;
+$("btn-endpoints").onclick = openEndpoints;
+$("btn-close-endpoint").onclick = closeEndpoints;
+$("btn-save-endpoint").onclick = saveEndpoint;
 $("composer").onsubmit = (e) => {
   e.preventDefault();
   const v = $("input").value.trim();
