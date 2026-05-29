@@ -141,7 +141,8 @@ def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
     serving loop and forward events, so the loop keeps ticking throughout."""
     import time
 
-    async def fake_locked(prompt, *, trace_id, session_key, user_id, model_id):
+    async def fake_locked(prompt, *, trace_id, session_key, user_id, model_id,
+                          base_url="", api_key="", protocol=""):
         time.sleep(0.3)  # stand-in for the turn's blocking work
         yield {"type": "text", "chunk": "hi"}
         yield {"type": "done", "text": "hi"}
@@ -179,3 +180,32 @@ def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
     # On-loop: the 0.3s block stops the ticker (~0 ticks). Off-loop: it keeps
     # ticking (~30 in 0.3s).
     assert ticks > 5, f"event loop was blocked during the turn (ticks={ticks})"
+
+
+def test_web_turn_env_custom_endpoint_sets_and_restores(tmp_config_dir, monkeypatch):
+    for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
+              "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+
+    with bridge._web_turn_env(
+        user_id="u-alice", model_id="custom/gpt-5.4",
+        base_url="https://x.test/v1", api_key="sk-z", protocol="anthropic",
+    ):
+        assert os.environ["LANGCHAIN_AGENT_MODEL"] == "custom/gpt-5.4"
+        assert os.environ["LANGCHAIN_AGENT_BASE_URL"] == "https://x.test/v1"
+        assert os.environ["LANGCHAIN_AGENT_API_KEY"] == "sk-z"
+        assert os.environ["LANGCHAIN_AGENT_PROTOCOL"] == "anthropic"
+
+    for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
+              "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):
+        assert k not in os.environ
+
+
+def test_web_turn_env_no_endpoint_leaves_custom_vars_unset(tmp_config_dir, monkeypatch):
+    for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
+              "LANGCHAIN_AGENT_PROTOCOL"):
+        monkeypatch.delenv(k, raising=False)
+    with bridge._web_turn_env(user_id="u-bob", model_id="openai/gpt-4o"):
+        assert "LANGCHAIN_AGENT_BASE_URL" not in os.environ
+        assert "LANGCHAIN_AGENT_API_KEY" not in os.environ
+        assert "LANGCHAIN_AGENT_PROTOCOL" not in os.environ

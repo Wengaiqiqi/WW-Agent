@@ -42,24 +42,32 @@ def _set_or_clear(name: str, value: str | None) -> None:
 
 
 @contextlib.contextmanager
-def _web_turn_env(*, user_id: str, model_id: str) -> Iterator[Path]:
+def _web_turn_env(
+    *, user_id: str, model_id: str,
+    base_url: str = "", api_key: str = "", protocol: str = "",
+) -> Iterator[Path]:
     """Set the per-turn env (memory user, forced workspace-write, per-user
-    workspace root, selected model) and restore the prior values on exit."""
-    prev = {
-        k: os.environ.get(k)
-        for k in (
-            "LANGCHAIN_AGENT_MEMORY_USER",
-            "LANGCHAIN_AGENT_PERMISSION_MODE",
-            "LANGCHAIN_AGENT_WORKSPACE_ROOT",
-            "LANGCHAIN_AGENT_MODEL",
-        )
-    }
+    workspace root, selected model, and — for custom endpoints — base_url /
+    api_key / protocol) and restore the prior values on exit."""
+    keys = (
+        "LANGCHAIN_AGENT_MEMORY_USER",
+        "LANGCHAIN_AGENT_PERMISSION_MODE",
+        "LANGCHAIN_AGENT_WORKSPACE_ROOT",
+        "LANGCHAIN_AGENT_MODEL",
+        "LANGCHAIN_AGENT_BASE_URL",
+        "LANGCHAIN_AGENT_API_KEY",
+        "LANGCHAIN_AGENT_PROTOCOL",
+    )
+    prev = {k: os.environ.get(k) for k in keys}
     ws = _user_workspace(user_id)
     try:
         _set_or_clear("LANGCHAIN_AGENT_MEMORY_USER", user_id or None)
         _set_or_clear("LANGCHAIN_AGENT_PERMISSION_MODE", config.WEB_PERMISSION_MODE)
         _set_or_clear("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(ws))
         _set_or_clear("LANGCHAIN_AGENT_MODEL", model_id or None)
+        _set_or_clear("LANGCHAIN_AGENT_BASE_URL", base_url or None)
+        _set_or_clear("LANGCHAIN_AGENT_API_KEY", api_key or None)
+        _set_or_clear("LANGCHAIN_AGENT_PROTOCOL", protocol or None)
         yield ws
     finally:
         for k, v in prev.items():
@@ -144,6 +152,9 @@ async def run_turn_streaming(
     session_key: str = "",
     user_id: str = "",
     model_id: str = "",
+    base_url: str = "",
+    api_key: str = "",
+    protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one orchestrator turn and yield SSE event dicts.
 
@@ -162,12 +173,17 @@ async def run_turn_streaming(
             session_key=session_key,
             user_id=user_id,
             model_id=model_id,
+            base_url=base_url,
+            api_key=api_key,
+            protocol=protocol,
         ):
             yield ev
 
 
 async def _stream_off_loop(
-    prompt: str, *, trace_id: str, session_key: str, user_id: str, model_id: str
+    prompt: str,
+    *, trace_id: str, session_key: str, user_id: str, model_id: str,
+    base_url: str = "", api_key: str = "", protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the whole turn on a dedicated worker thread (with its own event
     loop) and forward its events to the serving loop via a queue.
@@ -193,6 +209,9 @@ async def _stream_off_loop(
                     session_key=session_key,
                     user_id=user_id,
                     model_id=model_id,
+                    base_url=base_url,
+                    api_key=api_key,
+                    protocol=protocol,
                 ):
                     serving_loop.call_soon_threadsafe(queue.put_nowait, ev)
             except Exception as exc:  # noqa: BLE001  — never drop the stream
@@ -285,7 +304,9 @@ async def _plan_and_dispatch(
 
 
 async def _run_streaming_locked(
-    prompt: str, *, trace_id: str, session_key: str, user_id: str, model_id: str
+    prompt: str,
+    *, trace_id: str, session_key: str, user_id: str, model_id: str,
+    base_url: str = "", api_key: str = "", protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     import shutil
 
@@ -302,7 +323,7 @@ async def _run_streaming_locked(
     router = CapabilityRouter()
 
     final_text = ""
-    with _web_turn_env(user_id=user_id, model_id=model_id):
+    with _web_turn_env(user_id=user_id, model_id=model_id, base_url=base_url, api_key=api_key, protocol=protocol):
         os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = str(web_runtime)
         try:
             history_context, full_context = _build_planner_context(session_key)
