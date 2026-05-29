@@ -82,3 +82,44 @@ def test_delete_conversation_cascades_messages(db_path):
     store.add_message(db_path, cid, "user", "hello", "[]")
     store.delete_conversation(db_path, cid)
     assert store.list_messages(db_path, cid) == []
+
+
+def test_endpoint_crud_and_isolation(db_path):
+    store.init_db(db_path)
+    alice = store.create_user(db_path, "alice", "h", "s")
+    bob = store.create_user(db_path, "bob", "h", "s")
+
+    ep = store.create_endpoint(
+        db_path, alice, "My LLM", "https://x.test/v1", "sk-secret",
+        "gpt-5.4", "openai",
+    )
+    assert ep["id"] and ep["label"] == "My LLM" and ep["model"] == "gpt-5.4"
+    assert "api_key" not in ep  # create returns metadata only
+
+    # list omits api_key and is per-user.
+    rows = store.list_endpoints(db_path, alice)
+    assert len(rows) == 1 and "api_key" not in rows[0]
+    assert store.list_endpoints(db_path, bob) == []
+
+    # get_endpoint (internal) DOES include the key for the turn.
+    full = store.get_endpoint(db_path, ep["id"])
+    assert full["api_key"] == "sk-secret" and full["user_id"] == alice
+
+    store.delete_endpoint(db_path, ep["id"])
+    assert store.get_endpoint(db_path, ep["id"]) is None
+
+
+def test_endpoint_defaults_protocol_openai(db_path):
+    store.init_db(db_path)
+    uid = store.create_user(db_path, "alice", "h", "s")
+    ep = store.create_endpoint(db_path, uid, "L", "https://x/v1", "k", "m")
+    assert store.get_endpoint(db_path, ep["id"])["protocol"] == "openai"
+
+
+def test_delete_user_cascades_endpoints(db_path):
+    store.init_db(db_path)
+    uid = store.create_user(db_path, "alice", "h", "s")
+    ep = store.create_endpoint(db_path, uid, "L", "https://x/v1", "k", "m")
+    with store._connect(db_path) as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+    assert store.get_endpoint(db_path, ep["id"]) is None

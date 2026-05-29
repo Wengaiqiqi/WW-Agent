@@ -69,8 +69,20 @@ def init_db(db_path: str) -> None:
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS endpoints (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                model TEXT NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'openai',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id);
             CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id);
+            CREATE INDEX IF NOT EXISTS idx_endpoints_user ON endpoints(user_id);
             """
         )
 
@@ -174,3 +186,56 @@ def list_messages(db_path: str, conv_id: str) -> list[dict[str, Any]]:
             (conv_id,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def create_endpoint(
+    db_path: str,
+    user_id: str,
+    label: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    protocol: str = "openai",
+) -> dict[str, Any]:
+    """Insert a per-user custom endpoint. Returns metadata WITHOUT the key."""
+    eid = _new_id()
+    now = _now()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO endpoints "
+            "(id, user_id, label, base_url, api_key, model, protocol, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (eid, user_id, label, base_url, api_key, model, protocol, now),
+        )
+    return {
+        "id": eid, "label": label, "base_url": base_url,
+        "model": model, "protocol": protocol, "created_at": now,
+    }
+
+
+def list_endpoints(db_path: str, user_id: str) -> list[dict[str, Any]]:
+    """List a user's endpoints. Never selects ``api_key`` — safe to return to
+    the browser as-is."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, label, base_url, model, protocol, created_at "
+            "FROM endpoints WHERE user_id = ? "
+            "ORDER BY created_at DESC, rowid DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_endpoint(db_path: str, endpoint_id: str) -> Optional[dict[str, Any]]:
+    """Fetch the full endpoint row INCLUDING ``api_key`` — for server-side turn
+    setup only. The route layer compares ``user_id`` for ownership."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM endpoints WHERE id = ?", (endpoint_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_endpoint(db_path: str, endpoint_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
