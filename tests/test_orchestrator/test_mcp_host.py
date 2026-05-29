@@ -36,6 +36,19 @@ def test_build_agent_env_passes_skill_declared_keys(monkeypatch, tmp_path):
     assert env.get("BAIDU_EC_SEARCH_TOKEN") == "live-token-xyz"
 
 
+def test_build_agent_env_forwards_custom_endpoint_vars(monkeypatch):
+    """A web custom-endpoint turn sets base_url/protocol/api_key in the parent
+    env; a delegated specialist must inherit them so it can build the same
+    custom LLM. (These are only present when a custom endpoint is active.)"""
+    monkeypatch.setenv("LANGCHAIN_AGENT_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("LANGCHAIN_AGENT_PROTOCOL", "openai")
+    monkeypatch.setenv("LANGCHAIN_AGENT_API_KEY", "sk-turn-key")
+    env = _build_agent_env(hmac_key="k", agent_id="tool-agent")
+    assert env["LANGCHAIN_AGENT_BASE_URL"] == "https://example.test/v1"
+    assert env["LANGCHAIN_AGENT_PROTOCOL"] == "openai"
+    assert env["LANGCHAIN_AGENT_API_KEY"] == "sk-turn-key"
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_mcp_host_spawns_tool_agent_and_calls_read_file(tmp_path):

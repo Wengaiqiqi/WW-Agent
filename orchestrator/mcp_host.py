@@ -40,6 +40,18 @@ _OS_PASSTHROUGH = {
     # App config (not secrets)
     "LANGCHAIN_AGENT_MODEL", "LANGCHAIN_AGENT_CONFIG_DIR",
     "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+    # Per-turn custom-endpoint overrides (set by the web UI). BASE_URL/PROTOCOL
+    # are not secrets; API_KEY is the one key the user chose for THIS turn and
+    # is only present in env while a custom endpoint is active — a deliberate,
+    # minimal exception to the "no secrets across the boundary" default so a
+    # delegated specialist can authenticate against the same endpoint.
+    "LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_PROTOCOL",
+    "LANGCHAIN_AGENT_API_KEY",
+    # RUNTIME_DIR must reach the specialist: it writes its ``<id>.a2a-url``
+    # sidecar there, and the orchestrator reads it back from the same dir.
+    # A gateway running in-process overrides this to isolate its discovery
+    # files from the REPL's; the child has to agree on the location.
+    "LANGCHAIN_AGENT_RUNTIME_DIR",
     # WORKSPACE_ROOT controls the sandbox tool-agent applies to file ops.
     # Must reach the subprocess; otherwise tool-agent falls back to its
     # own ``os.getcwd()`` and the orchestrator's intended boundary is lost.
@@ -84,6 +96,7 @@ def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
         if (
             k.upper() in _OS_PASSTHROUGH
             or k.upper().startswith("MOCK_")
+            or k.upper().startswith("COMM_")
             or k in skill_env_keys
         )
     }
@@ -134,9 +147,9 @@ class MCPHost:
         init_result = await session.initialize()
 
         # Read A2A URL sidecar file written by the specialist at startup.
-        from pathlib import Path
+        from agent_paths import runtime_dir
         a2a_url = None
-        url_file = Path(".agent/runtime") / f"{card.id}.a2a-url"
+        url_file = runtime_dir() / f"{card.id}.a2a-url"
         # Poll for up to 5 seconds. Tool-agent imports langchain + langgraph
         # before binding its A2A port; on a cold pip cache or slow disk the
         # import chain can take 3+ seconds, well past the previous 1s budget.
