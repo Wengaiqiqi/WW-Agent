@@ -297,10 +297,30 @@ async def _run_turn_locked(
     user_id: str = "",
 ) -> str:
     """Orchestrator-bootstrap-and-dispatch core. Caller holds the lock."""
-    from gateway import session_store
+    from dataclasses import replace
 
-    hmac_key = secrets.token_urlsafe(32)
-    host = MCPHost(hmac_key=hmac_key)
+    from gateway import session_store
+    from orchestrator.turn_context import TurnContext
+
+    # Build the explicit per-turn context. The gateway's permission default is
+    # workspace-write (matching the spawn-time default and what _dispatch_decision
+    # / _delegate_via_a2a assume), NOT TurnContext.from_env's danger-full-access
+    # CLI default — so override it explicitly. The runtime dir is keyed per
+    # turn_id (was per-PID) so parallel turns can't collide.
+    ctx = TurnContext.from_env(
+        session_key=session_key, trace_id=trace_id,
+        hmac_key=secrets.token_urlsafe(32),
+    )
+    ctx = replace(
+        ctx,
+        user_id=user_id,
+        permission_mode=os.environ.get(
+            "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
+        ),
+        runtime_dir=Path(".agent") / "runtime" / f"gw-{ctx.turn_id}",
+    )
+
+    host = MCPHost(hmac_key=ctx.hmac_key, turn_env=ctx.turn_env())
     router = CapabilityRouter()
     # Mux receives streaming output during the turn but we discard it --
     # only the final assistant text matters here.
@@ -310,19 +330,17 @@ async def _run_turn_locked(
     is_slash_command = False
     stop_tail = None
 
-    # Scope the per-user memory env and a private runtime-discovery dir for the
-    # whole turn (both inherited by the spawned specialists). CRITICAL: the
-    # memory env must be set BEFORE ``_build_planner_context`` — it reads the
-    # memory file via ``snapshot_for_system_prompt``, which keys off this var to
-    # pick the right user directory; setting it after made Branch A (prose
-    # answers) see the previous user's memory.
+    # Scope the per-turn env in-process for the turn's duration (the subprocess
+    # channel is the host's turn_env above). CRITICAL: the memory env must be set
+    # BEFORE ``_build_planner_context`` — it reads the memory file via
+    # ``snapshot_for_system_prompt``, which keys off LANGCHAIN_AGENT_MEMORY_USER
+    # to pick the right user directory.
     #
     # Caveat: env is process-global, so the in-process gateway-as-REPL-
     # background-task mode still shares these vars during a turn; turns are
-    # serialised by ``_CONCURRENCY_GUARD`` and resolve to live specialists, so
-    # the worst case is a REPL turn briefly using the gateway's specialist.
-    with scoped_env({"LANGCHAIN_AGENT_MEMORY_USER": user_id or None}), \
-            private_runtime_dir("gw"):
+    # serialised by the caller's lock and resolve to live specialists, so the
+    # worst case is a REPL turn briefly using the gateway's specialist.
+    with scoped_env(ctx.turn_env()):
         try:
             history_context, full_context = _build_planner_context(session_key)
 
@@ -356,7 +374,7 @@ async def _run_turn_locked(
                 prompt=prompt,
                 host=host,
                 router=router,
-                hmac_key=hmac_key,
+                hmac_key=ctx.hmac_key,
                 trace_id=trace_id,
                 history_context=history_context,
             )
@@ -371,3 +389,5 @@ async def _run_turn_locked(
             # deliberately excluded from the planner's history.
             if session_key and reply_text and not is_slash_command:
                 session_store.append(session_key, prompt, reply_text)
+            # Best-effort cleanup of this turn's private discovery dir.
+            shutil.rmtree(ctx.runtime_dir, ignore_errors=True)
