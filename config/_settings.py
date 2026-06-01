@@ -29,18 +29,56 @@ _KNOWN_PROTOCOLS = {"openai", "anthropic", "mock"}
 
 
 def load_active_config() -> ActiveConfig:
-    """Resolve which model should be active, then apply per-turn env overrides.
+    """Resolve the active model from process env + settings.json.
 
-    Base resolution order: ``LANGCHAIN_AGENT_MODEL`` env > settings.json >
-    ``DEFAULT_PROVIDER``. After that, ``LANGCHAIN_AGENT_BASE_URL`` and
-    ``LANGCHAIN_AGENT_PROTOCOL`` (when set) override the resolved config — the
-    web "custom endpoint" feature sets these for the duration of a turn.
+    Thin shim over :func:`resolve_config` for the single-user CLI / legacy path;
+    building a ``TurnContext`` from env reproduces the prior env-driven behavior
+    (``LANGCHAIN_AGENT_MODEL`` > settings.json > ``DEFAULT_PROVIDER``, then the
+    ``BASE_URL`` / ``PROTOCOL`` / ``API_KEY`` overrides).
     """
-    return _apply_env_overrides(_resolve_base_config())
+    from orchestrator.turn_context import TurnContext
+
+    return resolve_config(TurnContext.from_env())
 
 
-def _resolve_base_config() -> ActiveConfig:
-    env_choice = os.getenv("LANGCHAIN_AGENT_MODEL", "").strip()
+def resolve_config(ctx) -> ActiveConfig:
+    """Resolve an ``ActiveConfig`` from an explicit ``TurnContext``.
+
+    No ``os.environ`` reads beyond the settings.json base — the per-turn config
+    comes from *ctx*, so two turns resolving concurrently can't see each other's
+    selection. ctx overrides win over settings.json.
+    """
+    cfg = _resolve_base_config(ctx.model_id)
+    if ctx.base_url:
+        cfg.base_url = ctx.base_url
+    if ctx.protocol:
+        # Validate against the protocols ``config._llm`` actually understands.
+        # An unknown/typo value (e.g. "gemini", "openai ") would otherwise be
+        # accepted verbatim and silently fall through to the OpenAI client,
+        # surfacing as an opaque parse/4xx error only at invoke time. Reject it
+        # here, leaving the resolved protocol untouched.
+        if ctx.protocol in _KNOWN_PROTOCOLS:
+            cfg.protocol = ctx.protocol
+        else:
+            logger.warning(
+                "Ignoring protocol %r from context: unknown (expected one of "
+                "%s). Keeping %r.",
+                ctx.protocol, sorted(_KNOWN_PROTOCOLS), cfg.protocol,
+            )
+    if ctx.api_key:
+        cfg.api_key = ctx.api_key
+    return cfg
+
+
+def _resolve_base_config(model_choice: str = "") -> ActiveConfig:
+    """Resolve provider+model from an explicit model choice (``provider/model``
+    or ``provider``), falling back to settings.json then ``DEFAULT_PROVIDER``.
+
+    The explicit arg replaces the prior direct ``LANGCHAIN_AGENT_MODEL`` env
+    read so the source of truth is the caller's ``TurnContext``, not
+    process-global env.
+    """
+    env_choice = (model_choice or "").strip()
     if env_choice:
         if "/" in env_choice:
             prov_name, model_name = env_choice.split("/", 1)
@@ -68,33 +106,6 @@ def _resolve_base_config() -> ActiveConfig:
         )
 
     return make_config(DEFAULT_PROVIDER)
-
-
-def _apply_env_overrides(cfg: ActiveConfig) -> ActiveConfig:
-    """Apply ``LANGCHAIN_AGENT_BASE_URL`` / ``LANGCHAIN_AGENT_PROTOCOL`` if set.
-
-    No-op when neither is present, so non-web callers are unaffected.
-    """
-    base_url = os.getenv("LANGCHAIN_AGENT_BASE_URL", "").strip()
-    protocol = os.getenv("LANGCHAIN_AGENT_PROTOCOL", "").strip()
-    if base_url:
-        cfg.base_url = base_url
-    if protocol:
-        # Validate against the protocols ``config._llm`` actually understands.
-        # An unknown/typo value (e.g. "gemini", "openai ") would otherwise be
-        # accepted verbatim and silently fall through to the OpenAI client,
-        # surfacing as an opaque parse/4xx error only at invoke time. Reject it
-        # at config resolution with a clear message instead, leaving the
-        # resolved protocol untouched.
-        if protocol in _KNOWN_PROTOCOLS:
-            cfg.protocol = protocol
-        else:
-            logger.warning(
-                "Ignoring LANGCHAIN_AGENT_PROTOCOL=%r: unknown protocol "
-                "(expected one of %s). Keeping %r.",
-                protocol, sorted(_KNOWN_PROTOCOLS), cfg.protocol,
-            )
-    return cfg
 
 
 def save_active_config(cfg: ActiveConfig) -> None:

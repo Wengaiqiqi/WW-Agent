@@ -1,6 +1,36 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from config import _credentials, _settings
+from orchestrator.turn_context import TurnContext
+
+
+def _ctx(**over):
+    base = dict(turn_id="t", user_id="", workspace_root=Path("/ws"),
+                permission_mode="workspace-write", model_id="", base_url="",
+                api_key="", protocol="", session_key="", trace_id="tr",
+                hmac_key="h", runtime_dir=Path("/rt"))
+    base.update(over)
+    return TurnContext(**base)
+
+
+def test_resolve_config_applies_ctx_overrides():
+    cfg = _settings.resolve_config(_ctx(
+        model_id="deepseek/deepseek-chat", base_url="https://api.x/v1",
+        api_key="sk-ctx", protocol="openai",
+    ))
+    assert cfg.base_url == "https://api.x/v1"
+    assert cfg.api_key == "sk-ctx"
+    assert cfg.protocol == "openai"
+
+
+def test_resolve_config_rejects_unknown_protocol():
+    cfg = _settings.resolve_config(_ctx(
+        model_id="deepseek/deepseek-chat", protocol="gemini",
+    ))
+    # Unknown protocol is ignored (kept as resolved default), per the whitelist.
+    assert cfg.protocol != "gemini"
 
 
 def test_base_url_and_protocol_overrides_applied(monkeypatch):
