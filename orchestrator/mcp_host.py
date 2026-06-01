@@ -86,7 +86,9 @@ _OS_PASSTHROUGH = {
 }
 
 
-def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
+def _build_agent_env(
+    *, hmac_key: str, agent_id: str, turn_env: dict[str, str] | None = None
+) -> dict[str, str]:
     """Return a minimal env to hand to a freshly-spawned agent subprocess.
 
     Whitelisting (rather than copying os.environ and stripping secrets) is the
@@ -144,14 +146,24 @@ def _build_agent_env(*, hmac_key: str, agent_id: str) -> dict[str, str]:
     # operator can audit, rather than silently elevating because nobody set
     # the env. This is "safe by absence", not "permissive by default".
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+    if turn_env:
+        # Per-turn config travels explicitly (TurnContext), overriding both the
+        # inherited parent env and the workspace-write default above. This is
+        # what lets parallel turns spawn specialists with different
+        # user/workspace/model/key without mutating the shared os.environ.
+        env.update(turn_env)
     return env
 
 
 class MCPHost:
     """Manages MCP client sessions to each specialist subprocess."""
 
-    def __init__(self, *, hmac_key: str):
+    def __init__(self, *, hmac_key: str, turn_env: dict[str, str] | None = None):
         self._hmac_key = hmac_key
+        # Per-turn env overlay merged into every spawned specialist's env (the
+        # cross-process channel for TurnContext). Empty for the legacy path,
+        # which still inherits per-turn vars from os.environ.
+        self._turn_env = turn_env or {}
         self._clients: dict[str, _ClientHandle] = {}
 
     async def spawn(self, card: Card) -> None:
@@ -160,7 +172,9 @@ class MCPHost:
         if card.entrypoint["type"] != "python":
             raise NotImplementedError("only python entrypoints supported in Day-1")
 
-        env = _build_agent_env(hmac_key=self._hmac_key, agent_id=card.id)
+        env = _build_agent_env(
+            hmac_key=self._hmac_key, agent_id=card.id, turn_env=self._turn_env,
+        )
 
         params = StdioServerParameters(
             command=sys.executable,

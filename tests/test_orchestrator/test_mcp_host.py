@@ -118,3 +118,28 @@ async def test_mcp_host_spawns_tool_agent_and_calls_read_file(tmp_path):
         assert "read_file" in [t.name for t in tools]
     finally:
         await host.shutdown_all()
+
+
+def test_build_agent_env_uses_turn_env_overlay_not_os_environ(monkeypatch):
+    # A per-turn value provided via the overlay must win and must NOT require
+    # the parent os.environ to be mutated.
+    monkeypatch.delenv("LANGCHAIN_AGENT_MEMORY_USER", raising=False)
+    monkeypatch.delenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", raising=False)
+    overlay = {
+        "LANGCHAIN_AGENT_MEMORY_USER": "alice",
+        "LANGCHAIN_AGENT_WORKSPACE_ROOT": "/ws/alice",
+        "LANGCHAIN_AGENT_RUNTIME_DIR": "/rt/t1",
+    }
+    env = _build_agent_env(hmac_key="h", agent_id="tool-agent", turn_env=overlay)
+    assert env["LANGCHAIN_AGENT_MEMORY_USER"] == "alice"
+    assert env["LANGCHAIN_AGENT_WORKSPACE_ROOT"] == "/ws/alice"
+    assert env["LANGCHAIN_AGENT_RUNTIME_DIR"] == "/rt/t1"
+    # The parent process env was not touched.
+    assert "LANGCHAIN_AGENT_MEMORY_USER" not in os.environ
+
+
+def test_build_agent_env_overlay_overrides_parent_env(monkeypatch):
+    monkeypatch.setenv("LANGCHAIN_AGENT_MODEL", "parent/model")
+    env = _build_agent_env(hmac_key="h", agent_id="tool-agent",
+                           turn_env={"LANGCHAIN_AGENT_MODEL": "turn/model"})
+    assert env["LANGCHAIN_AGENT_MODEL"] == "turn/model"
