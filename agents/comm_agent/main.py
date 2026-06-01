@@ -84,12 +84,22 @@ async def amain() -> int:
         public_url=public_url,
         version="1.0.0",
     )
+    # Cross-process replay defense: under uvicorn --workers N each worker
+    # is its own process, so an in-memory NonceCache wouldn't see other
+    # workers' nonces. The SQLite store gives all workers one shared view.
+    from agents.shared.authz import SqliteNonceStore
+    from agent_paths import runtime_dir as _runtime_dir
+    nonce_db = _runtime_dir() / "comm-nonces.db"
+    nonce_db.parent.mkdir(parents=True, exist_ok=True)
+    nonce_store = SqliteNonceStore(nonce_db)
+
     app = build_app(
         self_card=self_card,
         hmac_secret=self_secret,
         my_peer_id=my_peer_id,
         skill_dispatcher=_noop_dispatch,
         stream_dispatcher=_noop_stream,
+        nonce_cache=nonce_store,
     )
 
     # 2. Start uvicorn on the upstream port.
@@ -126,9 +136,10 @@ async def amain() -> int:
 
     # 4. Write the public URL to runtime dir so orchestrator can discover us.
     agent_id = os.environ.get("AGENT_ID", "comm-agent")
-    runtime_dir = Path(".agent/runtime")
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / f"{agent_id}.a2a-url").write_text(public_url, encoding="utf-8")
+    from agent_paths import runtime_dir
+    rt_dir = runtime_dir()
+    rt_dir.mkdir(parents=True, exist_ok=True)
+    (rt_dir / f"{agent_id}.a2a-url").write_text(public_url, encoding="utf-8")
 
     # 5. Build the comm.* MCP tool list backed by the on-disk peer registry.
     reg = PeerRegistry(config_dir() / "comm_peers.json")

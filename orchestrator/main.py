@@ -24,8 +24,19 @@ def _agent_dir() -> Path:
 
 async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
     cards = load_cards(_agent_dir())
+    spawned: set[str] = set()
     for card in cards:
-        await host.spawn(card)
+        try:
+            await host.spawn(card)
+        except Exception:
+            if card.optional:
+                log.warning(
+                    "optional specialist %r failed to spawn, skipping",
+                    card.id, exc_info=True,
+                )
+                continue
+            raise
+        spawned.add(card.id)
         tools = await host.list_tools(card.id)
         tool_metas = {
             t.name: {
@@ -37,14 +48,19 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         router.register(card.id, [t.name for t in tools], tool_metas=tool_metas)
 
     # After all specialists are up, broadcast their A2A URLs.
-    from pathlib import Path
+    from agent_paths import runtime_dir
     peers = host.a2a_urls()  # already returns {id: url} from Task 5.2
-    runtime_dir = Path(".agent/runtime")
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
+    rt_dir = runtime_dir()
+    rt_dir.mkdir(parents=True, exist_ok=True)
+    (rt_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
 
     # Register agent-level task capabilities (A2A delegation, not MCP).
-    if "tool-agent" in {c.id for c in cards}:
+    # Gate on the SUCCESSFULLY spawned set — not the on-disk card set —
+    # otherwise an optional specialist that failed to spawn would still
+    # advertise tool.task to the planner, which then delegates to a peer
+    # with no entry in peers.json and gets a cryptic "unknown peer" instead
+    # of a clean "no such capability".
+    if "tool-agent" in spawned:
         router.register("tool-agent", ["tool.task"], priority=10, tool_metas={
             "tool.task": {
                 "description": (

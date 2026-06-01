@@ -10,12 +10,22 @@ from typing import Any, AsyncIterator, Callable
 
 from pydantic import BaseModel, Field, ValidationError
 
+from orchestrator.delegation import delegate_via_a2a
 from orchestrator.graph import build_graph
 from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
 from prompt_rules import LANGUAGE_RULE
 
 log = logging.getLogger(__name__)
+
+# Fragments a trailing unclosed ``<…`` chunk must be a prefix of to count as a
+# think tag still arriving in pieces (chunked streaming can split ``<think>``
+# into ``<thi`` + ``nk>``). A stray ``<`` in prose ("3 < 5", "<3 you") is NOT a
+# partial tag and must not stall the prose/JSON classifier forever.
+_THINK_TAG_FRAGMENTS = (
+    "<think>", "<thinking>", "<reasoning>",
+    "</think>", "</thinking>", "</reasoning>",
+)
 
 
 @dataclass
@@ -290,7 +300,14 @@ Reply: A transformer is a neural-network architecture that uses self-attention.
                 + lowered.count("</reasoning>")
             )
             last_open = visible.rfind("<")
-            partial_tag = last_open >= 0 and ">" not in visible[last_open:]
+            partial_tag = False
+            if last_open >= 0:
+                tail = visible[last_open:].lower()
+                # A complete-looking tag (already has its '>') isn't "partial";
+                # and a '<' that can't grow into a think tag is just prose
+                # punctuation, so it must not defer classification.
+                if ">" not in tail:
+                    partial_tag = any(t.startswith(tail) for t in _THINK_TAG_FRAGMENTS)
             in_think = open_count > close_count or partial_tag
 
             if mode is None:
@@ -447,23 +464,73 @@ class TurnRunner:
         hmac_key: str,
         permission_mode_provider: Callable[[], str],
         planner,
+        delegate=None,
     ):
         self.host = host
         self.router = router
         self.hmac_key = hmac_key
         self.permission_mode_provider = permission_mode_provider
         self.planner = planner
+        # Injectable A2A streaming delegate (tests pass a fake; production
+        # leaves None and ``delegate_via_a2a`` uses the real client).
+        self._delegate = delegate
 
     async def run(self, user_input: str, *, trace_id: str) -> TurnResult:
+        state = {"user_input": user_input, "trace_id": trace_id}
+
+        # Run the planner once. ``tool.task`` / ``skill.<slug>`` are NOT MCP
+        # tools — they must stream over A2A. The LangGraph/MCP path below only
+        # handles single-shot MCP capabilities (calculator, read_file, …). The
+        # decision is pinned into the graph so the planner isn't invoked twice
+        # (a real LLM planner would otherwise double its cost/latency).
+        #
+        # LLMPlanner.__call__ is synchronous and internally blocks on
+        # llm.invoke() for 10-30s. Calling it directly here would freeze the
+        # event loop for the whole turn — Ctrl-C, cancel watchers, and the
+        # SSE writer would all stall. Offload to a worker thread; if the
+        # planner is a coroutine function it returns the coroutine
+        # immediately (no blocking) and we await it on the loop.
+        try:
+            raw = await asyncio.to_thread(self.planner, state)
+            if asyncio.iscoroutine(raw):
+                raw = await raw
+            decision = dict(raw or {})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return TurnResult(error=str(exc))
+
+        capability = (decision.get("capability") or "").strip()
+        if capability == "tool.task" or capability.startswith("skill."):
+            try:
+                text = await delegate_via_a2a(
+                    capability=capability,
+                    arguments=decision.get("arguments") or {},
+                    user_input=user_input,
+                    hmac_key=self.hmac_key,
+                    trace_id=trace_id,
+                    permission_mode=self.permission_mode_provider(),
+                    delegate=self._delegate,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return TurnResult(error=str(exc))
+            try:
+                owner = self.router.resolve(capability)
+            except Exception:
+                owner = "tool-agent" if capability == "tool.task" else "skill-agent"
+            return TurnResult(capability=capability, owner=owner, text=text, error=None)
+
         graph = build_graph(
             router=self.router,
             host=self.host,
-            planner=self.planner,
+            planner=lambda _state, _d=decision: _d,
             hmac_key=self.hmac_key,
             mode=self.permission_mode_provider(),
         )
         try:
-            result = await graph.ainvoke({"user_input": user_input, "trace_id": trace_id})
+            result = await graph.ainvoke(state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

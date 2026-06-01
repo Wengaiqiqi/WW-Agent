@@ -36,6 +36,7 @@ def verify_grant(token: str, *, key: str, requested_tool: str) -> dict[str, Any]
 # --- Cross-machine grants (comm-agent) -------------------------------------
 
 import secrets
+import threading
 import time
 from collections import OrderedDict
 
@@ -103,10 +104,22 @@ def verify_cross_machine_grant(
 
 
 class NonceCache:
-    """Bounded-size LRU with TTL for anti-replay nonces.
+    """Bounded-size FIFO cache with TTL for anti-replay nonces.
 
-    Spec §6.2: 10 000 entries, 60-second TTL by default. Cache fills up
-    in the verifier; eviction by LRU once full, by TTL on lookup.
+    Spec §6.2: 10 000 entries, 60-second TTL by default. Entries are inserted
+    in arrival order and never reordered, so the front is always the oldest —
+    eviction is FIFO (by age) when full, and by TTL on lookup. This is
+    deliberately NOT an LRU: for replay defense you want to retain the *newest*
+    nonces until they expire, not whichever was queried most recently.
+
+    Thread-safe: ``check_and_remember`` holds a lock so the check-then-insert
+    can't interleave across threads. FastAPI/Starlette may run request handlers
+    on a worker-thread pool, and without the lock two concurrent requests
+    carrying the same nonce could both observe "not seen" and both pass.
+
+    Process-LOCAL only. For uvicorn ``--workers N`` deployments (each worker
+    is its own process) use ``SqliteNonceStore`` instead — otherwise the same
+    grant can be accepted once per worker, silently weakening §6.2.
     """
 
     def __init__(self, *, maxlen: int = 10000, ttl_seconds: int = 60):
@@ -114,21 +127,101 @@ class NonceCache:
         self._ttl = ttl_seconds
         # nonce -> unix_ts_when_inserted
         self._entries: OrderedDict[str, float] = OrderedDict()
+        self._lock = threading.Lock()
 
     def check_and_remember(self, nonce: str) -> bool:
         """Return True if first time seen; False if replay."""
+        with self._lock:
+            now = time.time()
+            # Drop expired entries lazily on access (cheap because OrderedDict
+            # popitem(last=False) is O(1)).
+            while self._entries:
+                _oldest_nonce, inserted_at = next(iter(self._entries.items()))
+                if now - inserted_at <= self._ttl:
+                    break
+                self._entries.popitem(last=False)
+            if nonce in self._entries:
+                return False
+            # Capacity guard: evict the oldest (front) before inserting.
+            while len(self._entries) >= self._maxlen:
+                self._entries.popitem(last=False)
+            self._entries[nonce] = now
+            return True
+
+
+import sqlite3
+from pathlib import Path
+
+
+class SqliteNonceStore:
+    """Cross-process anti-replay store backed by SQLite.
+
+    Same interface as ``NonceCache``: ``check_and_remember(nonce) -> bool``.
+    Use this when more than one process can verify grants signed with the
+    same inbound secret — e.g. ``uvicorn --workers N`` — so all workers
+    share one replay window.
+
+    Implementation notes:
+      * One short-lived connection per call. sqlite3 connections are not
+        thread-safe by default; opening per-call sidesteps that without a
+        connection pool.
+      * ``INSERT … ON CONFLICT DO NOTHING`` is the atomic check-then-insert.
+        ``cursor.rowcount`` tells us whether the row was new.
+      * WAL mode lets concurrent readers proceed during writes; replay
+        verification stays low-latency under contention.
+      * Expired rows are deleted lazily on each call (cheap; the table only
+        holds ~10k rows at steady state) plus a capacity bound.
+    """
+
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        maxlen: int = 10000,
+        ttl_seconds: int = 60,
+    ):
+        self._db_path = str(db_path)
+        self._maxlen = maxlen
+        self._ttl = ttl_seconds
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=5.0, isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def _init_schema(self) -> None:
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS nonces ("
+                "nonce TEXT PRIMARY KEY, inserted_at REAL NOT NULL)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inserted_at "
+                "ON nonces(inserted_at)"
+            )
+
+    def check_and_remember(self, nonce: str) -> bool:
         now = time.time()
-        # Drop expired entries lazily on access (cheap because OrderedDict
-        # popitem(last=False) is O(1)).
-        while self._entries:
-            oldest_nonce, inserted_at = next(iter(self._entries.items()))
-            if now - inserted_at <= self._ttl:
-                break
-            self._entries.popitem(last=False)
-        if nonce in self._entries:
-            return False
-        # Capacity guard: evict LRU before inserting.
-        while len(self._entries) >= self._maxlen:
-            self._entries.popitem(last=False)
-        self._entries[nonce] = now
-        return True
+        cutoff = now - self._ttl
+        with self._connect() as conn:
+            # Lazy expiry first; safe to do without a transaction wrapper
+            # because SQLite serializes writes.
+            conn.execute("DELETE FROM nonces WHERE inserted_at < ?", (cutoff,))
+            # Capacity bound: trim oldest rows if we're over.
+            (count,) = conn.execute(
+                "SELECT COUNT(*) FROM nonces"
+            ).fetchone()
+            if count >= self._maxlen:
+                conn.execute(
+                    "DELETE FROM nonces WHERE nonce IN "
+                    "(SELECT nonce FROM nonces ORDER BY inserted_at ASC LIMIT ?)",
+                    (count - self._maxlen + 1,),
+                )
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO nonces (nonce, inserted_at) VALUES (?, ?)",
+                (nonce, now),
+            )
+            return cur.rowcount == 1

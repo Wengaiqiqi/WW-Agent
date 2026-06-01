@@ -10,8 +10,9 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 
 class DuplicateUsername(Exception):
@@ -24,12 +25,25 @@ def default_db_path() -> str:
     return str(config_dir() / "web" / "app.db")
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: str) -> Iterator[sqlite3.Connection]:
+    """Open a short-lived SQLite connection with foreign keys on.
+
+    Returns a context manager so callers using ``with _connect(...) as conn:``
+    get the connection auto-committed (via ``Connection.__enter__``) AND
+    closed on exit. Without the explicit close, under FastAPI's sync
+    threadpool each handler call leaves an open fd until GC, which is enough
+    to trip a low ``ulimit -n`` in containerised deploys.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        with conn:  # commit/rollback transaction at block exit
+            yield conn
+    finally:
+        conn.close()
 
 
 def _new_id() -> str:
@@ -176,6 +190,11 @@ def add_message(
             (mid, conv_id, role, content, events_json, _now()),
         )
     return mid
+
+
+def delete_message(db_path: str, message_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
 
 
 def list_messages(db_path: str, conv_id: str) -> list[dict[str, Any]]:

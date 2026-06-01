@@ -179,7 +179,8 @@ def test_chat_other_user_conversation_404(db_path, web_secret):
 def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert "Agent Web UI" in r.text
+    # Branding string is "W&W 多智能体" since the Hermes reskin (commit 8ccc31d).
+    assert "W&amp;W" in r.text or "W&W" in r.text
 
 
 def test_static_assets_revalidate(client):

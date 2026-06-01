@@ -75,6 +75,17 @@ class HermesACPClient:
         self._session_text: dict[str, str] = {}
         self._session_prompt: dict[str, str] = {}
         self._running: dict[str, bool] = {}
+        # One lock per session so two concurrent run_prompt calls on the SAME
+        # session can't clobber each other's queue / accumulated text. Distinct
+        # sessions still run in parallel.
+        self._session_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, session_id: str) -> asyncio.Lock:
+        lock = self._session_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_id] = lock
+        return lock
 
     # ---- process lifecycle --------------------------------------------------
 
@@ -107,6 +118,12 @@ class HermesACPClient:
                 try:
                     proc.kill()
                 except ProcessLookupError:
+                    pass
+                # Wait for the OS to actually reap the killed child so a
+                # fast restart doesn't race a zombie holding stdio handles.
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3.0)
+                except (asyncio.TimeoutError, ProcessLookupError):
                     pass
         # Await the reader so its finally-block (which fails pending futures)
         # has run before we return — avoids "Task pending" warnings and leaves
@@ -238,37 +255,54 @@ class HermesACPClient:
         task event (completed or failed). Never raises — failures become a
         {"type":"task","state":"failed"} event."""
         await self._ensure_started()
-        q: asyncio.Queue = asyncio.Queue()
-        self._session_queues[session_id] = q
-        self._session_text[session_id] = ""
-        self._session_prompt[session_id] = text
-        self._running[session_id] = True
-        done = object()
+        # Serialise prompts on the same session: the queue / accumulated-text
+        # state below is keyed by session_id, so an overlapping run_prompt for
+        # the same session would otherwise reset and re-route mid-turn.
+        async with self._lock_for(session_id):
+            q: asyncio.Queue = asyncio.Queue()
+            self._session_queues[session_id] = q
+            self._session_text[session_id] = ""
+            self._session_prompt[session_id] = text
+            self._running[session_id] = True
+            done = object()
 
-        async def _drive() -> None:
+            async def _drive() -> None:
+                try:
+                    await self._request("session/prompt", {
+                        "sessionId": session_id,
+                        "prompt": [{"type": "text", "text": text}],
+                    })
+                    await q.put({"type": "task", "state": "completed",
+                                 "result": self._session_text.get(session_id, "")})
+                except Exception as exc:  # noqa: BLE001 — surface, don't crash the SSE
+                    await q.put({"type": "task", "state": "failed", "error": str(exc)})
+                finally:
+                    await q.put(done)
+
+            drive_task = asyncio.create_task(_drive())
             try:
-                await self._request("session/prompt", {
-                    "sessionId": session_id,
-                    "prompt": [{"type": "text", "text": text}],
-                })
-                await q.put({"type": "task", "state": "completed",
-                             "result": self._session_text.get(session_id, "")})
-            except Exception as exc:  # noqa: BLE001 — surface, don't crash the SSE
-                await q.put({"type": "task", "state": "failed", "error": str(exc)})
+                while True:
+                    ev = await q.get()
+                    if ev is done:
+                        break
+                    yield ev
             finally:
-                await q.put(done)
-
-        drive_task = asyncio.create_task(_drive())
-        try:
-            while True:
-                ev = await q.get()
-                if ev is done:
-                    break
-                yield ev
-        finally:
-            self._running[session_id] = False
-            self._session_queues.pop(session_id, None)
-            await drive_task
+                self._running[session_id] = False
+                self._session_queues.pop(session_id, None)
+                # If the caller cancelled (e.g. browser closed the SSE) the
+                # drive task may still be awaiting session/prompt — without
+                # cancelling it we hold the per-session lock until Hermes
+                # eventually replies, blocking every subsequent turn on this
+                # session_id. Cancel it and swallow the resulting exception;
+                # use shield+wait_for so a hung writer can't pin the lock.
+                if not drive_task.done():
+                    drive_task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(drive_task), timeout=5.0,
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                    pass
 
     async def prompt_collect(self, session_id: str, text: str) -> str:
         """Run one turn and return only the final assistant text. Raises

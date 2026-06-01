@@ -75,6 +75,8 @@ class CaddySupervisor:
         self._binary = binary
         self._caddyfile_content: str | None = None
         self._proc: subprocess.Popen | None = None
+        # File handle for caddy's stderr. See start() for why we don't PIPE it.
+        self._stderr_log = None
 
     def set_caddyfile(self, content: str) -> None:
         self._caddyfile_content = content
@@ -94,6 +96,12 @@ class CaddySupervisor:
         self.ensure_binary()
         self._caddyfile_path.parent.mkdir(parents=True, exist_ok=True)
         self._caddyfile_path.write_text(self._caddyfile_content, encoding="utf-8")
+        # caddy logs to stderr. A ``subprocess.PIPE`` we never read fills its
+        # ~64KB OS buffer within seconds of a chatty startup (ACME, cert loads)
+        # and then BLOCKS caddy forever. Redirect to a file instead so the
+        # buffer can't back up AND startup/cert errors stay inspectable.
+        stderr_log_path = self._caddyfile_path.parent / "caddy.stderr.log"
+        self._stderr_log = stderr_log_path.open("ab")
         # subprocess.Popen is blocking on Windows even for the fork — run in
         # the default executor so the asyncio loop stays responsive while
         # caddy initialises ACME / loads cert files.
@@ -103,21 +111,42 @@ class CaddySupervisor:
             lambda: subprocess.Popen(
                 [self._binary, "run", "--config", str(self._caddyfile_path)],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=self._stderr_log,
             ),
         )
-        log.info("caddy started, pid=%s", self._proc.pid)
+        log.info("caddy started, pid=%s (stderr -> %s)", self._proc.pid, stderr_log_path)
 
     async def stop(self) -> None:
         if self._proc is None:
+            self._close_stderr_log()
             return
+        loop = asyncio.get_running_loop()
         if self._proc.poll() is None:
             self._proc.terminate()
             try:
-                await asyncio.get_running_loop().run_in_executor(
+                await loop.run_in_executor(
                     None, lambda: self._proc.wait(timeout=5),
                 )
             except subprocess.TimeoutExpired:
                 log.warning("caddy did not exit in 5s — killing")
                 self._proc.kill()
+                # Wait for the OS to actually reap the killed process; without
+                # this, the :443/:8443 socket can still be in TIME_WAIT/in-use
+                # when the next start() runs, producing EADDRINUSE.
+                try:
+                    await loop.run_in_executor(
+                        None, lambda: self._proc.wait(timeout=5),
+                    )
+                except subprocess.TimeoutExpired:
+                    log.error("caddy did not exit after kill — leaking pid=%s",
+                              self._proc.pid)
         self._proc = None
+        self._close_stderr_log()
+
+    def _close_stderr_log(self) -> None:
+        if self._stderr_log is not None:
+            try:
+                self._stderr_log.close()
+            except OSError:
+                pass
+            self._stderr_log = None

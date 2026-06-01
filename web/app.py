@@ -236,8 +236,10 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
         else:
             bridge_kwargs = {"model_id": (req.model or "")}
 
-        # Persist the user's message up front.
-        store.add_message(db, conv_id, "user", content, "[]")
+        # Persist the user's message up front so the UI can render it during
+        # streaming. ``user_mid`` lets us roll back the row if the turn
+        # produces nothing — see the finally block below.
+        user_mid = store.add_message(db, conv_id, "user", content, "[]")
 
         async def event_stream():
             collected: list[dict] = []
@@ -259,11 +261,19 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
                         collected.append(ev)
                     yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
             finally:
-                store.add_message(
-                    db, conv_id, "assistant", final_text.strip(),
-                    json.dumps(collected, ensure_ascii=False),
-                )
-                store.touch_conversation(db, conv_id)
+                produced_anything = bool(final_text.strip()) or bool(collected)
+                if produced_anything:
+                    store.add_message(
+                        db, conv_id, "assistant", final_text.strip(),
+                        json.dumps(collected, ensure_ascii=False),
+                    )
+                    store.touch_conversation(db, conv_id)
+                else:
+                    # Bridge crashed before emitting anything. Don't leave a
+                    # phantom turn (user row with no reply) — the conversation
+                    # on refresh would show a question that was never asked
+                    # of the agent.
+                    store.delete_message(db, user_mid)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 

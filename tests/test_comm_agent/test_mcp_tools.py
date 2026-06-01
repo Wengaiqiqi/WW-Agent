@@ -63,6 +63,67 @@ async def test_add_peer_writes_env_var_and_card_fetch(
 
 
 @pytest.mark.asyncio
+async def test_add_peer_rejects_non_http_scheme(reg) -> None:
+    """A url with no http(s) scheme is refused before any env var is written."""
+    specs = build_comm_tool_specs(reg=reg, my_peer_id="me", transport_factory=None)
+    by_name = {s.name: s for s in specs}
+    out = json.loads(await by_name["comm.add_peer"].handler({
+        "peer_id": "remote", "url": "ftp://r:21", "hmac_secret_value": "s",
+    }))
+    assert out["ok"] is False
+    assert "http" in out["error"]
+    assert reg.get("remote") is None  # nothing persisted
+
+
+@pytest.mark.asyncio
+async def test_add_peer_warns_on_plaintext_http(reg) -> None:
+    """http:// is allowed (localhost/VPN) but flagged: the grant is cleartext."""
+    async def fake_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "schemaVersion": "0.3", "name": "remote", "description": "",
+            "url": "http://127.0.0.1:8001", "version": "1.0", "skills": [],
+        })
+
+    specs = build_comm_tool_specs(
+        reg=reg, my_peer_id="me", transport_factory=lambda: httpx.MockTransport(fake_handler),
+    )
+    by_name = {s.name: s for s in specs}
+    out = json.loads(await by_name["comm.add_peer"].handler({
+        "peer_id": "local", "url": "http://127.0.0.1:8001", "hmac_secret_value": "s",
+    }))
+    assert out["ok"] is True
+    assert out["warnings"] and "cleartext" in out["warnings"][0]
+    assert reg.get("local") is not None  # http still registers
+
+
+@pytest.mark.asyncio
+async def test_add_peer_rejects_env_var_collision(reg) -> None:
+    """Two peer_ids that map to the same env var (e.g. 'peer-1' / 'peer.1')
+    must not silently overwrite each other's secret."""
+    async def card_ok(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "schemaVersion": "0.3", "name": "r", "description": "",
+            "url": "https://r:8443", "version": "1.0", "skills": [],
+        })
+    specs = build_comm_tool_specs(
+        reg=reg, my_peer_id="me",
+        transport_factory=lambda: httpx.MockTransport(card_ok),
+    )
+    by_name = {s.name: s for s in specs}
+    first = json.loads(await by_name["comm.add_peer"].handler({
+        "peer_id": "peer-1", "url": "https://r:8443", "hmac_secret_value": "A",
+    }))
+    assert first["ok"] is True
+    second = json.loads(await by_name["comm.add_peer"].handler({
+        "peer_id": "peer.1", "url": "https://r:8443", "hmac_secret_value": "B",
+    }))
+    assert second["ok"] is False
+    assert "collides" in second["error"]
+    # First peer's secret stays intact
+    assert os.environ[first["env_var_name"]] == "A"
+
+
+@pytest.mark.asyncio
 async def test_remove_peer(reg, monkeypatch) -> None:
     async def fake_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={

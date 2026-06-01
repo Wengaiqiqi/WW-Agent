@@ -8,6 +8,7 @@ import pytest
 from agents.shared.authz import (
     AuthzError,
     NonceCache,
+    SqliteNonceStore,
     sign_cross_machine_grant,
     verify_cross_machine_grant,
 )
@@ -109,3 +110,36 @@ def test_nonce_cache_expires_by_ttl() -> None:
     time.sleep(0.01)
     # After TTL passes, "a" is no longer a replay
     assert cache.check_and_remember("a") is True
+
+
+def test_sqlite_nonce_store_replay_blocked(tmp_path) -> None:
+    store = SqliteNonceStore(tmp_path / "n.db", maxlen=10, ttl_seconds=60)
+    assert store.check_and_remember("a") is True
+    assert store.check_and_remember("a") is False
+
+
+def test_sqlite_nonce_store_shared_across_instances(tmp_path) -> None:
+    """Two stores on the same db file simulate two uvicorn workers; one
+    worker's accept must block the other worker's replay."""
+    db = tmp_path / "n.db"
+    worker_1 = SqliteNonceStore(db, maxlen=10, ttl_seconds=60)
+    worker_2 = SqliteNonceStore(db, maxlen=10, ttl_seconds=60)
+    assert worker_1.check_and_remember("nonce-x") is True
+    assert worker_2.check_and_remember("nonce-x") is False
+
+
+def test_sqlite_nonce_store_expires_by_ttl(tmp_path) -> None:
+    store = SqliteNonceStore(tmp_path / "n.db", maxlen=10, ttl_seconds=0)
+    store.check_and_remember("a")
+    time.sleep(0.01)
+    assert store.check_and_remember("a") is True
+
+
+def test_sqlite_nonce_store_evicts_oldest_when_full(tmp_path) -> None:
+    store = SqliteNonceStore(tmp_path / "n.db", maxlen=2, ttl_seconds=60)
+    store.check_and_remember("a")
+    time.sleep(0.001)
+    store.check_and_remember("b")
+    time.sleep(0.001)
+    store.check_and_remember("c")  # evicts "a"
+    assert store.check_and_remember("a") is True

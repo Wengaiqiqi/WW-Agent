@@ -7,11 +7,36 @@ time before any socket is opened.
 """
 from __future__ import annotations
 
+import gzip
 import socket
 
 import pytest
 
-from tool.tool_web import SafeRedirectHandler, hostname_is_safe, web_extract
+from tool.tool_web import (
+    SafeRedirectHandler,
+    _MAX_BYTES,
+    _classify_fetch_failure,
+    _gunzip_capped,
+    hostname_is_safe,
+    web_extract,
+    web_search,
+)
+
+
+def test_gunzip_capped_truncates_decompression_bomb():
+    """A tiny gzip payload that expands far past the cap must be truncated,
+    not fully inflated into memory (SSRF/zip-bomb DoS guard)."""
+    # 50 MB of zeros compresses to a few KB but would blow past _MAX_BYTES.
+    bomb = gzip.compress(b"\x00" * (50 * 1024 * 1024))
+    assert len(bomb) < _MAX_BYTES  # the compressed payload itself is small
+    out = _gunzip_capped(bomb, _MAX_BYTES)
+    assert len(out) <= _MAX_BYTES
+
+
+def test_gunzip_capped_roundtrips_small_payload():
+    original = "héllo 世界".encode("utf-8") * 100
+    out = _gunzip_capped(gzip.compress(original), _MAX_BYTES)
+    assert out == original
 
 
 def test_blocks_loopback_ip_literal():
@@ -94,6 +119,121 @@ def test_web_extract_keeps_protocol_check():
 def test_web_extract_empty_url():
     result = web_extract("")
     assert result["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# Failure classification (retryable vs not) — keeps the LLM loop from probing
+# URL/provider variants after a wall it can't get past.
+# ---------------------------------------------------------------------------
+def test_classify_redirect_loop_not_retryable():
+    """Anti-scraping shows up as a 302 redirect loop. Re-fetching variants of
+    the same URL hits the same wall — must be flagged non-retryable."""
+    import urllib.error
+
+    exc = urllib.error.HTTPError(
+        "https://www.luogu.com.cn/problem/P1031", 302,
+        "The HTTP server returned a redirect error that would lead to an "
+        "infinite loop.\nThe last 30x error message was:\nMoved Temporarily",
+        {}, None,
+    )
+    retryable, advice = _classify_fetch_failure(exc)
+    assert retryable is False
+    assert advice  # non-empty guidance for the LLM
+
+
+def test_classify_404_not_retryable():
+    import urllib.error
+
+    exc = urllib.error.HTTPError("https://x/gone", 404, "Not Found", {}, None)
+    retryable, _ = _classify_fetch_failure(exc)
+    assert retryable is False
+
+
+def test_classify_429_is_retryable():
+    import urllib.error
+
+    exc = urllib.error.HTTPError("https://x", 429, "Too Many Requests", {}, None)
+    retryable, _ = _classify_fetch_failure(exc)
+    assert retryable is True
+
+
+def test_classify_5xx_is_retryable():
+    import urllib.error
+
+    exc = urllib.error.HTTPError("https://x", 503, "Service Unavailable", {}, None)
+    retryable, _ = _classify_fetch_failure(exc)
+    assert retryable is True
+
+
+def test_classify_winerror_10060_not_retryable():
+    """The real-world DDG failure: WinError 10060 connection timeout, wrapped
+    in a RuntimeError by _search_duckduckgo (so .code is gone — classify on the
+    message)."""
+    exc = RuntimeError(
+        "DuckDuckGo request failed: <urlopen error [WinError 10060] "
+        "connection attempt failed>"
+    )
+    retryable, _ = _classify_fetch_failure(exc)
+    assert retryable is False
+
+
+def test_classify_dns_failure_not_retryable():
+    exc = socket.gaierror(11001, "getaddrinfo failed")
+    retryable, _ = _classify_fetch_failure(exc)
+    assert retryable is False
+
+
+def test_classify_unknown_defaults_retryable():
+    """Don't suppress a retry we can't reason about — only known walls are
+    flagged non-retryable."""
+    retryable, _ = _classify_fetch_failure(ValueError("something odd"))
+    assert retryable is True
+
+
+def test_web_extract_fetch_failure_carries_classification(monkeypatch):
+    """End-to-end: a redirect-loop fetch surfaces retryable=False + advice."""
+    import urllib.error
+    import tool.tool_web as tw
+
+    def boom(*a, **kw):
+        raise urllib.error.HTTPError(
+            "https://blocked.example", 302,
+            "redirect error that would lead to an infinite loop", {}, None,
+        )
+
+    monkeypatch.setattr(tw, "_http_get", boom)
+    # bypass DNS / SSRF gate for a public-looking host
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: [(socket.AF_INET, None, None, "", ("8.8.8.8", 0))],
+    )
+    result = web_extract("https://blocked.example/page")
+    assert result["success"] is False
+    assert result["retryable"] is False
+    assert result["advice"]
+
+
+def test_web_search_failure_carries_classification(monkeypatch):
+    """End-to-end: a 10060 timeout from the DDG path surfaces retryable=False."""
+    import tool.tool_web as tw
+
+    def boom(*a, **kw):
+        raise RuntimeError(
+            "DuckDuckGo request failed: <urlopen error [WinError 10060]>"
+        )
+
+    monkeypatch.setattr(tw, "_search_duckduckgo", boom)
+    result = web_search("anything", provider="duckduckgo")
+    assert result["success"] is False
+    assert result["retryable"] is False
+    assert result["advice"]
+
+
+def test_web_extract_ssrf_refusal_not_retryable():
+    """A blocked private URL is non-retryable — variants won't unblock it."""
+    result = web_extract("http://127.0.0.1:11434/api/tags")
+    assert result["success"] is False
+    assert result["retryable"] is False
 
 
 def test_safe_redirect_handler_blocks_private_target(monkeypatch):

@@ -3,22 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Web UI</title>
-  <link rel="icon" href="data:," />
+  <title>W&W 多智能体</title>
+  <link rel="icon" href="/static/ww-agent-icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
 </head>
 <body>
+  <!-- Reusable logo symbol -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="ww-logo" viewBox="0 0 160 160">
+      <rect width="160" height="160" rx="40" fill="#18181B" />
+      <polyline points="38,56 57,110 80,68 103,110 122,56" fill="none"
+        stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="64" cy="122" r="5" fill="white" opacity="0.35" />
+      <circle cx="80" cy="122" r="5" fill="white" opacity="0.75" />
+      <circle cx="96" cy="122" r="5" fill="white" opacity="0.35" />
+    </symbol>
+  </svg>
+
   <!-- Auth view -->
   <div id="auth-view" class="auth-view hidden">
     <div class="auth-card">
-      <h1>Agent</h1>
+      <svg class="auth-logo" aria-hidden="true"><use href="#ww-logo" /></svg>
+      <h1>W&amp;W 多智能体</h1>
+      <p class="auth-sub">登录后开始与多智能体对话</p>
       <input id="auth-username" placeholder="用户名" autocomplete="username" />
-      <input id="auth-password" type="password" placeholder="密码(≥6位)" autocomplete="current-password" />
-      <input id="auth-signup-code" placeholder="注册码(注册时可能需要)" />
+      <input id="auth-password" type="password" placeholder="密码（≥6 位）" autocomplete="current-password" />
+      <input id="auth-signup-code" placeholder="注册码（注册时可能需要）" />
       <div class="auth-actions">
-        <button id="btn-login">登录</button>
+        <button id="btn-login" class="primary">登录</button>
         <button id="btn-register">注册</button>
       </div>
       <div id="auth-error" class="error"></div>
@@ -28,47 +42,95 @@
   <!-- App view -->
   <div id="app-view" class="app-view hidden">
     <aside class="sidebar">
-      <button id="btn-new-conv" class="new-conv">+ 新会话</button>
+      <div class="sidebar-top">
+        <div class="brand">
+          <svg class="brand-logo" aria-hidden="true"><use href="#ww-logo" /></svg>
+          <span class="brand-name">W&amp;W</span>
+        </div>
+        <button id="btn-collapse" class="icon-btn" title="收起侧栏" aria-label="收起侧栏">
+          <span class="i" data-icon="sidebar"></span>
+        </button>
+      </div>
+
+      <button id="btn-new-conv" class="new-conv">
+        <span class="i" data-icon="plus"></span>
+        开启新对话
+      </button>
+
       <ul id="conv-list" class="conv-list"></ul>
+
       <div class="sidebar-footer">
-        <span id="me-name"></span>
-        <button id="btn-logout">登出</button>
+        <details class="footer-menu">
+          <summary>
+            <span class="i" data-icon="more"></span>
+            <span class="footer-label">更多</span>
+          </summary>
+          <div class="popover">
+            <button id="btn-endpoints" class="popover-item">
+              <span class="i" data-icon="settings"></span>
+              系统设置
+            </button>
+            <button id="btn-logout" class="popover-item danger">
+              <span class="i" data-icon="logout"></span>
+              退出登录
+            </button>
+          </div>
+        </details>
+        <span id="me-name" hidden></span>
       </div>
     </aside>
+
     <main class="chat">
       <header class="chat-header">
-        <select id="model-select"></select>
-        <button id="btn-endpoints" class="icon-btn" title="自定义端点">⚙</button>
+        <button id="btn-expand" class="icon-btn expand" title="展开侧栏" aria-label="展开侧栏" hidden>
+          <span class="i" data-icon="sidebar"></span>
+        </button>
         <span id="conv-title"></span>
+        <div class="header-spacer"></div>
+        <label class="model-picker">
+          <span class="i" data-icon="cpu"></span>
+          <select id="model-select"></select>
+        </label>
       </header>
+
       <div id="messages" class="messages"></div>
-      <form id="composer" class="composer">
-        <textarea id="input" placeholder="发消息…(Enter 发送,Shift+Enter 换行)"></textarea>
-        <button type="submit" id="btn-send">发送</button>
-      </form>
+
+      <div class="composer-wrap">
+        <form id="composer" class="composer">
+          <textarea id="input" rows="1" placeholder="给 W&amp;W 发送消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button type="submit" id="btn-send" class="send-btn" aria-label="发送">
+            <span class="i" data-icon="arrow-up"></span>
+          </button>
+        </form>
+        <p class="composer-hint">W&amp;W 会路由到多个专家智能体，请核对关键结果。</p>
+      </div>
     </main>
+
     <div id="endpoint-modal" class="modal hidden">
       <div class="modal-card">
-        <button id="btn-close-endpoint" class="modal-close" aria-label="关闭">✕</button>
-        <h2>自定义端点</h2>
+        <button id="btn-close-endpoint" class="modal-close" aria-label="关闭">
+          <span class="i" data-icon="close"></span>
+        </button>
+        <h2>系统设置 · 自定义端点</h2>
         <ul id="endpoint-list" class="endpoint-list"></ul>
         <div class="endpoint-form">
-          <input id="ep-label" placeholder="名称(如 My LLM)" />
-          <input id="ep-base-url" placeholder="Base URL(如 https://api.openai.com/v1)" />
+          <input id="ep-label" placeholder="名称（如 My LLM）" />
+          <input id="ep-base-url" placeholder="Base URL（如 https://api.openai.com/v1）" />
           <input id="ep-api-key" type="password" placeholder="API Key" />
-          <input id="ep-model" placeholder="模型名(如 gpt-5.4)" />
+          <input id="ep-model" placeholder="模型名（如 gpt-5.4）" />
           <select id="ep-protocol">
             <option value="openai">openai</option>
             <option value="anthropic">anthropic</option>
           </select>
           <div id="ep-error" class="error"></div>
-          <button id="btn-save-endpoint">保存并使用</button>
+          <button id="btn-save-endpoint" class="primary">保存并使用</button>
         </div>
       </div>
     </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.11/purify.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="/static/app.js"></script>
 </body>

@@ -97,6 +97,7 @@ async def delegate_via_a2a(
     deltas and returns when ``done`` arrives (or raises on ``error``)."""
     text_buffer = ""
     final_text = ""
+    saw_done = False
     async for event in delegate_via_a2a_stream(
         capability=capability,
         arguments=arguments,
@@ -112,7 +113,16 @@ async def delegate_via_a2a(
             text_buffer += event.get("chunk", "")
         elif etype == "done":
             final_text = event.get("text", "") or text_buffer
+            saw_done = True
             break
         elif etype == "error":
             raise RuntimeError(event.get("message", "agent error"))
+    # If the stream ended without a `done` event the peer crashed mid-reply.
+    # Returning the partial text would let the orchestrator treat truncated
+    # output as authoritative; surface it as a failure instead.
+    if not saw_done:
+        raise RuntimeError(
+            f"{capability} stream ended without a done event "
+            f"(peer crashed mid-reply; got {len(text_buffer)} chars)"
+        )
     return (final_text or text_buffer).strip()

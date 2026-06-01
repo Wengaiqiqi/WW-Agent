@@ -11,9 +11,9 @@ The HTTP layer uses only the Python standard library; no extra dependencies.
 
 from __future__ import annotations
 
-import gzip
 import io
 import ipaddress
+import zlib
 import json
 import os
 import re
@@ -142,6 +142,43 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(SafeRedirectHandler())
 
 
+def _gunzip_capped(data: bytes, max_bytes: int) -> bytes:
+    """Decompress gzip *data*, stopping once *max_bytes* of output is produced.
+
+    A naive ``gzip.decompress`` on attacker-controlled input is a decompression
+    bomb: a few KB of compressed zeros expands to gigabytes and OOMs the agent
+    process. A prompt-injected ``web_extract`` of such a URL is a real vector,
+    so we inflate incrementally and truncate at the cap instead of materialising
+    the whole thing. On malformed gzip we return the raw bytes unchanged (same
+    fail-soft behaviour the previous ``except OSError: pass`` had).
+    """
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)  # 16 = gzip header
+    out = bytearray()
+    try:
+        # Feed in chunks so the decompressor's unconsumed_tail lets us stop
+        # early without inflating the remainder of a bomb.
+        view = memoryview(data)
+        step = 65536
+        for start in range(0, len(view), step):
+            chunk = decompressor.decompress(
+                bytes(view[start:start + step]), max_bytes - len(out)
+            )
+            out.extend(chunk)
+            if len(out) >= max_bytes:
+                return bytes(out[:max_bytes])
+        # Drain any buffered output the cap didn't already cover.
+        while True:
+            chunk = decompressor.decompress(b"", max_bytes - len(out))
+            if not chunk:
+                break
+            out.extend(chunk)
+            if len(out) >= max_bytes:
+                break
+    except zlib.error:
+        return data
+    return bytes(out[:max_bytes])
+
+
 def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIMEOUT) -> tuple[bytes, str]:
     """GET *url* and return ``(body_bytes, final_url)``. Raises on HTTP error.
 
@@ -162,10 +199,9 @@ def _http_get(url: str, headers: dict | None = None, timeout: int = _DEFAULT_TIM
         data = resp.read(_MAX_BYTES + 1)
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if encoding == "gzip":
-            try:
-                data = gzip.decompress(data)
-            except OSError:
-                pass
+            # Cap the *decompressed* size, not just the compressed read above —
+            # otherwise a gzip bomb expands unbounded in memory.
+            data = _gunzip_capped(data, _MAX_BYTES)
         return data, resp.geturl()
 
 
@@ -184,6 +220,95 @@ def _decode(body: bytes) -> str:
         return body.decode("utf-8")
     except UnicodeDecodeError:
         return body.decode("utf-8", errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# Failure classification
+# ---------------------------------------------------------------------------
+def _classify_fetch_failure(exc: Exception) -> tuple[bool, str]:
+    """Classify a fetch/search exception as ``(retryable, advice)``.
+
+    ``retryable=False`` is the contract that tells the calling LLM: re-issuing
+    the same kind of request — a URL variant, a different provider, an
+    immediate retry — will hit the *same* wall. The agent should fall back to
+    existing knowledge or a genuinely different source instead of probing
+    variants. This exists because, without the hint, an LLM planner reads a
+    bare "failed" and naturally improvises retries (observed: 8 wasted calls
+    against an anti-scraping site + a dead network path).
+
+    Only *known* dead-ends are flagged non-retryable. Anything we can't reason
+    about defaults to retryable so we never wrongly suppress a call that might
+    have worked.
+
+    ``_search_duckduckgo`` wraps its error in a ``RuntimeError`` (dropping the
+    original ``.code``), so we match on the message string as well as any
+    ``.code`` attribute on the exception or its ``__cause__``.
+    """
+    low = str(exc).lower()
+    code = getattr(exc, "code", None)
+    if code is None:
+        cause = getattr(exc, "__cause__", None)
+        code = getattr(cause, "code", None)
+
+    # Redirect loop — classic anti-scraping. urllib raises HTTPError(302, …)
+    # whose message contains "infinite loop"; SafeRedirectHandler refusals
+    # also surface here.
+    if "infinite loop" in low or "redirect" in low:
+        return False, (
+            "The site redirected in a loop — typically anti-scraping. Do not "
+            "retry URL variants; answer from existing knowledge or try a "
+            "different source."
+        )
+
+    if isinstance(code, int):
+        if code == 429:
+            return True, "Rate limited (HTTP 429). Back off, then retry later."
+        if code == 408 or 500 <= code < 600:
+            return True, (
+                f"Transient server error (HTTP {code}). A later retry may succeed."
+            )
+        if 400 <= code < 500:
+            return False, (
+                f"HTTP {code}: the resource is unavailable (not found / forbidden). "
+                "Retrying the same or a similar URL will not help."
+            )
+
+    # DNS resolution failure — the host doesn't resolve; variants won't either.
+    if (
+        isinstance(exc, socket.gaierror)
+        or "getaddrinfo" in low
+        or "name or service not known" in low
+        or "nodename nor servname" in low
+        or "11001" in low  # WSAHOST_NOT_FOUND
+    ):
+        return False, (
+            "The host could not be resolved (DNS failure). Retrying the same "
+            "host will not help; verify the URL or use a different source."
+        )
+
+    # Connection-layer failures: timeout / refused / unreachable / reset.
+    # Includes the Windows WSA error codes seen in the wild (10060 timeout,
+    # 10061 refused, 10065 unreachable, 10054 reset). Match on code text so
+    # non-English locale messages (e.g. cp936 Chinese) still classify.
+    if (
+        isinstance(exc, (socket.timeout, TimeoutError))
+        or "timed out" in low
+        or "timeout" in low
+        or "refused" in low
+        or "unreachable" in low
+        or "connection reset" in low
+        or "10060" in low
+        or "10061" in low
+        or "10065" in low
+        or "10054" in low
+    ):
+        return False, (
+            "Could not reach the host (connection timeout/refused). The network "
+            "path to this service is down; do not retry it — answer from "
+            "existing knowledge or use a different source."
+        )
+
+    return True, "Unclassified fetch error; a single retry may be worth trying."
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +405,14 @@ def web_search(query: str, limit: int = 5, provider: str = "auto") -> dict:
         else:
             return {"success": False, "error": f"Unknown provider: {provider!r}."}
     except Exception as exc:
-        return {"success": False, "error": str(exc), "provider": chosen}
+        retryable, advice = _classify_fetch_failure(exc)
+        return {
+            "success": False,
+            "error": str(exc),
+            "provider": chosen,
+            "retryable": retryable,
+            "advice": advice,
+        }
 
     return {"success": True, "provider": chosen, "query": query, "results": results}
 
@@ -371,11 +503,24 @@ def web_extract(url: str, max_chars: int = 8000) -> dict:
                 "out (development only)."
             ),
             "url": url,
+            # A blocked private address won't unblock on a URL variant.
+            "retryable": False,
+            "advice": (
+                "This address is blocked by policy (SSRF guard). Do not retry "
+                "internal/private URLs."
+            ),
         }
     try:
         body, final_url = _http_get(url)
     except Exception as exc:
-        return {"success": False, "error": f"Fetch failed: {exc}", "url": url}
+        retryable, advice = _classify_fetch_failure(exc)
+        return {
+            "success": False,
+            "error": f"Fetch failed: {exc}",
+            "url": url,
+            "retryable": retryable,
+            "advice": advice,
+        }
 
     html = _decode(body)
     parser = _TextExtractor()

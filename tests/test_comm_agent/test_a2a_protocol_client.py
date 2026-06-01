@@ -69,6 +69,40 @@ async def test_call_retries_5xx(peer: Peer) -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_retry_uses_fresh_nonce(peer: Peer) -> None:
+    """Each retry must carry a NEW nonce.
+
+    The verifier burns the nonce in its replay cache BEFORE running the
+    dispatcher, so a peer that 5xx's after authenticating has already consumed
+    that nonce. Reusing the same grant on retry would be rejected as a replay
+    (401), silently defeating the 5xx retry. Regression test for that bug.
+    """
+    import jwt as pyjwt
+
+    nonces: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        grant = body["params"]["_meta"]["authz_grant"]
+        claims = pyjwt.decode(grant, "s", algorithms=["HS256"])
+        nonces.append(claims["nonce"])
+        if len(nonces) < 2:
+            return httpx.Response(503, text="down after auth")
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    client = A2AClient(
+        peer, secret="s", my_peer_id="me", transport=transport, retry_backoff=(0.0,),
+    )
+    result = await client.call(method="ping", params={})
+    assert result == {"ok": True}
+    assert len(nonces) == 2
+    assert nonces[0] != nonces[1]  # a fresh nonce was minted for the retry
+
+
+@pytest.mark.asyncio
 async def test_call_4xx_no_retry(peer: Peer) -> None:
     attempts = {"n": 0}
 
@@ -81,6 +115,52 @@ async def test_call_4xx_no_retry(peer: Peer) -> None:
     with pytest.raises(A2AClientError, match="auth refused"):
         await client.call(method="ping", params={})
     assert attempts["n"] == 1  # NOT retried
+
+
+@pytest.mark.asyncio
+async def test_call_timeout_does_not_retry(peer: Peer) -> None:
+    """A read timeout means the peer may have already executed the side effect.
+
+    Retrying with a fresh grant would double-execute (e.g. send an email
+    twice). The client must fail closed instead.
+    """
+    attempts = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        raise httpx.ReadTimeout("simulated", request=request)
+
+    transport = httpx.MockTransport(handler)
+    client = A2AClient(
+        peer, secret="s", my_peer_id="me", transport=transport,
+        retry_backoff=(0.0, 0.0, 0.0),
+    )
+    with pytest.raises(A2AClientError, match="reply lost mid-flight"):
+        await client.call(method="ping", params={})
+    assert attempts["n"] == 1  # NOT retried
+
+
+@pytest.mark.asyncio
+async def test_call_connect_error_does_retry(peer: Peer) -> None:
+    """ConnectError = pre-flight failure → safe to retry."""
+    attempts = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    client = A2AClient(
+        peer, secret="s", my_peer_id="me", transport=transport,
+        retry_backoff=(0.0, 0.0, 0.0),
+    )
+    result = await client.call(method="ping", params={})
+    assert result == {"ok": True}
+    assert attempts["n"] == 3
 
 
 @pytest.mark.asyncio

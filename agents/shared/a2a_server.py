@@ -39,12 +39,43 @@ def _pick_free_port() -> int:
 
 
 async def _sse_generator(handler, params: dict) -> AsyncIterator[str]:
-    """Yield SSE-formatted lines from an async event iterator."""
-    async for event in handler(params):
-        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    """Yield SSE-formatted lines from an async event iterator.
+
+    If the handler raises, surface the failure as a final ``error`` event
+    instead of letting StreamingResponse silently truncate. Callers parsing
+    SSE expect a ``done`` (or explicit ``error``); a bare TCP close looks
+    like an empty success and gets cached as authoritative.
+    """
+    try:
+        async for event in handler(params):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    except asyncio.CancelledError:
+        # Client went away — don't try to write to a closed socket.
+        raise
+    except Exception as exc:
+        err = {"type": "error", "message": f"stream handler crashed: {exc!r}"}
+        yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
 
 
 class A2AServer:
+    """Loopback-only A2A endpoint for an in-process specialist (tool/skill agent).
+
+    SECURITY MODEL — read before adding routes:
+
+    This server performs NO transport-level authentication. It binds to
+    127.0.0.1 only, and the actual authorization is enforced *inside the
+    handlers*: ``tool_executor.execute_tool`` and ``handle_tool_task_stream``
+    verify the orchestrator-minted JWT grant from ``params._meta.authz_grant``
+    before doing anything. The bind address keeps remote callers out; the JWT
+    check keeps a co-located malicious process from invoking tools without a
+    grant.
+
+    Any NEW endpoint/handler added here MUST verify the authz grant the same
+    way — do not assume "it's localhost so it's safe". A handler that skips the
+    grant check is an unauthenticated tool-execution surface for any local
+    process.
+    """
+
     def __init__(
         self, *,
         handler: A2AHandler,

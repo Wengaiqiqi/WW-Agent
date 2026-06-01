@@ -226,6 +226,12 @@ operations and web fetches and report concrete findings.
 {patterns_block}
 
 ## Termination rules
+- When a `web_search`/`web_extract` result has `"retryable": false`, the
+  failure is a hard wall (anti-scraping redirect loop, 404, DNS/connection
+  failure). Do NOT retry URL variants or switch provider — read its
+  `"advice"`, then answer from your own knowledge if the topic is
+  well-known, or pivot to a genuinely different source. Each non-retryable
+  failure burns ~25s on dead network paths; don't stack them.
 - Same URL fails twice (403, redirect loop, anti-bot HTML, empty text) →
   STOP retrying that URL. Pivot to `web_search` for the topic, or answer
   from your own knowledge if the topic is well-known. Don't repeatedly

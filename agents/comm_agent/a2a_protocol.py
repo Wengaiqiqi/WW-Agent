@@ -95,11 +95,17 @@ class A2AClient:
 
     async def call(self, *, method: str, params: dict, skill: str | None = None) -> dict:
         """Sync JSON-RPC call. ``skill`` defaults to ``method`` for grant scoping."""
-        body, grant = self._build_envelope(method, params, skill or method)
         last_exc: Exception | None = None
         for attempt, delay in enumerate((0.0, *self._retry_backoff)):
             if delay > 0:
                 await asyncio.sleep(delay)
+            # Mint a FRESH grant (new nonce + exp) per attempt. The verifier
+            # burns the nonce in its replay cache BEFORE running the dispatcher,
+            # so a peer that 5xx's *after* authenticating has already consumed
+            # this nonce — reusing the same grant on retry would be rejected as
+            # a replay (401), silently defeating the 5xx retry. A fresh nonce
+            # also dodges a stale ``exp`` on the later, backed-off attempts.
+            body, grant = self._build_envelope(method, params, skill or method)
             try:
                 async with self._client() as c:
                     r = await c.post(
@@ -107,9 +113,20 @@ class A2AClient:
                         json=body,
                         headers={"Authorization": f"A2A-HMAC {grant}"},
                     )
-            except (httpx.ConnectError, httpx.ReadError) as exc:
+            except httpx.ConnectError as exc:
+                # Pre-flight failure: peer never received the request, so
+                # retrying with a fresh grant is safe.
                 last_exc = exc
                 continue
+            except (httpx.TimeoutException, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                # The request was sent but we never read a complete response.
+                # The peer may have already processed it (delivered an email,
+                # spawned a tool task, etc.). Retrying with a new nonce would
+                # double-execute. Fail closed; the caller can decide whether
+                # to re-issue.
+                raise A2AClientError(
+                    f"peer reply lost mid-flight (action may have executed): {exc!r}"
+                ) from exc
             if 500 <= r.status_code < 600:
                 last_exc = A2AClientError(f"5xx from peer: {r.status_code} {r.text}")
                 continue
@@ -171,7 +188,7 @@ class A2AClient:
                             "type": "error",
                             "message": f"stream truncated after {events_seen} events",
                         }
-        except httpx.TransportError as exc:
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
             # TransportError is the common base of ConnectError, ReadError AND
             # RemoteProtocolError (incomplete chunked read when the peer drops
             # mid-stream). Spec §5: never crash the calling tool — surface a
@@ -230,7 +247,23 @@ def build_app(
     stream_dispatcher: StreamDispatcher,
     nonce_cache: NonceCache | None = None,
 ) -> FastAPI:
-    """Build the public-facing FastAPI app for our A2A endpoints."""
+    """Build the public-facing FastAPI app for our A2A endpoints.
+
+    INBOUND AUTH MODEL — important when exposing this to more than one peer:
+
+    ``hmac_secret`` is a SINGLE shared secret used to verify every inbound
+    grant. The grant's ``peer_id`` is self-asserted by the caller and signed
+    with this same secret, so verification proves "the caller knows our inbound
+    secret", NOT "the caller is specifically peer X". The ``target_peer_id``
+    anti-forward check only proves the grant was minted for *us*.
+
+    Consequence: if you share ``hmac_secret`` with multiple inbound peers, any
+    of them can impersonate another (sign with ``peer_id`` = someone else), and
+    a dispatcher-level ``allowed_peer`` filter buys nothing. For per-peer
+    isolation, provision a DISTINCT inbound secret per relationship (run one
+    app/secret per peer) rather than a shared one. The 1:1 case
+    (agent-last ↔ a single Hermes/OpenClaw) is safe with one secret.
+    """
     app = FastAPI()
     cache = nonce_cache or NonceCache()
 

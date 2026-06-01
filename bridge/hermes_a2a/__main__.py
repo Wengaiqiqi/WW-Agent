@@ -57,12 +57,20 @@ def build():
         public_url=public_url,
         version="1.0.0",
     )
+    # Cross-process replay defense for uvicorn --workers N.
+    from agents.shared.authz import SqliteNonceStore
+    from agent_paths import runtime_dir as _runtime_dir
+    nonce_db = _runtime_dir() / "hermes-bridge-nonces.db"
+    nonce_db.parent.mkdir(parents=True, exist_ok=True)
+    nonce_store = SqliteNonceStore(nonce_db)
+
     return build_app(
         self_card=card,
         hmac_secret=hmac_secret,
         my_peer_id=my_peer_id,
         skill_dispatcher=skill_dispatcher,
         stream_dispatcher=stream_dispatcher,
+        nonce_cache=nonce_store,
     )
 
 
