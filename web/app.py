@@ -3,6 +3,7 @@
 and a fake bridge without spawning the orchestrator."""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -64,6 +65,9 @@ def create_app(
     store.init_db(db)
     jwt_secret = secret or config.auth_secret()
     secure = config.cookie_secure() if cookie_secure is None else cookie_secure
+    # Only the real bridge spawns specialists — tests inject a fake bridge_fn
+    # and must never trigger a real spawn (incl. the startup catalog warm-up).
+    use_real_bridge = bridge_fn is None
     if bridge_fn is None:
         from web.bridge import run_turn_streaming as bridge_fn  # type: ignore
     limiter = RateLimiter(
@@ -111,6 +115,17 @@ def create_app(
     _mount_endpoint_routes(app, db, current_user)
     _mount_chat_route(app, db, current_user, _owned_conversation, limiter, bridge_fn)
     _mount_static(app)
+
+    if use_real_bridge:
+        @app.on_event("startup")
+        async def _warm_specialists() -> None:
+            # Warm the capability catalog in the background so the first user
+            # turn doesn't wait ~10s for specialist spawn. Held on app.state so
+            # the task isn't garbage-collected before it finishes.
+            from web.bridge import warm_capability_catalog
+
+            app.state._warm_task = asyncio.create_task(warm_capability_catalog())
+
     return app
 
 

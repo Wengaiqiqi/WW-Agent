@@ -25,6 +25,96 @@ from web import config
 log = logging.getLogger(__name__)
 
 
+# How often to emit an SSE keepalive while waiting for the next real event.
+# Must be comfortably below typical proxy/browser idle timeouts (~30-60s).
+_HEARTBEAT_SECONDS = 10.0
+
+
+# Process-wide cache of the STATIC capability catalog (capability names + tool
+# schemas). The planner only needs these to decide routing — it never needs a
+# live specialist. They're fixed by the agent cards on disk, so we snapshot
+# them once (spawn → list → shut down) and reuse for every turn. This is what
+# lets a prose turn skip the ~7s specialist bootstrap entirely; specialists
+# are spawned lazily only when the planner actually picks a capability.
+_CATALOG: dict[str, Any] | None = None
+
+
+class _CatalogRouter:
+    """Minimal duck-type of CapabilityRouter exposing just what
+    ``gateway.runner._build_planner`` reads — so we can build the planner from
+    the cached catalog without a live router / spawned specialists."""
+
+    def __init__(self, capabilities: list[str], tool_schemas: dict[str, dict]):
+        self._caps = capabilities
+        self._schemas = tool_schemas
+
+    def all_capabilities(self) -> list[str]:
+        return self._caps
+
+    def describe_tools(self) -> dict[str, dict]:
+        return self._schemas
+
+
+async def _capability_catalog() -> tuple[list[str], dict[str, dict]]:
+    """Return the cached ``(capabilities, tool_schemas)`` catalog.
+
+    On the first call, spawn the specialists once in an ISOLATED runtime dir,
+    snapshot the router state, then tear them down. Subsequent calls hit the
+    cache. Turns are serialised on ``_CONCURRENCY_GUARD`` so there's no race on
+    the module global.
+    """
+    global _CATALOG
+    if _CATALOG is not None:
+        return _CATALOG["capabilities"], _CATALOG["tool_schemas"]
+
+    import shutil
+    import tempfile
+
+    from orchestrator.main import _bootstrap
+    from orchestrator.mcp_host import MCPHost
+    from orchestrator.router import CapabilityRouter
+
+    snap_dir = Path(tempfile.mkdtemp(prefix="ww-catalog-"))
+    prev_runtime = os.environ.get("LANGCHAIN_AGENT_RUNTIME_DIR")
+    os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = str(snap_dir)
+    host = MCPHost(hmac_key=secrets.token_urlsafe(32))
+    router = CapabilityRouter()
+    try:
+        await _bootstrap(host, router)
+        _CATALOG = {
+            "capabilities": list(router.all_capabilities()),
+            "tool_schemas": dict(router.describe_tools()),
+        }
+    finally:
+        await host.shutdown_all()
+        if prev_runtime is None:
+            os.environ.pop("LANGCHAIN_AGENT_RUNTIME_DIR", None)
+        else:
+            os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = prev_runtime
+        shutil.rmtree(snap_dir, ignore_errors=True)
+    return _CATALOG["capabilities"], _CATALOG["tool_schemas"]
+
+
+async def warm_capability_catalog() -> None:
+    """Pre-build the capability catalog at startup so the FIRST user turn
+    doesn't pay the one-time specialist spawn (~10s before first token).
+
+    Runs the spawn OFF the serving loop (its own loop in a worker thread) and
+    UNDER the turn guard, so it neither freezes the event loop nor races a
+    concurrent turn's env/runtime mutations. Best-effort: on failure the first
+    turn just builds the catalog lazily."""
+    try:
+        async with _CONCURRENCY_GUARD:
+            if _CATALOG is not None:
+                return
+            await asyncio.to_thread(lambda: asyncio.run(_capability_catalog()))
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "web: catalog warm-up failed; first turn will build it lazily",
+            exc_info=True,
+        )
+
+
 def _user_workspace(user_id: str) -> Path:
     from agent_paths import config_dir
 
@@ -200,6 +290,14 @@ async def _stream_off_loop(
     queue: asyncio.Queue = asyncio.Queue()
     done = object()
 
+    def _emit(item: Any) -> None:
+        """Push an item to the serving loop's queue, tolerating a loop that has
+        already been torn down (full server shutdown) — nobody to receive."""
+        try:
+            serving_loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:
+            pass
+
     def _worker() -> None:
         async def _produce() -> None:
             try:
@@ -213,25 +311,46 @@ async def _stream_off_loop(
                     api_key=api_key,
                     protocol=protocol,
                 ):
-                    serving_loop.call_soon_threadsafe(queue.put_nowait, ev)
+                    _emit(ev)
+            except asyncio.CancelledError:
+                # Turn aborted mid-stream — the browser disconnected (closed
+                # the tab, switched conversations) and Starlette cancelled the
+                # SSE response. Expected, not a crash: log quietly and let the
+                # finally signal done so the consuming side unblocks. The
+                # ``async for`` already ran ``_run_streaming_locked``'s finally
+                # (host.shutdown_all, env restore) during unwinding.
+                log.info("web: turn cancelled mid-stream (client disconnected)")
             except Exception as exc:  # noqa: BLE001  — never drop the stream
                 log.exception("web: turn worker crashed")
-                serving_loop.call_soon_threadsafe(
-                    queue.put_nowait, {"type": "error", "message": str(exc)}
-                )
-                serving_loop.call_soon_threadsafe(
-                    queue.put_nowait, {"type": "done", "text": ""}
-                )
+                _emit({"type": "error", "message": str(exc)})
+                _emit({"type": "done", "text": ""})
             finally:
-                serving_loop.call_soon_threadsafe(queue.put_nowait, done)
+                _emit(done)
 
-        asyncio.run(_produce())
+        # CancelledError is a BaseException, not Exception — if it ever escapes
+        # _produce (e.g. raised during loop shutdown), keep it from crashing the
+        # worker thread with a noisy traceback.
+        try:
+            asyncio.run(_produce())
+        except asyncio.CancelledError:
+            pass
 
     thread = threading.Thread(target=_worker, name="web-turn", daemon=True)
     thread.start()
+    # Open the stream with an immediate keepalive so the connection carries
+    # bytes from the start. The first real token can be 10s+ away (specialist
+    # spawn on the first turn, or a slow LLM behind a proxy), and an idle SSE
+    # connection through a system HTTP proxy that doesn't bypass localhost gets
+    # dropped — which surfaces server-side as "client disconnected" and the
+    # user sees no reply. Keepalives are ignored by the client's SSE parser.
+    yield {"type": "keepalive"}
     try:
         while True:
-            ev = await queue.get()
+            try:
+                ev = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                yield {"type": "keepalive"}
+                continue
             if ev is done:
                 break
             yield ev
@@ -246,8 +365,7 @@ async def _plan_and_dispatch(
     planner: Any,
     *,
     prompt: str,
-    host: Any,
-    router: Any,
+    ensure_specialists: Any,
     hmac_key: str,
     trace_id: str,
     history_context: str,
@@ -256,9 +374,15 @@ async def _plan_and_dispatch(
 
     If the planner answers in prose, its tokens ARE the reply and stream live
     token-by-token (the model's ``<think>`` scratch work is hidden by
-    ``astream_plan``, same as the terminal). If it picks a capability, hand off
-    to the specialist dispatch, which streams the specialist's ``thinking`` /
-    ``tool_call`` / ``tool_result`` events plus the final text."""
+    ``astream_plan``, same as the terminal). No specialist is spawned in this
+    path. If it picks a capability, ``ensure_specialists()`` is awaited to
+    lazily bootstrap the MCP host + router, then dispatch streams the
+    specialist's ``thinking`` / ``tool_call`` / ``tool_result`` events plus the
+    final text.
+
+    ``ensure_specialists`` is an async callable returning ``(host, router)``;
+    it is invoked ONLY when a capability is chosen, which is the whole point of
+    lazy spawn — a prose turn never touches it."""
     state = {"user_input": prompt, "trace_id": trace_id}
     astream = getattr(planner, "astream_plan", None)
 
@@ -281,7 +405,7 @@ async def _plan_and_dispatch(
 
     if not capability:
         # Prose answer. A streaming planner already emitted the tokens; a
-        # non-streaming one hands over the whole thing here.
+        # non-streaming one hands over the whole thing here. No spawn.
         if astream is None:
             prose = (decision.get("response") or "").strip()
             if prose:
@@ -289,8 +413,9 @@ async def _plan_and_dispatch(
         yield {"type": "done", "text": prose.strip()}
         return
 
-    # Capability -> specialist dispatch (A2A / MCP), which streams its own
-    # thinking / tool_call / tool_result / text / done events.
+    # Capability -> spawn the specialists now (lazy), then dispatch (A2A / MCP),
+    # which streams its own thinking / tool_call / tool_result / text / done.
+    host, router = await ensure_specialists()
     async for ev in dispatch_decision_stream(
         decision=decision,
         prompt=prompt,
@@ -311,30 +436,44 @@ async def _run_streaming_locked(
     import shutil
 
     from gateway import session_store
-    from orchestrator.main import _bootstrap
-    from orchestrator.mcp_host import MCPHost
-    from orchestrator.router import CapabilityRouter
 
     prev_runtime = os.environ.get("LANGCHAIN_AGENT_RUNTIME_DIR")
     web_runtime = Path(".agent") / "runtime" / f"web-{os.getpid()}"
 
     hmac_key = secrets.token_urlsafe(32)
-    host = MCPHost(hmac_key=hmac_key)
-    router = CapabilityRouter()
+    # Lazily-created MCP host/router — only a capability turn pays the spawn.
+    host: Any = None
+    router: Any = None
+
+    async def ensure_specialists() -> tuple[Any, Any]:
+        """Spawn specialists on first capability use; memoised for the turn."""
+        nonlocal host, router
+        from orchestrator.main import _bootstrap
+        from orchestrator.mcp_host import MCPHost
+        from orchestrator.router import CapabilityRouter
+
+        if host is None:
+            host = MCPHost(hmac_key=hmac_key)
+            router = CapabilityRouter()
+            await _bootstrap(host, router)
+        return host, router
 
     final_text = ""
     with _web_turn_env(user_id=user_id, model_id=model_id, base_url=base_url, api_key=api_key, protocol=protocol):
         os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = str(web_runtime)
         try:
             history_context, full_context = _build_planner_context(session_key)
-            await _bootstrap(host, router)
-            planner = _build_planner(router, context_text=full_context)
+            # Build the planner from the cached static catalog — no spawn here.
+            capabilities, tool_schemas = await _capability_catalog()
+            planner = _build_planner(
+                _CatalogRouter(capabilities, tool_schemas),
+                context_text=full_context,
+            )
             try:
                 async for ev in _plan_and_dispatch(
                     planner,
                     prompt=prompt,
-                    host=host,
-                    router=router,
+                    ensure_specialists=ensure_specialists,
                     hmac_key=hmac_key,
                     trace_id=trace_id,
                     history_context=history_context,
@@ -350,7 +489,9 @@ async def _run_streaming_locked(
                 yield {"type": "done", "text": ""}
                 return
         finally:
-            await host.shutdown_all()
+            # Only shut down if a capability turn actually spawned the host.
+            if host is not None:
+                await host.shutdown_all()
             if session_key and final_text:
                 session_store.append(session_key, prompt, final_text)
             if prev_runtime is None:

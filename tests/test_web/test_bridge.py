@@ -96,9 +96,15 @@ def test_dispatch_branch_b_error_event_emitted():
     assert any(e["type"] == "error" and "kaboom" in e["message"] for e in events)
 
 
+async def _ensure_must_not_be_called():
+    """ensure_specialists stand-in that fails the test if a prose turn tries
+    to spawn specialists."""
+    raise AssertionError("prose turn must not spawn specialists")
+
+
 def test_plan_and_dispatch_streams_prose_token_by_token():
     """A direct (prose) answer must stream token-by-token, not arrive as one
-    blob — same as the CLI."""
+    blob — same as the CLI. It must also NOT spawn any specialist."""
 
     class FakePlanner:
         async def astream_plan(self, state):
@@ -107,7 +113,7 @@ def test_plan_and_dispatch_streams_prose_token_by_token():
             yield {"type": "decision", "decision": {"capability": "", "response": "你好"}}
 
     events = _collect(bridge_mod._plan_and_dispatch(
-        FakePlanner(), prompt="hi", host=None, router=None,
+        FakePlanner(), prompt="hi", ensure_specialists=_ensure_must_not_be_called,
         hmac_key="k", trace_id="t", history_context="",
     ))
     assert events == [
@@ -118,19 +124,55 @@ def test_plan_and_dispatch_streams_prose_token_by_token():
 
 
 def test_plan_and_dispatch_non_streaming_planner_prose():
-    """A non-streaming planner (mock/stub) still yields the prose + done."""
+    """A non-streaming planner (mock/stub) still yields the prose + done, and
+    spawns nothing."""
 
     def stub(state):
         return {"capability": "", "response": "  完整答案  "}
 
     events = _collect(bridge_mod._plan_and_dispatch(
-        stub, prompt="hi", host=None, router=None,
+        stub, prompt="hi", ensure_specialists=_ensure_must_not_be_called,
         hmac_key="k", trace_id="t", history_context="",
     ))
     assert events == [
         {"type": "text", "chunk": "完整答案"},
         {"type": "done", "text": "完整答案"},
     ]
+
+
+def test_plan_and_dispatch_capability_calls_ensure_specialists():
+    """A capability decision must lazily ensure specialists, then dispatch."""
+    ensured = {"n": 0}
+
+    async def ensure():
+        ensured["n"] += 1
+        return ("HOST", "ROUTER")
+
+    captured = {}
+
+    async def fake_dispatch(*, decision, prompt, host, router, hmac_key,
+                            trace_id, history_context, delegate=None):
+        captured["host"] = host
+        captured["router"] = router
+        yield {"type": "done", "text": "ok"}
+
+    import web.bridge as wb
+    orig = wb.dispatch_decision_stream
+    wb.dispatch_decision_stream = fake_dispatch
+    try:
+        def stub(state):
+            return {"capability": "tool.task", "arguments": {"task": "x"}}
+
+        events = _collect(bridge_mod._plan_and_dispatch(
+            stub, prompt="do", ensure_specialists=ensure,
+            hmac_key="k", trace_id="t", history_context="",
+        ))
+    finally:
+        wb.dispatch_decision_stream = orig
+
+    assert ensured["n"] == 1
+    assert captured["host"] == "HOST" and captured["router"] == "ROUTER"
+    assert events[-1] == {"type": "done", "text": "ok"}
 
 
 def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
@@ -180,6 +222,166 @@ def test_run_turn_streaming_keeps_event_loop_responsive(monkeypatch):
     # On-loop: the 0.3s block stops the ticker (~0 ticks). Off-loop: it keeps
     # ticking (~30 in 0.3s).
     assert ticks > 5, f"event loop was blocked during the turn (ticks={ticks})"
+
+
+def test_prose_turn_spawns_no_specialists(tmp_config_dir, monkeypatch):
+    """The core speedup: a prose turn must build the planner from the cached
+    catalog and NEVER bootstrap (spawn) specialist subprocesses."""
+    import orchestrator.main as om
+    import web.bridge as wb
+
+    bootstrap_calls = []
+
+    async def spy_bootstrap(host, router):
+        bootstrap_calls.append(1)
+
+    async def fake_catalog():
+        return (["tool.task"], {"tool.task": {"description": "d", "inputSchema": {}}})
+
+    def fake_planner(state):
+        return {"capability": "", "response": "hello there"}
+
+    monkeypatch.setattr(om, "_bootstrap", spy_bootstrap)
+    monkeypatch.setattr(wb, "_capability_catalog", fake_catalog)
+    monkeypatch.setattr(wb, "_build_planner", lambda *a, **k: fake_planner)
+    monkeypatch.setattr(wb, "_build_planner_context", lambda sk: ("", ""))
+
+    events = _collect(wb._run_streaming_locked(
+        "hi", trace_id="t", session_key="", user_id="u", model_id="mock",
+    ))
+
+    assert any(e["type"] == "text" for e in events)
+    assert events[-1]["type"] == "done"
+    assert bootstrap_calls == [], "prose turn must not spawn specialists"
+
+
+def test_capability_turn_bootstraps_once(tmp_config_dir, monkeypatch):
+    """A capability turn lazily bootstraps exactly once, then dispatches."""
+    import orchestrator.main as om
+    import orchestrator.mcp_host as mh
+    import web.bridge as wb
+
+    bootstrap_calls = []
+
+    async def spy_bootstrap(host, router):
+        bootstrap_calls.append(1)
+
+    class FakeHost:
+        def __init__(self, *a, **k):
+            pass
+
+        async def shutdown_all(self):
+            pass
+
+    async def fake_catalog():
+        return (["tool.task"], {"tool.task": {"description": "d", "inputSchema": {}}})
+
+    def fake_planner(state):
+        return {"capability": "tool.task", "arguments": {"task": "x"}}
+
+    async def fake_dispatch(*, decision, prompt, host, router, hmac_key,
+                            trace_id, history_context, delegate=None):
+        yield {"type": "text", "chunk": "ans"}
+        yield {"type": "done", "text": "ans"}
+
+    monkeypatch.setattr(om, "_bootstrap", spy_bootstrap)
+    monkeypatch.setattr(mh, "MCPHost", FakeHost)
+    monkeypatch.setattr(wb, "_capability_catalog", fake_catalog)
+    monkeypatch.setattr(wb, "_build_planner", lambda *a, **k: fake_planner)
+    monkeypatch.setattr(wb, "_build_planner_context", lambda sk: ("", ""))
+    monkeypatch.setattr(wb, "dispatch_decision_stream", fake_dispatch)
+
+    events = _collect(wb._run_streaming_locked(
+        "do it", trace_id="t", session_key="", user_id="u", model_id="mock",
+    ))
+
+    assert bootstrap_calls == [1], "capability turn must bootstrap exactly once"
+    assert events[-1] == {"type": "done", "text": "ans"}
+
+
+def test_worker_swallows_turn_cancellation(monkeypatch):
+    """When a turn is cancelled mid-stream (client disconnect), the worker
+    thread must terminate cleanly — not crash with an unhandled CancelledError
+    traceback. Regression for the BaseException-vs-Exception gap in _worker."""
+    import threading as _threading
+
+    import web.bridge as wb
+
+    async def fake_locked(prompt, **kw):
+        yield {"type": "text", "chunk": "partial"}
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(wb, "_run_streaming_locked", fake_locked)
+
+    crashes = []
+    orig_hook = _threading.excepthook
+    _threading.excepthook = lambda args: crashes.append(args)
+    try:
+        events = _collect(wb.run_turn_streaming(
+            "hi", session_key="", user_id="", model_id="",
+        ))
+    finally:
+        _threading.excepthook = orig_hook
+
+    # Partial output was delivered and the stream terminated cleanly...
+    assert {"type": "text", "chunk": "partial"} in events
+    # ...and the worker thread did NOT crash.
+    assert crashes == [], f"worker thread crashed on cancellation: {crashes}"
+
+
+def test_stream_emits_keepalive_while_waiting(monkeypatch):
+    """While the worker is busy (spawn / slow LLM) and no real event has
+    arrived, the stream must emit keepalives so a proxy/browser doesn't drop
+    the idle connection."""
+    import web.bridge as wb
+
+    monkeypatch.setattr(wb, "_HEARTBEAT_SECONDS", 0.05)
+
+    async def slow_locked(prompt, **kw):
+        await asyncio.sleep(0.18)  # > heartbeat interval → forces timeouts
+        yield {"type": "text", "chunk": "hi"}
+        yield {"type": "done", "text": "hi"}
+
+    monkeypatch.setattr(wb, "_run_streaming_locked", slow_locked)
+
+    events = _collect(wb.run_turn_streaming(
+        "hi", session_key="", user_id="", model_id="",
+    ))
+
+    assert any(e.get("type") == "keepalive" for e in events)
+    assert {"type": "text", "chunk": "hi"} in events
+    assert events[-1] == {"type": "done", "text": "hi"}
+
+
+def test_warm_capability_catalog_builds_once(monkeypatch):
+    """Startup warm-up builds the catalog exactly once."""
+    import web.bridge as wb
+
+    calls = []
+
+    async def fake_cat():
+        calls.append(1)
+        return (["x"], {})
+
+    monkeypatch.setattr(wb, "_capability_catalog", fake_cat)
+    monkeypatch.setattr(wb, "_CATALOG", None)
+
+    asyncio.run(wb.warm_capability_catalog())
+    assert calls == [1]
+
+
+def test_warm_capability_catalog_swallows_errors(monkeypatch):
+    """A warm-up failure must NOT crash startup — the first turn builds lazily."""
+    import web.bridge as wb
+
+    async def boom():
+        raise RuntimeError("spawn fail")
+
+    monkeypatch.setattr(wb, "_capability_catalog", boom)
+    monkeypatch.setattr(wb, "_CATALOG", None)
+
+    # Must not raise.
+    asyncio.run(wb.warm_capability_catalog())
 
 
 def test_web_turn_env_custom_endpoint_sets_and_restores(tmp_config_dir, monkeypatch):
