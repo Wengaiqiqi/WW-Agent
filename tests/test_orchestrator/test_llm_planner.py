@@ -218,6 +218,27 @@ async def test_astream_plan_handles_two_consecutive_think_blocks():
     assert decision.get("capability") == ""
 
 
+@pytest.mark.asyncio
+async def test_astream_plan_prose_starting_with_stray_angle_bracket():
+    """Regression: a prose reply that BEGINS with a '<' that can't grow into a
+    <think> tag (e.g. '<3') must classify as prose and stream — not stall in the
+    partial-tag guard forever and fall through to the tool.task JSON fallback."""
+    response = "<3 I really like this idea, let's go with it."
+    llm = MockChatModel(responses=[response], chunk_size=4)
+    planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])
+
+    text_chunks: list[str] = []
+    decision: dict = {}
+    async for event in planner.astream_plan({"user_input": "what do you think?"}):
+        if event["type"] == "text":
+            text_chunks.append(event["chunk"])
+        elif event["type"] == "decision":
+            decision = event["decision"]
+
+    assert decision["capability"] == "", f"stray '<' was misrouted: {decision!r}"
+    assert "".join(text_chunks) == response  # streamed as prose, intact
+
+
 def test_llm_planner_synthesize_returns_natural_response():
     llm = MockChatModel(responses=['The file says: "hello".'])
     planner = LLMPlanner(llm=llm, available_capabilities=["read_file"])

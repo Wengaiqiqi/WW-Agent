@@ -18,7 +18,7 @@
 - Modify: `agents/comm_agent/mcp_tools.py`(`add_peer` 处理器构造 `Peer` 处)
 - Test: `tests/test_comm_agent/test_mcp_tools.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 追加到 `tests/test_comm_agent/test_mcp_tools.py`:
 

@@ -40,14 +40,22 @@ def json_result(data: object) -> str:
 # need such a variable should declare it in ``_meta.json`` under ``requiresEnv``
 # — the allowlist below honors that and the filter then lets it through.
 _SECRET_KEYWORD_RE = re.compile(
-    r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|"
-    r"AUTH|HMAC|PRIVATE|API|SESSION|COOKIE|BEARER|CERT)(?:_|$)"
+    r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|"
+    r"CREDENTIALS|AUTH|HMAC|PRIVATE|API|SESSION|COOKIE|BEARER|CERT|PAT|"
+    r"SIGNING|SIGNATURE|SALT|ACCESS)(?:_|$)"
 )
 _PROVIDER_PREFIX_RE = re.compile(
     r"(?i)^(openai|anthropic|deepseek|xiaomi|qwen|moonshot|zhipu|mistral|"
     r"cohere|google|gemini|ollama|together|replicate|huggingface|aws|azure|"
     r"gcp|github|tavily|brave|serpapi)_"
 )
+# Value-based catch for credentials the name-based denylist misses. Connection
+# strings / DSNs embed a password in an innocuously named var —
+# ``DATABASE_URL=postgres://user:pw@host``, ``REDIS_URL``, ``AMQP_URL``,
+# ``MONGODB_URI`` — none of which match the keyword regex. Strip any value that
+# looks like ``scheme://user:password@host`` so a prompt-injected
+# ``env | grep -i url`` can't lift the embedded secret.
+_VALUE_CREDENTIAL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s:@]+:[^/?#\s@]+@")
 _LANGCHAIN_ALLOWLIST = {
     "LANGCHAIN_AGENT_MODEL",
     "LANGCHAIN_AGENT_CONFIG_DIR",
@@ -124,6 +132,11 @@ def _filter_secrets_from_env(env: dict[str, str]) -> dict[str, str]:
             continue
         if _SECRET_KEYWORD_RE.search(name) or _PROVIDER_PREFIX_RE.search(name):
             continue
+        # Catch credentials embedded in the *value* (connection strings / DSNs)
+        # that slipped past the name-based denylist above. Skill-declared
+        # ``requiresEnv`` names already bypassed this via the allowlist check.
+        if _VALUE_CREDENTIAL_RE.match(value):
+            continue
         cleaned[name] = value
     return cleaned
 
@@ -189,7 +202,9 @@ def run_shell_command(command: str, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -
     # ``~/.bash_profile`` inside the child, which can re-export the very env
     # vars ``_filter_secrets_from_env`` just stripped (a user who keeps
     # ``export OPENAI_API_KEY=...`` in their login profile would silently
-    # leak it through the secret filter otherwise). PATH and locale survive
-    # via the explicit whitelist passthrough in ``_OS_PASSTHROUGH``.
+    # leak it through the secret filter otherwise). PATH, locale, and the
+    # other OS vars survive because the filter is a *denylist*: it forwards
+    # everything that doesn't match a secret name/value pattern — there is no
+    # explicit allowlist of OS vars to maintain.
     shell_command = ["/bin/sh", "-c", command]
     return run_subprocess(shell_command, timeout=timeout, shell=False)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -67,5 +68,9 @@ async def test_supervisor_starts_and_stops(tmp_path: Path) -> None:
         assert popen.called
         # Caddyfile was written
         assert (tmp_path / "Caddyfile").exists()
+        # caddy's stderr must NOT be an unread PIPE: caddy is chatty and the
+        # ~64KB OS pipe buffer would fill and block it. It should go to a file
+        # (or DEVNULL), never subprocess.PIPE.
+        assert popen.call_args.kwargs.get("stderr") is not subprocess.PIPE
         await sup.stop()
         assert proc.terminate.called

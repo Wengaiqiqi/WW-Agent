@@ -49,6 +49,54 @@ def test_build_agent_env_forwards_custom_endpoint_vars(monkeypatch):
     assert env["LANGCHAIN_AGENT_API_KEY"] == "sk-turn-key"
 
 
+@pytest.mark.asyncio
+async def test_spawn_closes_stack_when_handshake_fails(monkeypatch):
+    """A spawn that fails before the handle is registered must still tear down
+    its stdio subprocess — otherwise it leaks (shutdown_all only reaps handles
+    in _clients, which a failed spawn never reaches)."""
+    import orchestrator.mcp_host as mh
+
+    events: list[str] = []
+
+    class _FakeStdio:
+        async def __aenter__(self):
+            events.append("stdio-enter")
+            return ("read", "write")
+
+        async def __aexit__(self, *a):
+            events.append("stdio-exit")
+            return False
+
+    class _FakeSession:
+        def __init__(self, read, write):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def initialize(self):
+            raise RuntimeError("handshake failed")
+
+    monkeypatch.setattr(mh, "stdio_client", lambda params: _FakeStdio())
+    monkeypatch.setattr(mh, "ClientSession", _FakeSession)
+
+    host = MCPHost(hmac_key="k")
+    card = Card(
+        id="tool-agent", display_name="T", version="1",
+        entrypoint={"type": "python", "module": "agents.tool_agent.main", "args": []},
+        mcp={}, a2a={}, capabilities_hint=[], model_override=None,
+    )
+
+    with pytest.raises(RuntimeError, match="handshake failed"):
+        await host.spawn(card)
+
+    assert "stdio-exit" in events, "stdio subprocess was not torn down on failure"
+    assert "tool-agent" not in host._clients
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_mcp_host_spawns_tool_agent_and_calls_read_file(tmp_path):

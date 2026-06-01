@@ -100,9 +100,10 @@ async def amain() -> None:
     await a2a.start()
 
     agent_id = os.environ.get("AGENT_ID", "skill-agent")
-    runtime_dir = Path(".agent/runtime")
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / f"{agent_id}.a2a-url").write_text(a2a.base_url, encoding="utf-8")
+    from agent_paths import runtime_dir
+    rt_dir = runtime_dir()
+    rt_dir.mkdir(parents=True, exist_ok=True)
+    (rt_dir / f"{agent_id}.a2a-url").write_text(a2a.base_url, encoding="utf-8")
 
     # --- MCP stdio surface ------------------------------------------------
     specs = build_skill_specs()

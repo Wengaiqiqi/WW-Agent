@@ -70,14 +70,20 @@ def _do_write_file(path_arg: str, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     original = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(content, encoding="utf-8")
+    # Return a TERSE confirmation — deliberately NOT echoing ``content`` (nor a
+    # structuredPatch). The full {type, filePath, content} blob is so
+    # answer-shaped that smaller models paste it back verbatim as their final
+    # reply, and the user sees raw JSON instead of "saved to <file>". Same
+    # reasoning as the ``memory`` tool's one-token "ok" return. The path + byte
+    # count are enough for the model to write a natural confirmation.
     return json.dumps(
         {
-            "type": "update" if original is not None else "create",
-            "filePath": str(path),
-            "content": content,
+            "ok": True,
+            "action": "update" if original is not None else "create",
+            "path": str(path),
+            "bytes": len(content.encode("utf-8")),
         },
         ensure_ascii=False,
-        indent=2,
     )
 
 

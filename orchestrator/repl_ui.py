@@ -28,6 +28,9 @@ COMMANDS: dict[str, str] = {
     "/clear": "Clear the terminal",
     "/compact": "Start a fresh memory thread for later turns",
     "/gateway": "Configure and run chat-platform gateways (Feishu, QQ, ...)",
+    "/comm": "Manage remote A2A peers (list | add | use <name> | rm <name>)",
+    "/task": "Delegate a task to the current remote peer",
+    "/chat": "Send a chat message to the current remote peer",
 }
 
 

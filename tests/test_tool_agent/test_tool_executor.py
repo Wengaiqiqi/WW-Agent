@@ -50,6 +50,41 @@ async def test_execute_read_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_write_file_result_is_terse_not_content_echo(tmp_path, monkeypatch):
+    """write_file must actually save the file but return a TERSE result that
+    does NOT echo the written content — otherwise the model pastes the whole
+    {type, filePath, content} blob back as its final answer (the user sees raw
+    JSON instead of a clean "saved" confirmation). Mirrors the memory tool's
+    terse-return fix."""
+    import json as _json
+
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    target = tmp_path / "story.txt"
+    story = "一只名叫米洛的小企鹅喜欢仰望星空。" * 5  # distinctive, long
+
+    result = await execute_tool("write_file", {
+        "path": str(target),
+        "content": story,
+        "_meta": {"authz_grant": _grant("write_file")},
+    })
+
+    # File really written.
+    assert target.read_text(encoding="utf-8") == story
+
+    text = str(result)
+    # The full content must NOT be echoed back (that's the tempting blob).
+    assert story not in text
+    # But the result still confirms success + the path so the model can write
+    # a natural-language confirmation.
+    payload = _json.loads(text)
+    assert payload.get("ok") is True
+    assert "story.txt" in payload.get("path", "")
+    assert payload.get("action") in ("create", "update")
+    # And it does not carry the content field at all.
+    assert "content" not in payload
+
+
+@pytest.mark.asyncio
 async def test_execute_read_file_outside_workspace_is_refused(tmp_path, monkeypatch):
     """Regression for the security fix: ``_wrap_read_file`` used to read any
     absolute path, including outside the workspace. After the fix, an

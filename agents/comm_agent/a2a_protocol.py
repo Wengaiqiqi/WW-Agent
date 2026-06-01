@@ -54,10 +54,14 @@ class A2AClient:
         self._my_peer_id = my_peer_id
         self._retry_backoff = retry_backoff
         self._timeout = timeout
-        # MVP: when tls_pinned_sha256 is set we accept any self-signed cert.
-        # Real fingerprint enforcement is deferred to v1.1 (spec §9). HMAC
-        # signing of payloads defeats MITM in the meantime.
-        verify = peer.tls_verify if peer.tls_pinned_sha256 is None else False
+        # Cert verification follows ``tls_verify`` only. A ``tls_pinned_sha256``
+        # used to flip verification OFF here, but fingerprint enforcement is not
+        # implemented yet (deferred to v1.1, spec §9) — so disabling verification
+        # on a pin meant an https peer "secured" with a pin actually accepted ANY
+        # certificate and was fully MITM-able. Until pinning is enforced, a pin is
+        # recorded but does NOT weaken TLS; verification stays on unless the
+        # caller explicitly sets ``tls_verify=False``.
+        verify = peer.tls_verify
         self._transport = transport
         self._verify = verify
 

@@ -12,89 +12,66 @@ from rich.live import Live
 from rich.text import Text
 
 from agent_display import format_tool_arg_summary
+from orchestrator.fast_route import fast_route
 from orchestrator.repl_types import LoopAction
 from orchestrator.repl_ui import ReplUI
 from orchestrator.turns import LLMPlanner, TurnRunner, _stub_planner
 
 log = logging.getLogger(__name__)
 
-_FAST_TOOL_MARKERS = (
-    "http://", "https://",
-    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg",
-    ".ini", ".csv", ".tsv", ".docx", ".pdf", ".xlsx", ".html", ".css",
-    ".js", ".ts", ".tsx", ".vue", ".svg", ".png", ".jpg", ".jpeg",
-)
 
-_FAST_TOOL_PREFIXES = (
-    "read ", "open ", "inspect ", "list ", "search ", "grep ", "find ",
-    "write ", "edit ", "modify ", "update ", "fix ", "delete ", "create ",
-    "run ", "execute ", "debug ", "review ", "audit ", "analyze ",
-    "optimise ", "optimize ", "profile ", "summarize ",
-    "pytest", "python ", "git ", "npm ", "pip ", "dir ", "ls ",
-)
-# "test " removed: "test 一下这个想法" is plain chat, not a tool task.
-# Specific testing verbs ("pytest", "run ") still match.
-
-_FAST_TOOL_WORDS = (
-    "read", "inspect", "search", "grep", "write", "edit", "modify",
-    "update", "fix", "debug", "review", "audit", "analyze", "optimise",
-    "optimize", "profile",
-)
-
-_FAST_TOOL_CJK = (
-    "查看", "读取", "打开", "列出", "搜索", "查找", "修改", "更改",
-    "更新", "修复", "删除", "创建", "写入", "保存", "运行", "执行",
-    "调试", "审查", "检查", "分析", "优化", "总结",
-)
-
-# Read-only-safe subset of the CJK / prefix vocabulary. Used by fast_route
-# under read-only mode: a user-typed "查看 README" should still skip the
-# planner LLM round-trip even when mutation isn't allowed; "保存到 a.txt"
-# should not — it can't succeed anyway, and forcing it through the planner
-# lets the LLM render a clean refusal in prose.
-_FAST_TOOL_READONLY_PREFIXES = (
-    "read ", "open ", "inspect ", "list ", "search ", "grep ", "find ",
-    "review ", "audit ", "analyze ", "summarize ",
-    "dir ", "ls ",
-)
-_FAST_TOOL_READONLY_WORDS = (
-    "read", "inspect", "search", "grep", "review", "audit", "analyze",
-)
-_FAST_TOOL_READONLY_CJK = (
-    "查看", "读取", "打开", "列出", "搜索", "查找",
-    "审查", "检查", "分析", "总结",
-)
-
-# Referring expressions that indicate the user is talking about
-# orchestrator-side context the tool-agent does NOT have. When detected,
-# fast_route should defer to the planner so the planner can either resolve
-# the referent inline or hand a richer task description down.
-# (Pure-tool detection still wins when the message is *only* a path/URL.)
-_REFERRING_TOKENS = (
-    "上面", "下面", "刚才", "之前", "上一", "前面",
-    "the above", "the previous", "what you just",
-)
-
-
-def _build_tool_line(name: str, args: dict, *, active: bool) -> Text:
-    """Build the `⏺ tool_name  arg` line for a tool call.
-
-    ``active=True``: the tool is still running — bullet blinks.
-    ``active=False``: the tool returned — bullet stays static.
-
-    Used by the streaming Live region in ``_delegate_to_agent``: the same
-    function renders both states, so freezing a running call into its final
-    form is just an ``update()`` with ``active=False`` followed by ``stop()``.
-    """
+def _tool_line_text(name: str, args: dict, *, bullet_style: str) -> Text:
+    """Render `⏺ tool_name  arg` with the bullet in ``bullet_style``."""
     summary = format_tool_arg_summary(name, args)
     t = Text()
-    # Rich's `blink` maps to ANSI SGR 5; terminals that ignore it fall back
-    # to a static bold-black bullet, which is still readable.
-    t.append("⏺ ", style="bold black blink" if active else "bold black")
+    t.append("⏺ ", style=bullet_style)
     t.append(name, style="bold")
     if summary:
         t.append(f"  {summary}", style="dim")
     return t
+
+
+class _PulsingToolLine:
+    """A running tool-call line whose bullet visibly throbs.
+
+    The previous implementation styled the bullet with Rich's ``blink``, which
+    maps to ANSI SGR 5 — Windows Terminal, VS Code's terminal, and most modern
+    emulators silently drop it, so the "running" bullet never actually moved.
+
+    This renderable drives the pulse itself instead of delegating to the
+    terminal: the enclosing ``Live`` region auto-refreshes a few times a second
+    and re-invokes ``__rich_console__`` each tick, so picking the bullet's
+    brightness from the wall clock makes the dot throb on every terminal,
+    SGR-5 support or not (this is the same time-based trick Rich spinners use).
+    """
+
+    def __init__(self, name: str, args: dict):
+        self._name = name
+        self._args = args
+
+    def __rich_console__(self, console, options):
+        # ~2 Hz: alternate the bullet between bright and dim each half-second.
+        bright = int(time.monotonic() * 2) % 2 == 0
+        yield _tool_line_text(
+            self._name, self._args,
+            bullet_style="bold green" if bright else "green dim",
+        )
+
+
+def _build_tool_line(name: str, args: dict, *, active: bool):
+    """Build the tool-call line for the streaming Live region.
+
+    ``active=True``: the tool is still running — returns a self-animating
+    renderable whose bullet pulses (see :class:`_PulsingToolLine`).
+    ``active=False``: the tool returned — a static green bullet.
+
+    The same call site renders both states, so freezing a running call into
+    its final form is just an ``update()`` with ``active=False`` then
+    ``stop()``.
+    """
+    if active:
+        return _PulsingToolLine(name, args)
+    return _tool_line_text(name, args, bullet_style="green")
 
 
 class REPLController:
@@ -277,12 +254,17 @@ class REPLController:
                     return LoopAction.CONTINUE
 
                 # -- individual tool dispatch (existing MCP path) --
+                # ``plan`` was already produced above (fast_route or the
+                # streaming planner). Pin it into TurnRunner instead of passing
+                # the live LLMPlanner — otherwise TurnRunner.run would invoke the
+                # planner a SECOND time (a full extra LLM round-trip that doubles
+                # latency/cost and could diverge from the decision we streamed).
                 runner = TurnRunner(
                     host=self.host,
                     router=self.router,
                     hmac_key=self.hmac_key,
                     permission_mode_provider=lambda: self.state.permission_mode,
-                    planner=self._planner,
+                    planner=lambda _state, _p=plan: _p,
                 )
                 result = await runner.run(text, trace_id=trace_id)
 
@@ -325,70 +307,17 @@ class REPLController:
         return LoopAction.CONTINUE
 
     def _fast_route(self, text: str) -> dict | None:
-        """Return a local routing decision for obvious tool-agent tasks.
+        """Local routing decision for obvious tool-agent tasks (skips planner).
 
-        The planner LLM is useful for ambiguous chat-vs-tool decisions, but it
-        is also the work hidden behind the initial ``Loading...`` spinner. For
-        requests that clearly need files, URLs, commands, tests, debugging, or
-        repository review, skip that network/model round trip and delegate
-        directly to tool-agent.
-
-        **Mode interaction**: under read-only, only fast-route on read-class
-        verbs/keywords. Write/run-class requests in read-only would just fail
-        at tool-binding time (the model wouldn't have ``write_file`` bound) —
-        but routing them to the planner instead gives the LLM a chance to
-        render a clean refusal explaining how to escalate.
-
-        **Referring expressions**: a message that references prior turns
-        ("上面"/"刚才"/"the above") always goes through the planner so the
-        planner can resolve the referent inline.
+        Thin wrapper over :func:`orchestrator.fast_route.fast_route` that feeds
+        it the router's capability list and the session's active permission
+        mode. See that function for the matching rules and rationale.
         """
-        if os.environ.get("LANGCHAIN_AGENT_DISABLE_FAST_ROUTE") == "1":
-            return None
-
-        stripped = text.strip()
-        if not stripped:
-            return None
-        if ":" in stripped:
-            cap, _, _arg = stripped.partition(":")
-            if cap.strip() in set(self.router.all_capabilities()):
-                return None
-
-        lower = stripped.lower()
-
-        # Defer to the planner when the message refers to earlier
-        # conversation — only the planner sees session history (the peer
-        # context is now plumbed through, but the planner can also do
-        # inline rewriting which the peer can't).
-        if any(tok in lower or tok in stripped for tok in _REFERRING_TOKENS):
-            return None
-
-        mode = getattr(self.state, "permission_mode", "danger-full-access")
-        prefixes: tuple[str, ...]
-        words: tuple[str, ...]
-        cjk: tuple[str, ...]
-        if mode == "read-only":
-            prefixes = _FAST_TOOL_READONLY_PREFIXES
-            words = _FAST_TOOL_READONLY_WORDS
-            cjk = _FAST_TOOL_READONLY_CJK
-        else:
-            prefixes = _FAST_TOOL_PREFIXES
-            words = _FAST_TOOL_WORDS
-            cjk = _FAST_TOOL_CJK
-
-        should_delegate = (
-            any(marker in lower for marker in _FAST_TOOL_MARKERS)
-            or any(lower.startswith(prefix) for prefix in prefixes)
-            or any(lower.startswith(word) for word in words)
-            or any(word in lower.split() for word in words)
-            or any(word in stripped for word in cjk)
+        return fast_route(
+            text,
+            capabilities=self.router.all_capabilities(),
+            mode=getattr(self.state, "permission_mode", "danger-full-access"),
         )
-        if not should_delegate:
-            return None
-        return {
-            "capability": "tool.task",
-            "arguments": {"task": stripped},
-        }
 
     async def _plan_with_streaming(self, plan_input: dict) -> tuple[dict, bool]:
         """Run the planner, streaming conversational text to the TUI as it arrives.

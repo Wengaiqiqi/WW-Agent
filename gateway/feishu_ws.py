@@ -330,11 +330,12 @@ def _handle_message(cfg: Dict[str, Any], event: Any) -> None:
         memory_user_id = extract_sender_open_id(sender)
 
         log.info(
-            "feishu: received %s id=%s chat_type=%s chat_id=%s content=%r",
+            "feishu: received %s id=%s chat_type=%s chat_id=%s sender=%s content=%r",
             getattr(message, "message_type", ""),
             message_id,
             chat_type,
             chat_id,
+            memory_user_id,
             text[:200],
         )
 

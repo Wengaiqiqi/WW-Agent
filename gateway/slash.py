@@ -14,14 +14,24 @@ message and needs a plain-text reply.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any
 
 from gateway import credentials as gw_creds
+from orchestrator.mcp_host import unwrap_tool_result as _unwrap
 
 COMM_AGENT_ID = "comm-agent"
 _RECOGNIZED = {"/task", "/chat", "/peers", "/help"}
+
+# Guards the read-modify-write of the shared chat-context store. The qq and
+# feishu gateways run as separate platforms (separate PID locks) but share this
+# one JSON file, so writes can interleave; the lock serialises in-process and
+# os.replace makes the on-disk swap atomic across processes.
+_STORE_LOCK = threading.Lock()
 
 
 def _platform_from_session_key(session_key: str) -> str:
@@ -52,31 +62,19 @@ def _is_authorized(session_key: str, user_id: str) -> bool:
     return user_id in _allowed_users(_platform_from_session_key(session_key))
 
 
-def _unwrap(result: Any) -> tuple[bool, str]:
-    """Normalize call_tool result into (is_error, text). Mirrors the REPL handler."""
-    try:
-        is_error = bool(getattr(result, "isError", False))
-        content = getattr(result, "content", None)
-        if content and hasattr(content[0], "text"):
-            return is_error, content[0].text
-    except (IndexError, TypeError, AttributeError):
-        pass
-    try:
-        is_error = bool(result.get("isError", False))
-        content = result.get("content", [])
-        if content:
-            return is_error, content[0].get("text", "")
-    except (AttributeError, IndexError, TypeError):
-        pass
-    return True, "unexpected call_tool result format"
-
-
 async def _call_comm(host, tool: str, args: dict) -> tuple[bool, dict]:
     """Call a comm.* tool; return (ok, data). data carries {'error': ...} on failure."""
-    result = await host.call_tool(COMM_AGENT_ID, tool, args)
+    import logging
+    _log = logging.getLogger(__name__)
+    try:
+        result = await host.call_tool(COMM_AGENT_ID, tool, args)
+    except Exception as exc:
+        _log.exception("comm-agent call_tool raised for %s", tool)
+        return False, {"error": f"comm-agent unreachable: {exc}"}
     is_error, text = _unwrap(result)
     if is_error:
-        return False, {"error": text or "comm-agent unavailable"}
+        _log.warning("comm-agent %s failed: %s", tool, text or "(empty error)")
+        return False, {"error": text or f"comm-agent error on {tool} (no detail)"}
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, TypeError):
@@ -152,15 +150,29 @@ def _load_chat_context(session_key: str, peer_id: str) -> str | None:
 
 def _save_chat_context(session_key: str, peer_id: str, context_id: str) -> None:
     p = _context_store_path()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    data[f"{session_key}::{peer_id}"] = context_id
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _STORE_LOCK:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[f"{session_key}::{peer_id}"] = context_id
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: serialise to a temp file in the same dir, then
+        # os.replace() over the target. A torn write (another platform's
+        # gateway writing this same file) would otherwise leave invalid JSON
+        # that _load_chat_context silently discards — dropping EVERY peer's
+        # saved context, not just the racing one.
+        tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
+        try:
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+            os.replace(tmp, p)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
 
 
 async def _do_chat(host, parts: list[str], session_key: str) -> str:

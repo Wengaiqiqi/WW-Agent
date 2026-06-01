@@ -14,10 +14,11 @@ def test_orchestrator_writes_peers_json_with_both_specialist_urls(tmp_path):
 
     env = os.environ.copy()
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+    env["PYTHONIOENCODING"] = "utf-8"  # child emits UTF-8 (we read it as UTF-8)
 
     proc = subprocess.run(
         [sys.executable, "cli.py", "prompt", f"read_file:{target}"],
-        env=env, capture_output=True, text=True, timeout=60,
+        env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
 

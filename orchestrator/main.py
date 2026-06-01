@@ -24,8 +24,8 @@ def _agent_dir() -> Path:
 
 async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
     cards = load_cards(_agent_dir())
-    spawned: set[str] = set()
-    for card in cards:
+
+    async def _spawn(card) -> str | None:
         try:
             await host.spawn(card)
         except Exception:
@@ -34,10 +34,51 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
                     "optional specialist %r failed to spawn, skipping",
                     card.id, exc_info=True,
                 )
-                continue
+                return None
             raise
-        spawned.add(card.id)
-        tools = await host.list_tools(card.id)
+        return card.id
+
+    # Spawn every specialist concurrently. They are independent subprocesses
+    # and each pays a multi-second cold-start (langchain/langgraph import plus
+    # the a2a-url handshake poll). Serial spawning stacked those latencies;
+    # gather overlaps them, roughly halving startup with the current 3 cards —
+    # a win shared by the one-shot CLI, the chat gateway, and the web bridge
+    # (which re-bootstraps on every message).
+    #
+    # return_exceptions=True so a non-optional failure does not abandon the
+    # other in-flight spawns half-initialized: they finish and land in
+    # host._clients, so the caller's ``shutdown_all`` can still tear them down
+    # before we re-raise the first real error.
+    results = await asyncio.gather(
+        *(_spawn(card) for card in cards), return_exceptions=True
+    )
+    spawned: set[str] = set()
+    for res in results:
+        if isinstance(res, BaseException):
+            raise res
+        if res is not None:
+            spawned.add(res)
+
+    # Register each spawned specialist's MCP tools. ``list_tools`` is a cheap
+    # MCP round-trip; overlap them too, then register in card order so the
+    # advertised capability list stays deterministic.
+    #
+    # return_exceptions=True (matching the spawn gather above): a single
+    # specialist whose MCP server crashes or hangs during enumeration must not
+    # take down bootstrap for the others. We skip the failed one — its
+    # capability just won't be advertised — and ``shutdown_all`` still reaps it.
+    live_cards = [card for card in cards if card.id in spawned]
+    tool_lists = await asyncio.gather(
+        *(host.list_tools(card.id) for card in live_cards),
+        return_exceptions=True,
+    )
+    for card, tools in zip(live_cards, tool_lists):
+        if isinstance(tools, BaseException):
+            log.warning(
+                "specialist %r failed to enumerate tools, skipping: %s",
+                card.id, tools,
+            )
+            continue
         tool_metas = {
             t.name: {
                 "description": getattr(t, "description", ""),

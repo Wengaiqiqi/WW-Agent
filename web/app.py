@@ -13,10 +13,30 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from web import auth, config, models, store
+from web import auth, config, crypto, models, store
 from web.ratelimit import RateLimiter
 
 COOKIE_NAME = "session"
+
+
+def _assert_safe_base_url(base_url: str) -> None:
+    """Reject a custom-endpoint ``base_url`` that resolves to a private /
+    loopback / link-local / metadata address — otherwise an authenticated user
+    could point the server-side LLM client at ``http://169.254.169.254/`` or an
+    internal service and exfiltrate the response (SSRF). Reuses the same
+    DNS-resolving guard ``tool_web`` applies to ``web_extract``; the
+    ``LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1`` escape hatch still works for local
+    dev (e.g. a localhost Ollama endpoint)."""
+    from urllib.parse import urlparse
+
+    from tool.tool_web import hostname_is_safe
+
+    host = urlparse(base_url).hostname or ""
+    allowed, reason = hostname_is_safe(host)
+    if not allowed:
+        raise HTTPException(
+            status_code=400, detail=f"base_url host not allowed: {reason}"
+        )
 
 BridgeFn = Callable[..., Any]  # async generator: (prompt, *, trace_id, session_key, user_id, model_id)
 
@@ -212,8 +232,10 @@ def _mount_endpoint_routes(app, db, current_user):
         if protocol not in ("openai", "anthropic"):
             raise HTTPException(status_code=400,
                                 detail="protocol must be 'openai' or 'anthropic'")
+        _assert_safe_base_url(base_url)
         return store.create_endpoint(
-            db, user["id"], label, base_url, api_key, model, protocol
+            db, user["id"], label, base_url, crypto.encrypt_secret(api_key),
+            model, protocol,
         )
 
     @app.delete("/api/endpoints/{endpoint_id}")
@@ -242,10 +264,13 @@ def _mount_chat_route(app, db, current_user, owned, limiter, bridge_fn):
             ep = store.get_endpoint(db, req.endpoint_id)
             if not ep or ep["user_id"] != user["id"]:
                 raise HTTPException(status_code=404, detail="endpoint not found")
+            # Re-validate at use time: blocks an endpoint whose DNS now resolves
+            # to a private address (rebinding) even if it passed at creation.
+            _assert_safe_base_url(ep["base_url"])
             bridge_kwargs = {
                 "model_id": f"custom/{ep['model']}",
                 "base_url": ep["base_url"],
-                "api_key": ep["api_key"],
+                "api_key": crypto.decrypt_secret(ep["api_key"]),
                 "protocol": ep["protocol"],
             }
         else:

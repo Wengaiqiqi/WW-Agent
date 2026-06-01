@@ -142,3 +142,21 @@ class TestGrepSearchFiles:
         result = json.loads(grep_search_files("binary", str(workspace)))
         assert result["skippedBinaryFiles"] == 1
         assert result["numFiles"] == 1
+
+    def test_does_not_follow_symlink_out_of_workspace(self, workspace, tmp_path):
+        """A symlink inside the workspace pointing OUT must not let grep read
+        files outside the sandbox (workspace-escape information disclosure)."""
+        outside = tmp_path.parent / "outside_secret_dir"
+        outside.mkdir(exist_ok=True)
+        secret = outside / "secret.txt"
+        secret.write_text("SUPERSECRET_TOKEN_12345")
+        link = workspace / "escape"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this host")
+        result = json.loads(grep_search_files(
+            "SUPERSECRET_TOKEN", str(workspace), output_mode="content",
+        ))
+        assert "SUPERSECRET_TOKEN_12345" not in result["content"]
+        assert result["numFiles"] == 0

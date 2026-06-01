@@ -29,6 +29,7 @@ def test_command_list_has_all_expected_commands():
         "/help", "/exit", "/quit", "/status", "/agents", "/tools",
         "/permissions", "/config", "/model", "/skills",
         "/instructions", "/clear", "/compact", "/gateway",
+        "/comm", "/task", "/chat",
     }
 
 

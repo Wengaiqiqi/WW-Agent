@@ -23,11 +23,14 @@ server.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
 import secrets
-from typing import Optional
+import shutil
+from pathlib import Path
+from typing import Iterator, Optional
 
 from orchestrator.main import _bootstrap, _build_orchestrator_llm
 from orchestrator.mcp_host import MCPHost
@@ -39,6 +42,49 @@ log = logging.getLogger(__name__)
 
 
 _CONCURRENCY_GUARD = asyncio.Lock()
+
+
+@contextlib.contextmanager
+def scoped_env(values: dict[str, Optional[str]]) -> Iterator[None]:
+    """Set/clear process env vars for the duration of the block, restoring the
+    prior values (set or unset) on exit. A value of ``None`` clears the var.
+
+    Single owner for the per-turn env snapshot/restore logic shared by the
+    gateway and the web bridge. They pass different key sets — the web
+    custom-endpoint path also scopes base_url/api_key/protocol — but the
+    snapshot/restore mechanism (and any fix to it) lives here once.
+    """
+    prev = {k: os.environ.get(k) for k in values}
+    try:
+        for k, v in values.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        yield
+    finally:
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@contextlib.contextmanager
+def private_runtime_dir(prefix: str) -> Iterator[Path]:
+    """Point ``LANGCHAIN_AGENT_RUNTIME_DIR`` at a per-PID dir for the block, then
+    restore the prior value and remove the dir.
+
+    Isolates each process's specialist discovery files (peers.json + the
+    ``<id>.a2a-url`` sidecars) so a gateway and a REPL sharing the project cwd
+    don't clobber each other's ``peers.json`` (which produced "All connection
+    attempts failed" on the other's next tool-task)."""
+    rt = Path(".agent") / "runtime" / f"{prefix}-{os.getpid()}"
+    with scoped_env({"LANGCHAIN_AGENT_RUNTIME_DIR": str(rt)}):
+        try:
+            yield rt
+        finally:
+            shutil.rmtree(rt, ignore_errors=True)
 
 
 async def run_turn(
@@ -136,22 +182,6 @@ async def _delegate_via_a2a(
         permission_mode=permission_mode,
         history_context=history_context,
     )
-
-
-def _apply_memory_user_env(user_id: str) -> None:
-    """Set / unset the per-user memory scope env var. Subprocesses inherit it."""
-    if user_id:
-        os.environ["LANGCHAIN_AGENT_MEMORY_USER"] = user_id
-    elif "LANGCHAIN_AGENT_MEMORY_USER" in os.environ:
-        del os.environ["LANGCHAIN_AGENT_MEMORY_USER"]
-
-
-def _restore_memory_user_env(prev: Optional[str]) -> None:
-    """Undo whatever ``_apply_memory_user_env`` did, idempotently."""
-    if prev is None:
-        os.environ.pop("LANGCHAIN_AGENT_MEMORY_USER", None)
-    else:
-        os.environ["LANGCHAIN_AGENT_MEMORY_USER"] = prev
 
 
 def _build_planner_context(session_key: str) -> tuple[str, str]:
@@ -267,29 +297,7 @@ async def _run_turn_locked(
     user_id: str = "",
 ) -> str:
     """Orchestrator-bootstrap-and-dispatch core. Caller holds the lock."""
-    from pathlib import Path
-
     from gateway import session_store
-
-    # Snapshot env BEFORE the try so the finally has a consistent baseline
-    # even if anything below raises.
-    prev_user_env = os.environ.get("LANGCHAIN_AGENT_MEMORY_USER")
-
-    # Snapshot peers.json BEFORE bootstrap. The gateway's per-turn
-    # MCPHost.spawn writes its subprocesses' a2a URLs to the shared
-    # .agent/runtime/peers.json -- which is exactly the file the REPL's
-    # ``delegate_task`` reads later to find ITS OWN tool-agent. After the
-    # gateway turn we kill our subprocesses, but peers.json keeps pointing
-    # at the dead URLs -- the REPL then fails with "All connection
-    # attempts failed" on the next /tools or tool-task request. Save now,
-    # restore in finally.
-    peers_path = Path(".agent/runtime/peers.json")
-    saved_peers: Optional[str] = None
-    try:
-        if peers_path.exists():
-            saved_peers = peers_path.read_text(encoding="utf-8")
-    except OSError:
-        saved_peers = None
 
     hmac_key = secrets.token_urlsafe(32)
     host = MCPHost(hmac_key=hmac_key)
@@ -301,71 +309,65 @@ async def _run_turn_locked(
     reply_text = ""
     is_slash_command = False
     stop_tail = None
-    try:
-        # CRITICAL: apply the per-user memory scope env BEFORE building the
-        # planner context. ``_build_planner_context`` reads the memory file
-        # via ``snapshot_for_system_prompt``, which keys off this env var
-        # to pick the right user directory. Doing it the other way around
-        # made Branch A (prose answers) see the global / previous user's
-        # memory.
-        _apply_memory_user_env(user_id)
-        history_context, full_context = _build_planner_context(session_key)
 
-        await _bootstrap(host, router)
-
-        # Slash commands (/task /chat /peers /help) for whitelisted users.
-        # A string reply short-circuits the planner; None falls through to
-        # normal chat. comm.* tools are available because _bootstrap spawned
-        # the comm-agent onto this per-turn host.
-        from gateway.slash import handle_slash
-        slash_reply = await handle_slash(
-            prompt, host=host, session_key=session_key, user_id=user_id,
-        )
-        if slash_reply is not None:
-            is_slash_command = True
-            reply_text = slash_reply
-            return reply_text
-
-        planner = _build_planner(router, context_text=full_context)
-        stop_tail = await _drive_telemetry_tail(mux)
-
+    # Scope the per-user memory env and a private runtime-discovery dir for the
+    # whole turn (both inherited by the spawned specialists). CRITICAL: the
+    # memory env must be set BEFORE ``_build_planner_context`` — it reads the
+    # memory file via ``snapshot_for_system_prompt``, which keys off this var to
+    # pick the right user directory; setting it after made Branch A (prose
+    # answers) see the previous user's memory.
+    #
+    # Caveat: env is process-global, so the in-process gateway-as-REPL-
+    # background-task mode still shares these vars during a turn; turns are
+    # serialised by ``_CONCURRENCY_GUARD`` and resolve to live specialists, so
+    # the worst case is a REPL turn briefly using the gateway's specialist.
+    with scoped_env({"LANGCHAIN_AGENT_MEMORY_USER": user_id or None}), \
+            private_runtime_dir("gw"):
         try:
-            decision = planner({"user_input": prompt, "trace_id": trace_id})
-        except Exception as exc:  # noqa: BLE001
-            log.exception("gateway: planner failed")
-            reply_text = f"[error] planner: {exc}"
-            return reply_text
+            history_context, full_context = _build_planner_context(session_key)
 
-        reply_text = await _dispatch_decision(
-            decision=decision,
-            prompt=prompt,
-            host=host,
-            router=router,
-            hmac_key=hmac_key,
-            trace_id=trace_id,
-            history_context=history_context,
-        )
-        return reply_text
-    finally:
-        if stop_tail is not None:
-            await stop_tail()
-        await host.shutdown_all()
-        # Restore peers.json to whatever the REPL bootstrap left there
-        # (or remove it entirely if there wasn't one to begin with). See
-        # the "Snapshot peers.json" comment above for why this matters.
-        try:
-            if saved_peers is not None:
-                peers_path.write_text(saved_peers, encoding="utf-8")
-            elif peers_path.exists():
-                peers_path.unlink()
-        except OSError:
-            pass
-        # Persist the turn even when the reply was an error -- a future turn
-        # might still want to refer to it ("you said you couldn't do that").
-        # Slash commands are operator actions / remote conversations, not local
-        # chat, so they are deliberately excluded from the planner's history.
-        if session_key and reply_text and not is_slash_command:
-            session_store.append(session_key, prompt, reply_text)
-        # Restore the env var the way we found it; without this a subsequent
-        # REPL turn in the same process would inherit the gateway's scoping.
-        _restore_memory_user_env(prev_user_env)
+            await _bootstrap(host, router)
+
+            # Slash commands (/task /chat /peers /help) for whitelisted users.
+            # A string reply short-circuits the planner; None falls through to
+            # normal chat. comm.* tools are available because _bootstrap spawned
+            # the comm-agent onto this per-turn host.
+            from gateway.slash import handle_slash
+            slash_reply = await handle_slash(
+                prompt, host=host, session_key=session_key, user_id=user_id,
+            )
+            if slash_reply is not None:
+                is_slash_command = True
+                reply_text = slash_reply
+                return reply_text
+
+            planner = _build_planner(router, context_text=full_context)
+            stop_tail = await _drive_telemetry_tail(mux)
+
+            try:
+                decision = planner({"user_input": prompt, "trace_id": trace_id})
+            except Exception as exc:  # noqa: BLE001
+                log.exception("gateway: planner failed")
+                reply_text = f"[error] planner: {exc}"
+                return reply_text
+
+            reply_text = await _dispatch_decision(
+                decision=decision,
+                prompt=prompt,
+                host=host,
+                router=router,
+                hmac_key=hmac_key,
+                trace_id=trace_id,
+                history_context=history_context,
+            )
+            return reply_text
+        finally:
+            if stop_tail is not None:
+                await stop_tail()
+            await host.shutdown_all()
+            # Persist the turn even when the reply was an error -- a future turn
+            # might still want to refer to it. Slash commands are operator
+            # actions / remote conversations, not local chat, so they are
+            # deliberately excluded from the planner's history.
+            if session_key and reply_text and not is_slash_command:
+                session_store.append(session_key, prompt, reply_text)

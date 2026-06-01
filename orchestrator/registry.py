@@ -18,6 +18,7 @@ class Card:
     a2a: dict[str, Any]
     capabilities_hint: list[str]
     model_override: dict[str, Any] | None
+    optional: bool = False
 
 
 def load_cards(cards_dir: Path) -> list[Card]:
@@ -37,6 +38,7 @@ def load_cards(cards_dir: Path) -> list[Card]:
                 a2a=data["a2a"],
                 capabilities_hint=data.get("capabilities_hint", []),
                 model_override=data.get("model_override"),
+                optional=data.get("optional", False),
             ))
         except (json.JSONDecodeError, KeyError) as exc:
             log.warning("ignoring invalid card %s: %s", path, exc)

@@ -26,6 +26,42 @@ def test_strips_common_api_key_names():
     assert out == {"PATH": "/usr/bin"}
 
 
+def test_strips_secret_names_without_obvious_keyword():
+    """Denylist completeness: secret-bearing names that don't contain
+    KEY/TOKEN/SECRET still get stripped (PASSPHRASE / PAT / SIGNING / SALT /
+    SIGNATURE / ACCESS)."""
+    env = {
+        "PATH": "/usr/bin",
+        "DB_PASSPHRASE": "s3cret",
+        "JENKINS_PAT": "ghp_like",
+        "APP_SALT": "abc",
+        "WEBHOOK_SIGNING": "k",
+        "X_SIGNATURE": "sig",
+        "GCS_ACCESS": "akid",
+    }
+    out = _filter_secrets_from_env(env)
+    assert out == {"PATH": "/usr/bin"}
+
+
+def test_strips_connection_strings_with_embedded_credentials():
+    """Value-based catch: credentials embedded in a DSN-style value are stripped
+    even when the var NAME (DATABASE_URL / MONGODB_URI) matches no secret
+    keyword. A URL without ``user:pass@`` carries no secret and is kept."""
+    env = {
+        "PATH": "/usr/bin",
+        "DATABASE_URL": "postgres://admin:s3cret@db.internal:5432/app",
+        "MONGODB_URI": "mongodb://root:pw@mongo:27017",
+        "REDIS_URL": "redis://cache:6379/0",       # no creds -> safe, kept
+        "SITE_URL": "https://example.com/path",    # no creds -> kept
+    }
+    out = _filter_secrets_from_env(env)
+    assert "DATABASE_URL" not in out
+    assert "MONGODB_URI" not in out
+    assert out.get("REDIS_URL") == "redis://cache:6379/0"
+    assert out.get("SITE_URL") == "https://example.com/path"
+    assert out.get("PATH") == "/usr/bin"
+
+
 def test_keeps_unrelated_env_vars():
     env = {
         "PATH": "/usr/bin",

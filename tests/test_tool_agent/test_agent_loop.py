@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agents.tool_agent.agent_loop import ToolAgentLoop
+from agents.tool_agent.agent_loop import ToolAgentLoop, _humanize_tool_echo
 
 
 class _FakeReactAgent:
@@ -236,6 +236,175 @@ async def test_run_dedupes_cumulative_chunks_across_rotating_message_ids():
     text_chunks = [e["chunk"] for e in events if e["type"] == "text"]
 
     assert text_chunks == ["成功获取。", "内容是 P1003。", "完毕。"], text_chunks
+
+
+def test_humanize_tool_echo_rewrites_write_file_json():
+    echo = '{"ok": true, "action": "create", "path": "D:\\\\ws\\\\3456.txt", "bytes": 2775}'
+    out = _humanize_tool_echo(echo, [echo], task="保存为3456.txt")
+    assert out.startswith("已保存到")
+    assert "3456.txt" in out
+    assert "2775 字节" in out
+    assert "{" not in out  # no raw JSON leaks
+
+
+def test_humanize_tool_echo_handles_mangled_windows_path_echo():
+    """The real bug: the model echoes a Windows path with SINGLE backslashes,
+    so its text is invalid JSON. We must still humanize it by matching against
+    the (valid) tool result we returned, not by parsing the model's text."""
+    import json as _json
+    bs = chr(92)
+    valid_result = _json.dumps(
+        {"ok": True, "action": "create",
+         "path": f"D:{bs}ws{bs}77777.txt", "bytes": 717},
+    )
+    # Model's echo: same blob but with the backslashes collapsed -> invalid JSON.
+    mangled_echo = valid_result.replace(bs + bs, bs)
+    with pytest.raises(_json.JSONDecodeError):
+        _json.loads(mangled_echo)  # confirm the precondition
+
+    out = _humanize_tool_echo(mangled_echo, [valid_result], task="保存为77777.txt")
+    assert out.startswith("已保存到")
+    assert "77777.txt" in out
+    assert "717 字节" in out
+    assert not out.lstrip().startswith("{")
+
+
+def test_humanize_tool_echo_english_when_task_not_cjk():
+    echo = '{"ok": true, "action": "update", "path": "/tmp/a.txt", "bytes": 10}'
+    out = _humanize_tool_echo(echo, [echo], task="save it to a.txt")
+    assert out == "Updated /tmp/a.txt (10 bytes)."
+
+
+def test_humanize_tool_echo_leaves_natural_answer_untouched():
+    answer = "已保存到 3456.txt，共 2775 字节。"
+    assert _humanize_tool_echo(answer, [], task="保存为3456.txt") == answer
+
+
+def test_humanize_tool_echo_leaves_unrelated_json_untouched():
+    # JSON the user explicitly asked for — not a tool echo, no write signature.
+    answer = '{"city": "Beijing", "temp": 21}'
+    assert _humanize_tool_echo(answer, [], task="return the weather as JSON") == answer
+
+
+def test_humanize_tool_echo_handles_trailing_characters():
+    # Regression: the model appends junk after the echoed JSON object (a stray
+    # period, "Done.", a code fence). The old endswith('}') check returned the
+    # raw text unchanged here, leaking JSON; the leading-object extraction now
+    # still recognises the echo and rewrites it.
+    echo = '{"ok": true, "action": "create", "path": "a.txt", "bytes": 12}'
+    for trailing in (".", "\n\nDone.", " ```"):
+        out = _humanize_tool_echo(echo + trailing, [echo], task="save it to a.txt")
+        assert out.startswith("Saved to"), repr(echo + trailing)
+        assert "{" not in out
+
+
+@pytest.mark.asyncio
+async def test_run_humanizes_write_file_json_echo_in_done():
+    """A model that ends the turn by pasting write_file's JSON return gets the
+    final answer rewritten into a natural confirmation (the web UI renders
+    done.text, so this is what the user sees)."""
+    saved = '{"ok": true, "action": "create", "path": "D:\\\\ws\\\\3456.txt", "bytes": 2775}'
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{"id": "1", "name": "write_file", "args": {"path": "3456.txt"}}],
+    )
+    tool_result_msg = ToolMessage(content=saved, tool_call_id="1", name="write_file")
+    # The model echoes the tool JSON verbatim as its "answer".
+    final_msg = AIMessage(content=saved)
+    agent = _FakeReactAgent(events=[
+        ("values", {"messages": [HumanMessage(content="保存为3456.txt"), tool_call_msg]}),
+        ("values", {"messages": [
+            HumanMessage(content="保存为3456.txt"), tool_call_msg, tool_result_msg, final_msg,
+        ]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [e async for e in loop.run("保存为3456.txt")]
+    done = [e for e in events if e["type"] == "done"]
+    assert done
+    assert done[-1]["text"].startswith("已保存到")
+    assert "3456.txt" in done[-1]["text"]
+    assert done[-1]["text"].lstrip()[0] != "{"
+
+
+@pytest.mark.asyncio
+async def test_run_withholds_streamed_json_echo_from_live_text():
+    """When the model STREAMS a tool-JSON echo token-by-token as its final
+    answer, none of it may reach the live `text` stream (CLI prints those
+    verbatim). Instead the humanized confirmation is the only text emitted."""
+    import json as _json
+    bs = chr(92)
+    valid = _json.dumps(
+        {"ok": True, "action": "create", "path": f"D:{bs}ws{bs}9.txt", "bytes": 42},
+    )
+    mangled = valid.replace(bs + bs, bs)  # model collapses \\ -> \
+
+    tool_call_msg = AIMessage(
+        content="", tool_calls=[{"id": "1", "name": "write_file", "args": {"path": "9.txt"}}],
+    )
+    tool_result_msg = ToolMessage(content=valid, tool_call_id="1", name="write_file")
+    final_msg = AIMessage(content=mangled, id="ans")
+
+    # Stream the echo in 3 content chunks (same id), like a real provider,
+    # then the values snapshot carrying the terminal content-only message.
+    third = len(mangled) // 3
+    c1 = AIMessage(content=mangled[:third], id="ans")
+    c2 = AIMessage(content=mangled[:2 * third], id="ans")  # cumulative chunks
+    c3 = AIMessage(content=mangled, id="ans")
+    agent = _FakeReactAgent(events=[
+        ("values", {"messages": [HumanMessage(content="保存为9.txt"), tool_call_msg]}),
+        ("values", {"messages": [
+            HumanMessage(content="保存为9.txt"), tool_call_msg, tool_result_msg]}),
+        ("messages", (c1, {})),
+        ("messages", (c2, {})),
+        ("messages", (c3, {})),
+        ("values", {"messages": [
+            HumanMessage(content="保存为9.txt"), tool_call_msg, tool_result_msg, final_msg]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [e async for e in loop.run("保存为9.txt")]
+    text_chunks = "".join(e["chunk"] for e in events if e["type"] == "text")
+    # No raw JSON leaked to the live stream.
+    assert "{" not in text_chunks and '"ok"' not in text_chunks, text_chunks
+    # The humanized confirmation WAS painted (so the CLI isn't left blank).
+    assert "已保存到" in text_chunks
+    done = [e for e in events if e["type"] == "done"][-1]
+    assert done["text"].startswith("已保存到")
+
+
+@pytest.mark.asyncio
+async def test_run_streams_json_answer_live_when_no_tool_was_called():
+    """A `{`-leading answer with NO preceding tool call cannot be a tool echo,
+    so it must stream live token-by-token (regression: the old check withheld
+    EVERY JSON-leading answer, breaking streaming for a JSON answer the user
+    legitimately asked for)."""
+    answer = '{"city": "Beijing", "temp": 21}'
+    third = len(answer) // 3
+    c1 = AIMessage(content=answer[:third], id="ans")
+    c2 = AIMessage(content=answer[:2 * third], id="ans")  # cumulative chunks
+    c3 = AIMessage(content=answer, id="ans")
+    final_msg = AIMessage(content=answer, id="ans")
+    agent = _FakeReactAgent(events=[
+        ("messages", (c1, {})),
+        ("messages", (c2, {})),
+        ("messages", (c3, {})),
+        ("values", {"messages": [HumanMessage(content="weather as JSON"), final_msg]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [e async for e in loop.run("weather as JSON")]
+    text_chunks = "".join(e["chunk"] for e in events if e["type"] == "text")
+    # The JSON answer streamed live (it was NOT withheld) and reassembles whole.
+    assert text_chunks == answer, text_chunks
+    done = [e for e in events if e["type"] == "done"][-1]
+    assert done["text"] == answer
 
 
 @pytest.mark.asyncio

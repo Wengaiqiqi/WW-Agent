@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import secrets
 import threading
 from pathlib import Path
@@ -19,6 +18,8 @@ from gateway.runner import (
     _CONCURRENCY_GUARD,
     _build_planner,
     _build_planner_context,
+    private_runtime_dir,
+    scoped_env,
 )
 from web import config
 
@@ -75,22 +76,17 @@ async def _capability_catalog() -> tuple[list[str], dict[str, dict]]:
     from orchestrator.router import CapabilityRouter
 
     snap_dir = Path(tempfile.mkdtemp(prefix="ww-catalog-"))
-    prev_runtime = os.environ.get("LANGCHAIN_AGENT_RUNTIME_DIR")
-    os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = str(snap_dir)
     host = MCPHost(hmac_key=secrets.token_urlsafe(32))
     router = CapabilityRouter()
     try:
-        await _bootstrap(host, router)
-        _CATALOG = {
-            "capabilities": list(router.all_capabilities()),
-            "tool_schemas": dict(router.describe_tools()),
-        }
+        with scoped_env({"LANGCHAIN_AGENT_RUNTIME_DIR": str(snap_dir)}):
+            await _bootstrap(host, router)
+            _CATALOG = {
+                "capabilities": list(router.all_capabilities()),
+                "tool_schemas": dict(router.describe_tools()),
+            }
     finally:
         await host.shutdown_all()
-        if prev_runtime is None:
-            os.environ.pop("LANGCHAIN_AGENT_RUNTIME_DIR", None)
-        else:
-            os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = prev_runtime
         shutil.rmtree(snap_dir, ignore_errors=True)
     return _CATALOG["capabilities"], _CATALOG["tool_schemas"]
 
@@ -124,13 +120,6 @@ def _user_workspace(user_id: str) -> Path:
     return ws
 
 
-def _set_or_clear(name: str, value: str | None) -> None:
-    if value is None:
-        os.environ.pop(name, None)
-    else:
-        os.environ[name] = value
-
-
 @contextlib.contextmanager
 def _web_turn_env(
     *, user_id: str, model_id: str,
@@ -138,30 +127,20 @@ def _web_turn_env(
 ) -> Iterator[Path]:
     """Set the per-turn env (memory user, forced workspace-write, per-user
     workspace root, selected model, and — for custom endpoints — base_url /
-    api_key / protocol) and restore the prior values on exit."""
-    keys = (
-        "LANGCHAIN_AGENT_MEMORY_USER",
-        "LANGCHAIN_AGENT_PERMISSION_MODE",
-        "LANGCHAIN_AGENT_WORKSPACE_ROOT",
-        "LANGCHAIN_AGENT_MODEL",
-        "LANGCHAIN_AGENT_BASE_URL",
-        "LANGCHAIN_AGENT_API_KEY",
-        "LANGCHAIN_AGENT_PROTOCOL",
-    )
-    prev = {k: os.environ.get(k) for k in keys}
+    api_key / protocol) and restore the prior values on exit. Delegates the
+    snapshot/restore to ``gateway.runner.scoped_env`` (shared with the gateway
+    turn path)."""
     ws = _user_workspace(user_id)
-    try:
-        _set_or_clear("LANGCHAIN_AGENT_MEMORY_USER", user_id or None)
-        _set_or_clear("LANGCHAIN_AGENT_PERMISSION_MODE", config.WEB_PERMISSION_MODE)
-        _set_or_clear("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(ws))
-        _set_or_clear("LANGCHAIN_AGENT_MODEL", model_id or None)
-        _set_or_clear("LANGCHAIN_AGENT_BASE_URL", base_url or None)
-        _set_or_clear("LANGCHAIN_AGENT_API_KEY", api_key or None)
-        _set_or_clear("LANGCHAIN_AGENT_PROTOCOL", protocol or None)
+    with scoped_env({
+        "LANGCHAIN_AGENT_MEMORY_USER": user_id or None,
+        "LANGCHAIN_AGENT_PERMISSION_MODE": config.WEB_PERMISSION_MODE,
+        "LANGCHAIN_AGENT_WORKSPACE_ROOT": str(ws),
+        "LANGCHAIN_AGENT_MODEL": model_id or None,
+        "LANGCHAIN_AGENT_BASE_URL": base_url or None,
+        "LANGCHAIN_AGENT_API_KEY": api_key or None,
+        "LANGCHAIN_AGENT_PROTOCOL": protocol or None,
+    }):
         yield ws
-    finally:
-        for k, v in prev.items():
-            _set_or_clear(k, v)
 
 
 async def dispatch_decision_stream(
@@ -433,12 +412,7 @@ async def _run_streaming_locked(
     *, trace_id: str, session_key: str, user_id: str, model_id: str,
     base_url: str = "", api_key: str = "", protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
-    import shutil
-
     from gateway import session_store
-
-    prev_runtime = os.environ.get("LANGCHAIN_AGENT_RUNTIME_DIR")
-    web_runtime = Path(".agent") / "runtime" / f"web-{os.getpid()}"
 
     hmac_key = secrets.token_urlsafe(32)
     # Lazily-created MCP host/router — only a capability turn pays the spawn.
@@ -459,8 +433,9 @@ async def _run_streaming_locked(
         return host, router
 
     final_text = ""
-    with _web_turn_env(user_id=user_id, model_id=model_id, base_url=base_url, api_key=api_key, protocol=protocol):
-        os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = str(web_runtime)
+    with _web_turn_env(user_id=user_id, model_id=model_id, base_url=base_url,
+                       api_key=api_key, protocol=protocol), \
+            private_runtime_dir("web"):
         try:
             history_context, full_context = _build_planner_context(session_key)
             # Build the planner from the cached static catalog — no spawn here.
@@ -494,8 +469,3 @@ async def _run_streaming_locked(
                 await host.shutdown_all()
             if session_key and final_text:
                 session_store.append(session_key, prompt, final_text)
-            if prev_runtime is None:
-                os.environ.pop("LANGCHAIN_AGENT_RUNTIME_DIR", None)
-            else:
-                os.environ["LANGCHAIN_AGENT_RUNTIME_DIR"] = prev_runtime
-            shutil.rmtree(web_runtime, ignore_errors=True)

@@ -23,6 +23,10 @@ from ._providers import (
 
 logger = logging.getLogger(__name__)
 
+# Wire protocols ``config._llm`` knows how to build a client for. Anything else
+# (a typo, an unsupported provider name) is rejected by the env override path.
+_KNOWN_PROTOCOLS = {"openai", "anthropic", "mock"}
+
 
 def load_active_config() -> ActiveConfig:
     """Resolve which model should be active, then apply per-turn env overrides.
@@ -76,7 +80,20 @@ def _apply_env_overrides(cfg: ActiveConfig) -> ActiveConfig:
     if base_url:
         cfg.base_url = base_url
     if protocol:
-        cfg.protocol = protocol
+        # Validate against the protocols ``config._llm`` actually understands.
+        # An unknown/typo value (e.g. "gemini", "openai ") would otherwise be
+        # accepted verbatim and silently fall through to the OpenAI client,
+        # surfacing as an opaque parse/4xx error only at invoke time. Reject it
+        # at config resolution with a clear message instead, leaving the
+        # resolved protocol untouched.
+        if protocol in _KNOWN_PROTOCOLS:
+            cfg.protocol = protocol
+        else:
+            logger.warning(
+                "Ignoring LANGCHAIN_AGENT_PROTOCOL=%r: unknown protocol "
+                "(expected one of %s). Keeping %r.",
+                protocol, sorted(_KNOWN_PROTOCOLS), cfg.protocol,
+            )
     return cfg
 
 

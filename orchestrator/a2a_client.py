@@ -17,7 +17,9 @@ log = logging.getLogger(__name__)
 
 def _load_peers() -> dict[str, str]:
     """Read {agent_id: url} from the runtime peers file written by the orchestrator."""
-    peers_file = Path(".agent/runtime/peers.json")
+    from agent_paths import runtime_dir
+
+    peers_file = runtime_dir() / "peers.json"
     if not peers_file.exists():
         raise RuntimeError(f"peers file not found: {peers_file}")
     return json.loads(peers_file.read_text(encoding="utf-8"))

@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Callable
 from pydantic import BaseModel, Field, ValidationError
 
 from orchestrator.delegation import delegate_via_a2a
+from orchestrator.fast_route import fast_route
 from orchestrator.graph import build_graph
 from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
@@ -478,6 +479,20 @@ class TurnRunner:
     async def run(self, user_input: str, *, trace_id: str) -> TurnResult:
         state = {"user_input": user_input, "trace_id": trace_id}
 
+        # Fast-route obvious tool-agent work (files / URLs / commands / repo
+        # review) straight to ``tool.task``, skipping the planner LLM
+        # round-trip entirely — the same heuristic the interactive REPL uses.
+        # Gated on a real ``LLMPlanner``: there's no round-trip to save with
+        # the mock/stub planner, and tests inject lightweight planners they
+        # expect to actually run, so leave those paths alone.
+        decision: dict | None = None
+        if isinstance(self.planner, LLMPlanner):
+            decision = fast_route(
+                user_input,
+                capabilities=self.router.all_capabilities(),
+                mode=self.permission_mode_provider(),
+            )
+
         # Run the planner once. ``tool.task`` / ``skill.<slug>`` are NOT MCP
         # tools — they must stream over A2A. The LangGraph/MCP path below only
         # handles single-shot MCP capabilities (calculator, read_file, …). The
@@ -490,15 +505,16 @@ class TurnRunner:
         # SSE writer would all stall. Offload to a worker thread; if the
         # planner is a coroutine function it returns the coroutine
         # immediately (no blocking) and we await it on the loop.
-        try:
-            raw = await asyncio.to_thread(self.planner, state)
-            if asyncio.iscoroutine(raw):
-                raw = await raw
-            decision = dict(raw or {})
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return TurnResult(error=str(exc))
+        if decision is None:
+            try:
+                raw = await asyncio.to_thread(self.planner, state)
+                if asyncio.iscoroutine(raw):
+                    raw = await raw
+                decision = dict(raw or {})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return TurnResult(error=str(exc))
 
         capability = (decision.get("capability") or "").strip()
         if capability == "tool.task" or capability.startswith("skill."):

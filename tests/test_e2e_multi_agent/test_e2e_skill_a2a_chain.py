@@ -22,6 +22,7 @@ def test_skill_chain_via_a2a(tmp_path):
     env = os.environ.copy()
     env["LANGCHAIN_AGENT_MODEL"] = "mock/mock-default"
     env["LANGCHAIN_AGENT_PERMISSION_MODE"] = "workspace-write"
+    env["PYTHONIOENCODING"] = "utf-8"  # child emits UTF-8 (we read it as UTF-8)
 
     # Orchestrator routes to skill.baidu-ecommerce-search (one of the real
     # registered skills). Skill name doesn't matter — only its presence in
@@ -39,7 +40,7 @@ def test_skill_chain_via_a2a(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, "cli.py", "prompt", "do the demo"],
-        env=env, capture_output=True, text=True, timeout=90,
+        env=env, capture_output=True, text=True, encoding="utf-8", timeout=90,
     )
     assert proc.returncode == 0, (
         f"stderr:\n{proc.stderr}\n---\nstdout:\n{proc.stdout}"

@@ -23,6 +23,28 @@ class ACPError(Exception):
     pass
 
 
+def _permission_outcome(options: list[dict], auto_approve: bool) -> dict:
+    """Decide the response to a ``session/request_permission`` request.
+
+    With auto-approve, pick an "allow"-flavoured option if offered, else the
+    first option. Crucially, only ever select an ``optionId`` the server
+    actually offered — if there are no options (or the first lacks an id) we
+    CANCEL rather than fabricate the literal ``"allow"`` (an unknown optionId a
+    conformant server may reject, stalling the turn). Without auto-approve we
+    always cancel.
+    """
+    if not auto_approve:
+        return {"outcome": "cancelled"}
+    allow = next(
+        (o for o in options if "allow" in str(o.get("optionId", "")).lower()), None
+    )
+    chosen = allow or (options[0] if options else None)
+    opt_id = chosen.get("optionId") if chosen else None
+    if opt_id:
+        return {"outcome": "selected", "optionId": opt_id}
+    return {"outcome": "cancelled"}
+
+
 def _translate_update(update: dict) -> dict | None:
     """Translate one ACP `session/update` payload into an A2A SSE event.
 
@@ -203,15 +225,7 @@ class HermesACPClient:
         if mid is None:
             return
         if method == "session/request_permission":
-            outcome: dict
-            if self._auto_approve:
-                options = params.get("options") or []
-                allow = next((o for o in options
-                              if "allow" in str(o.get("optionId", "")).lower()), None)
-                opt_id = (allow or (options[0] if options else {})).get("optionId", "allow")
-                outcome = {"outcome": "selected", "optionId": opt_id}
-            else:
-                outcome = {"outcome": "cancelled"}
+            outcome = _permission_outcome(params.get("options") or [], self._auto_approve)
             self._send({"jsonrpc": "2.0", "id": mid, "result": {"outcome": outcome}})
         else:
             # We advertise no fs capabilities; refuse anything else politely.
@@ -287,8 +301,14 @@ class HermesACPClient:
                         break
                     yield ev
             finally:
-                self._running[session_id] = False
+                # Drop this run's per-session scratch so the dicts don't grow
+                # one stale entry per turn for the life of the bridge. The lock
+                # (_lock_for) and _known_sessions are kept — they track the live
+                # ACP session for reuse/serialisation, not per-run state.
+                self._running.pop(session_id, None)
                 self._session_queues.pop(session_id, None)
+                self._session_text.pop(session_id, None)
+                self._session_prompt.pop(session_id, None)
                 # If the caller cancelled (e.g. browser closed the SSE) the
                 # drive task may still be awaiting session/prompt — without
                 # cancelling it we hold the per-session lock until Hermes

@@ -6,7 +6,9 @@ import httpx
 
 
 def _load_peers() -> dict[str, str]:
-    p = Path(".agent/runtime/peers.json")
+    from agent_paths import runtime_dir
+
+    p = runtime_dir() / "peers.json"
     if not p.exists():
         return {}
     return json.loads(p.read_text(encoding="utf-8"))

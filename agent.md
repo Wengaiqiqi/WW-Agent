@@ -31,7 +31,7 @@ Key modules:
 - `tool/` — tool implementations (one source of truth — both legacy and
   multi-agent surface the same underlying functions).
 - `skills/<slug>/SKILL.md` — domain workflow definitions + `_meta.json`.
-- `tests/` — 45 test files; e2e under `tests/test_e2e_multi_agent/`
+- `tests/` — 77 test files; e2e under `tests/test_e2e_multi_agent/`
   marker `e2e`.
 
 ## Running
@@ -73,9 +73,16 @@ python cli.py --single prompt "/tools"
 Test suite:
 
 ```
+pip install -e '.[dev]'      # one-time: installs pytest, trustme, etc.
 pytest -k "not e2e"         # fast: ~few seconds, no subprocess spawning
 pytest                       # full: includes subprocess e2e tests
 ```
+
+The `LangChain` conda env does NOT ship the `[dev]` deps. In particular the
+comm-agent TLS tests import `trustme`; it's imported lazily via
+`pytest.importorskip` so a missing `trustme` skips those tests instead of
+aborting the whole collection — but you still want it installed for full
+coverage (`pip install trustme` or `pip install -e '.[dev]'`).
 
 ## Working agreements
 

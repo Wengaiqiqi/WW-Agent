@@ -10,7 +10,10 @@ import pytest
 
 from agents.comm_agent.peer_registry import Peer, PeerRegistry
 from tests.test_comm_agent.conftest import cert_fingerprint_sha256, running_peer
-import trustme
+
+# Dev-only dep; importorskip keeps a missing trustme from breaking collection
+# of the whole e2e module (and, via -k filters, the rest of the session).
+trustme = pytest.importorskip("trustme")
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,40 @@ async def test_streaming_conversational_response_renders_text(tmp_path):
     assert host.calls == []
 
 
+def test_tool_line_active_pulses_without_relying_on_ansi_blink():
+    """The running bullet must self-animate, not lean on the `blink` SGR that
+    Windows Terminal / VS Code drop. ``active=True`` returns a time-driven
+    renderable whose bullet style changes between refreshes."""
+    from rich.console import Console
+    from orchestrator.repl_controller import (
+        _build_tool_line, _PulsingToolLine, _tool_line_text,
+    )
+
+    active = _build_tool_line("web_extract", {"url": "https://x"}, active=True)
+    assert isinstance(active, _PulsingToolLine)
+
+    console = Console(file=io.StringIO(), force_terminal=True, width=80)
+    # Render at two clock phases ~0.5s apart; the bullet style must differ so
+    # the dot visibly throbs even where ANSI blink is ignored.
+    import orchestrator.repl_controller as rc
+    seen = set()
+    real_monotonic = rc.time.monotonic
+    try:
+        for t in (0.0, 0.5):
+            rc.time.monotonic = lambda _t=t: _t
+            with console.capture() as cap:
+                console.print(active)
+            seen.add(cap.get())
+    finally:
+        rc.time.monotonic = real_monotonic
+    assert len(seen) == 2, "pulsing bullet did not change between refreshes"
+
+    # Frozen (result arrived) is a plain static line, not the pulsing wrapper.
+    frozen = _build_tool_line("web_extract", {"url": "https://x"}, active=False)
+    assert not isinstance(frozen, _PulsingToolLine)
+    assert "web_extract" in frozen.plain
+
+
 def test_fast_route_obvious_project_work_skips_planner(tmp_path):
     controller, ui, state, host, router, buf = _make_controller(tmp_path)
     plan = controller._fast_route("review整个项目 and optimize Loading")
@@ -128,6 +162,40 @@ def test_fast_route_obvious_project_work_skips_planner(tmp_path):
 def test_fast_route_leaves_plain_chat_for_planner(tmp_path):
     controller, ui, state, host, router, buf = _make_controller(tmp_path)
     assert controller._fast_route("hello there") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_capability_turn_invokes_planner_only_once(tmp_path):
+    """Regression: the REPL planned a turn, then handed the LIVE planner to
+    TurnRunner for an MCP capability — which re-ran the planner, a second full
+    LLM round-trip. The decision must be pinned so the planner runs exactly
+    once."""
+    controller, ui, state, host, router, buf = _make_controller(tmp_path)
+
+    class _CountingPlanner:
+        def __init__(self, decision):
+            self._decision = decision
+            self.calls = 0
+
+        async def astream_plan(self, _plan_input):
+            self.calls += 1
+            yield {"type": "decision", "decision": dict(self._decision)}
+
+        def __call__(self, _state):
+            # Pre-fix, TurnRunner re-invoked the planner here (a second call).
+            self.calls += 1
+            return dict(self._decision)
+
+    planner = _CountingPlanner({"capability": "read_file",
+                                "arguments": {"path": "README.md"}})
+    controller._planner = planner
+
+    result = await controller._execute_turn("please open the readme")
+
+    assert result == LoopAction.CONTINUE
+    assert planner.calls == 1, "planner must be consulted exactly once per turn"
+    # The MCP tool actually ran with the pinned decision.
+    assert host.calls and host.calls[0][1] == "read_file"
 
 
 @pytest.mark.asyncio

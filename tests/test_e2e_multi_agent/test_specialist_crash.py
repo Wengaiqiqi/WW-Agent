@@ -11,6 +11,7 @@ def test_kill_tool_agent_does_not_crash_orchestrator(tmp_path):
     """Spawn orchestrator, kill tool-agent mid-flight, verify orchestrator exits cleanly with error."""
     env = os.environ.copy()
     env["LANGCHAIN_AGENT_MODEL"] = "mock/mock-default"
+    env["PYTHONIOENCODING"] = "utf-8"  # child emits UTF-8 (we read it as UTF-8)
 
     # Start REPL (no prompt) so the orchestrator is alive long enough to kill its child.
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
@@ -18,7 +19,7 @@ def test_kill_tool_agent_does_not_crash_orchestrator(tmp_path):
         [sys.executable, "cli.py"],
         env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8",
         creationflags=creationflags,
     )
     try:

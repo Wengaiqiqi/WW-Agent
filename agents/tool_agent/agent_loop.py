@@ -6,6 +6,7 @@ yielding typed event dicts the orchestrator's TUI consumes.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import warnings
 from typing import Any, AsyncIterator, Callable, TypedDict
@@ -320,6 +321,13 @@ class ToolAgentLoop:
         # surfaced and skip them on later snapshots.
         seen_tool_call_ids: set[str] = set()
         seen_tool_result_ids: set[str] = set()
+        # Raw content of every tool result surfaced this turn. Used to catch the
+        # case where a smaller model ends the turn by pasting a tool's JSON
+        # return verbatim as its "answer" (write_file's {ok, action, path, bytes}
+        # is the classic culprit) — we rewrite that into a natural confirmation
+        # so the user sees "已保存到 …" instead of raw JSON. See
+        # ``_humanize_tool_echo``.
+        tool_result_contents: list[str] = []
         # Per-AIMessage stream-progress tracker. Used to detect and collapse
         # two kinds of duplicate text events:
         #   1. Some providers (DeepSeek's flash variants, some local llama
@@ -388,7 +396,8 @@ class ToolAgentLoop:
                         stream_buffer = token
                         msg_id = getattr(chunk, "id", None) or "__no_id__"
                         seen_per_message[msg_id] = token
-                        yield {"type": "text", "chunk": delta}
+                        if not _should_withhold_json(seen_per_message[msg_id], tool_result_contents):
+                            yield {"type": "text", "chunk": delta}
                         continue
 
                     # Per-message dedup. See `seen_per_message` comment above for
@@ -406,12 +415,14 @@ class ToolAgentLoop:
                         delta = token[len(prev):]
                         seen_per_message[msg_id] = token
                         stream_buffer += delta
-                        yield {"type": "text", "chunk": delta}
+                        if not _should_withhold_json(seen_per_message[msg_id], tool_result_contents):
+                            yield {"type": "text", "chunk": delta}
                         continue
                     # Standard delta-style chunk.
                     seen_per_message[msg_id] = prev + token
                     stream_buffer += token
-                    yield {"type": "text", "chunk": token}
+                    if not _should_withhold_json(seen_per_message[msg_id], tool_result_contents):
+                        yield {"type": "text", "chunk": token}
 
                 elif mode == "values":
                     messages = payload.get("messages", [])
@@ -442,6 +453,7 @@ class ToolAgentLoop:
                                 continue
                             seen_tool_result_ids.add(result_id)
                             content = str(getattr(msg, "content", "") or "")
+                            tool_result_contents.append(content)
                             preview = _truncate_preview(content)
                             yield {
                                 "type": "tool_result",
@@ -461,7 +473,13 @@ class ToolAgentLoop:
             #      diagnostic so the user knows the turn ended inconclusively.
             #   3. Nothing captured → propagate as error (orchestrator retries).
             if terminal_answer_seen:
-                yield {"type": "done", "text": final_text, "tool_calls": tool_calls_count}
+                answer = _humanize_tool_echo(final_text, tool_result_contents, task)
+                if answer and _should_withhold_json(final_text, tool_result_contents):
+                    # The raw JSON answer was withheld from the live stream;
+                    # paint the humanized version so the CLI (text events only)
+                    # isn't left blank.
+                    yield {"type": "text", "chunk": answer}
+                yield {"type": "done", "text": answer, "tool_calls": tool_calls_count}
                 return
             partial = stream_buffer.strip()
             if partial:
@@ -491,7 +509,13 @@ class ToolAgentLoop:
         #      so the user sees it, then close with done.
         #   3. Nothing at all → stream the diagnostic alone, then done.
         if terminal_answer_seen:
-            yield {"type": "done", "text": final_text, "tool_calls": tool_calls_count}
+            answer = _humanize_tool_echo(final_text, tool_result_contents, task)
+            if answer and _should_withhold_json(final_text, tool_result_contents):
+                # The raw JSON answer was withheld from the live stream; paint
+                # the humanized version so the CLI (text events only) isn't
+                # left blank.
+                yield {"type": "text", "chunk": answer}
+            yield {"type": "done", "text": answer, "tool_calls": tool_calls_count}
             return
 
         partial = stream_buffer.strip()
@@ -585,6 +609,140 @@ def _no_answer_diagnostic(tool_calls_count: int, *, reason: str) -> str:
         f"content. Try a different URL, ask via `web_search` keywords, or "
         f"rephrase the question.)_"
     )
+
+
+def _has_cjk(text: str) -> bool:
+    return any("一" <= ch <= "鿿" for ch in (text or ""))
+
+
+def _is_json_blob_start(text: str) -> bool:
+    """True if ``text`` (a message's accumulated content) opens with a bare
+    JSON object. Natural-language answers and ```fenced``` code never start with
+    a bare ``{``."""
+    return text.lstrip()[:1] == "{"
+
+
+def _should_withhold_json(text: str, tool_result_contents: list[str]) -> bool:
+    """Whether a ``{``-leading streamed answer should be withheld from the live
+    stream (then humanized at done).
+
+    Withhold ONLY when at least one tool result was produced this turn — a
+    ``{``-leading answer is then plausibly the model echoing a tool's JSON
+    return, which we want to suppress. A ``{``-leading answer with NO preceding
+    tool calls cannot be an echo, so it streams live token-by-token, preserving
+    the streaming UX for a JSON answer the user legitimately asked for (the old
+    check withheld every JSON answer unconditionally)."""
+    return bool(tool_result_contents) and _is_json_blob_start(text)
+
+
+def _extract_leading_json_object(text: str) -> str | None:
+    """Return the leading balanced-brace ``{...}`` substring of ``text``, or
+    None if it doesn't start with one. Used to recognise a tool-JSON echo even
+    when the model appends trailing characters (a period, "Done.", a stray code
+    fence) that would defeat a plain ``endswith('}')`` check. Brace matching
+    ignores braces inside JSON strings."""
+    s = (text or "").strip()
+    if not s.startswith("{"):
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[: i + 1]
+    return None
+
+
+def _confirm_save(data: dict, task: str) -> str:
+    """Natural-language confirmation built from a write_file tool result."""
+    cjk = _has_cjk(task)
+    path = data.get("path")
+    nbytes = data.get("bytes")
+    updated = data.get("action") == "update"
+    if cjk:
+        size = f"（{nbytes} 字节）" if isinstance(nbytes, int) else ""
+        return f"{'已更新' if updated else '已保存到'} {path}{size}。"
+    size = f" ({nbytes} bytes)" if isinstance(nbytes, int) else ""
+    return f"{'Updated' if updated else 'Saved to'} {path}{size}."
+
+
+def _humanize_tool_echo(
+    final_text: str, tool_result_contents: list[str], task: str
+) -> str:
+    """Rewrite a final answer that is just a tool's raw JSON return.
+
+    Despite the system prompt's "never repeat tool JSON" rule and the terse
+    ``write_file`` return, smaller models still occasionally end a turn by
+    pasting a tool result verbatim (e.g. ``{"ok": true, "action": "create",
+    "path": "...", "bytes": 2775}``), so the user sees raw JSON instead of a
+    confirmation. When the final answer is such an echo, turn it into a natural
+    one-liner; otherwise return it unchanged.
+
+    Robust to mangled echoes: a model re-emitting a Windows path almost always
+    collapses ``\\\\`` to ``\\``, which makes the echo invalid JSON — so we do
+    NOT rely on parsing the model's text. Instead we match it against the tool
+    results we actually returned this turn (those are always valid JSON, we
+    produced them) under a backslash/whitespace-insensitive normalization, and
+    build the confirmation from that trustworthy copy.
+
+    Conservative: only fires when the final answer is a ``{...}`` blob that
+    matches a write_file result we returned. A legitimate JSON answer the user
+    asked for matches no tool result and is left intact.
+    """
+    # Extract the leading ``{...}`` object. Tolerates trailing characters the
+    # model sometimes appends after the echo (a period, "Done.", a code fence) —
+    # the old ``endswith('}')`` check returned the raw text unchanged in those
+    # cases, leaking JSON to the user.
+    candidate = _extract_leading_json_object(final_text)
+    if candidate is None:
+        return final_text  # natural-language answer — leave it alone
+
+    def _norm(s: str) -> str:
+        # Drop whitespace AND backslashes so a mangled-escape Windows-path echo
+        # still equals the valid tool-result JSON it was copied from.
+        return "".join(s.split()).replace("\\", "")
+
+    norm_final = _norm(candidate)
+
+    for tr in tool_result_contents:
+        try:
+            data = json.loads(tr)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(data, dict) or not data.get("path"):
+            continue
+        # Echo iff the blob equals a result we returned, verbatim modulo
+        # escaping/whitespace. ``_norm`` strips ALL backslashes from both
+        # sides, so a model that collapsed ``\\`` to ``\`` while echoing a
+        # Windows path still matches — no need for a looser filename-substring
+        # check, which could misfire on a JSON answer the user actually asked
+        # for.
+        if _norm(tr) == norm_final:
+            return _confirm_save(data, task)
+
+    # No tool result to lean on, but the blob itself is a clean write signature.
+    try:
+        data = json.loads(candidate)
+        if isinstance(data, dict) and "ok" in data and "path" in data:
+            return _confirm_save(data, task)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    return final_text
 
 
 def _truncate_preview(content: str, max_len: int = 200) -> str:

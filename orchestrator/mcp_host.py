@@ -5,11 +5,38 @@ import sys
 import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from orchestrator.registry import Card
 
 log = logging.getLogger(__name__)
+
+
+def unwrap_tool_result(result: Any) -> tuple[bool, str]:
+    """Normalize a ``call_tool`` result into ``(is_error, text)``.
+
+    ``call_tool`` may return either an MCP SDK ``CallToolResult`` object
+    (attribute access) or a plain dict host-level error envelope (subscript
+    access) when the specialist is unavailable/crashed. Single source of truth
+    shared by the REPL command handler and the gateway slash commands."""
+    try:
+        # Object path (MCP SDK CallToolResult)
+        is_error = bool(getattr(result, "isError", False))
+        content = getattr(result, "content", None)
+        if content and hasattr(content[0], "text"):
+            return is_error, content[0].text
+    except (IndexError, TypeError, AttributeError):
+        pass
+    try:
+        # Dict path (host-level error envelope)
+        is_error = bool(result.get("isError", False))
+        content = result.get("content", [])
+        if content:
+            return is_error, content[0].get("text", "")
+    except (AttributeError, IndexError, TypeError):
+        pass
+    return True, f"unexpected call_tool result: {type(result).__name__}"
 
 
 @dataclass
@@ -142,31 +169,48 @@ class MCPHost:
         )
 
         stack = AsyncExitStack()
-        read, write = await stack.enter_async_context(stdio_client(params))
-        session = await stack.enter_async_context(ClientSession(read, write))
-        init_result = await session.initialize()
+        # The handle (and therefore the stack) is only registered in
+        # ``self._clients`` once spawn fully succeeds. If anything below raises
+        # first — a failed ``initialize`` handshake, a cancelled spawn — the
+        # half-started stdio subprocess would otherwise leak: ``shutdown_all``
+        # only reaps handles in ``_clients``, which we never reached. Closing
+        # the stack here drives the stdio_client teardown so the child gets EOF
+        # and exits. Matters more now that bootstrap spawns concurrently: one
+        # required failure aborts the gather while siblings are still starting.
+        try:
+            read, write = await stack.enter_async_context(stdio_client(params))
+            session = await stack.enter_async_context(ClientSession(read, write))
+            init_result = await session.initialize()
 
-        # Read A2A URL sidecar file written by the specialist at startup.
-        from agent_paths import runtime_dir
-        a2a_url = None
-        url_file = runtime_dir() / f"{card.id}.a2a-url"
-        # Poll for up to 5 seconds. Tool-agent imports langchain + langgraph
-        # before binding its A2A port; on a cold pip cache or slow disk the
-        # import chain can take 3+ seconds, well past the previous 1s budget.
-        # Missing the URL silently demoted A2A streaming to "specialist
-        # unreachable" on slow machines — better to wait a bit and let the
-        # subprocess catch up.
-        for _ in range(100):  # 5 seconds at 50ms ticks
-            if url_file.exists():
-                a2a_url = url_file.read_text(encoding="utf-8").strip()
-                break
-            await asyncio.sleep(0.05)
-        if a2a_url is None:
-            log.warning(
-                "%s did not write its A2A URL within 5s; streaming "
-                "delegation will fail until the file appears.",
-                card.id,
-            )
+            # Read A2A URL sidecar file written by the specialist at startup.
+            from agent_paths import runtime_dir
+            a2a_url = None
+            url_file = runtime_dir() / f"{card.id}.a2a-url"
+            # Poll for up to 5 seconds. Tool-agent imports langchain + langgraph
+            # before binding its A2A port; on a cold pip cache or slow disk the
+            # import chain can take 3+ seconds, well past the previous 1s budget.
+            # Missing the URL silently demoted A2A streaming to "specialist
+            # unreachable" on slow machines — better to wait a bit and let the
+            # subprocess catch up.
+            for _ in range(100):  # 5 seconds at 50ms ticks
+                if url_file.exists():
+                    a2a_url = url_file.read_text(encoding="utf-8").strip()
+                    break
+                await asyncio.sleep(0.05)
+            if a2a_url is None:
+                log.warning(
+                    "%s did not write its A2A URL within 5s; streaming "
+                    "delegation will fail until the file appears.",
+                    card.id,
+                )
+        except BaseException:
+            # Best-effort cleanup; never let a teardown error (including the
+            # Windows anyio cancel-scope wart) mask the original failure.
+            try:
+                await stack.aclose()
+            except BaseException:
+                pass
+            raise
 
         self._clients[card.id] = _ClientHandle(
             card=card, session=session, stack=stack, a2a_url=a2a_url,

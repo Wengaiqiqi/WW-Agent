@@ -159,6 +159,142 @@ async def test_turn_runner_synthesizes_tool_result():
 
 
 @pytest.mark.asyncio
+async def test_turn_runner_delegates_tool_task_via_a2a():
+    """tool.task must stream through A2A delegation, NOT the MCP host path.
+
+    Regression guard for the one-shot ``cli.py prompt`` bug where tool.task
+    hit tool-agent's MCP server (which has no such tool) and failed with
+    ``unknown tool: tool.task``.
+    """
+    router = CapabilityRouter()
+    router.register("tool-agent", ["tool.task"])
+    host = _FakeHost()  # must NOT be touched for tool.task
+
+    async def fake_delegate(*, peer_id, task, meta, context=""):
+        assert peer_id == "tool-agent"
+        assert task == "say hi"
+        assert "authz_grant" in meta
+        yield {"type": "text", "chunk": "hello "}
+        yield {"type": "text", "chunk": "world"}
+        yield {"type": "done", "text": "hello world"}
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=lambda state: {"capability": "tool.task", "arguments": {"task": "say hi"}},
+        delegate=fake_delegate,
+    )
+
+    result = await runner.run("say hi", trace_id="t1")
+
+    assert result.error is None
+    assert result.capability == "tool.task"
+    assert result.owner == "tool-agent"
+    assert result.text == "hello world"
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_turn_runner_delegates_skill_via_a2a():
+    router = CapabilityRouter()
+    router.register("skill-agent", ["skill.demo"])
+    host = _FakeHost()
+
+    captured: dict = {}
+
+    async def fake_delegate(*, peer_id, task, meta, context=""):
+        captured["peer_id"] = peer_id
+        captured["meta"] = meta
+        yield {"type": "done", "text": "skill done"}
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=lambda state: {"capability": "skill.demo", "arguments": {"q": "x"}},
+        delegate=fake_delegate,
+    )
+
+    result = await runner.run("do demo", trace_id="t1")
+
+    assert result.error is None
+    assert result.capability == "skill.demo"
+    assert result.text == "skill done"
+    assert captured["peer_id"] == "skill-agent"
+    assert captured["meta"].get("skill_slug") == "demo"
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_turn_runner_fast_routes_obvious_tool_task_without_planner_llm():
+    """An obvious file/command request skips the planner LLM round-trip.
+
+    With a real ``LLMPlanner``, the one-shot path should recognize
+    "read README.md" as tool-agent work and delegate over A2A directly —
+    never calling ``llm.invoke``.
+    """
+    router = CapabilityRouter()
+    router.register("tool-agent", ["tool.task"])
+    host = _FakeHost()
+    llm = _FakeLLM('{"capability": "", "response": "should not be used"}')
+    planner = LLMPlanner(llm=llm, available_capabilities=router.all_capabilities())
+
+    captured: dict = {}
+
+    async def fake_delegate(*, peer_id, task, meta, context=""):
+        captured["task"] = task
+        yield {"type": "done", "text": "done via fast route"}
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=planner,
+        delegate=fake_delegate,
+    )
+
+    result = await runner.run("read README.md", trace_id="t1")
+
+    assert result.error is None
+    assert result.capability == "tool.task"
+    assert result.text == "done via fast route"
+    assert captured["task"] == "read README.md"
+    # The planner LLM must NOT have been consulted.
+    assert llm.messages is None
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_turn_runner_falls_through_to_planner_for_chat():
+    """Plain chat does not fast-route — the LLM planner still runs."""
+    router = CapabilityRouter()
+    router.register("tool-agent", ["tool.task"])
+    host = _FakeHost()
+    llm = _FakeLLM('{"capability": "", "response": "你好！"}')
+    planner = LLMPlanner(llm=llm, available_capabilities=router.all_capabilities())
+
+    runner = TurnRunner(
+        host=host,
+        router=router,
+        hmac_key="secret",
+        permission_mode_provider=lambda: "workspace-write",
+        planner=planner,
+    )
+
+    result = await runner.run("hello there", trace_id="t1")
+
+    assert result.error is None
+    assert result.capability == ""
+    assert "你好" in result.text
+    # Plain chat fell through to the planner — the LLM was consulted.
+    assert llm.messages is not None
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_once_emits_orchestrator_error_for_turn_error():
     router = CapabilityRouter()
     router.register("tool-agent", ["read_file"])

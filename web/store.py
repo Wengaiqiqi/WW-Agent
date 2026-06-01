@@ -56,6 +56,10 @@ def _now() -> int:
 
 def init_db(db_path: str) -> None:
     with _connect(db_path) as conn:
+        # WAL persists on the db file (set once): readers don't block the writer
+        # and commits skip the rollback-journal fsync, so the several short-lived
+        # connections a single chat turn opens are much cheaper under load.
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (

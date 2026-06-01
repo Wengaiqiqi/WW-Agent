@@ -185,7 +185,25 @@ def grep_search_files(
     if multiline:
         flags |= re.DOTALL
     regex = re.compile(pattern, flags)
-    files = [base] if base.is_file() else [item for item in base.rglob("*") if item.is_file()]
+
+    # ``rglob`` transparently follows symlinks / Windows junctions, so a link
+    # inside the workspace pointing outside it would otherwise let grep read
+    # (and disclose) files beyond the sandbox. Resolve every candidate and keep
+    # only those still under the workspace root — same boundary the read/write
+    # wrappers enforce via ``resolve_workspace_path``.
+    root = workspace_root()
+
+    def _within_root(item: Path) -> bool:
+        try:
+            item.resolve(strict=False).relative_to(root)
+            return True
+        except (ValueError, OSError):
+            return False
+
+    if base.is_file():
+        files = [base]
+    else:
+        files = [item for item in base.rglob("*") if item.is_file() and _within_root(item)]
     if glob_pattern:
         files = [item for item in files if item.match(glob_pattern)]
 

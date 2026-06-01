@@ -12,10 +12,12 @@ def test_legacy_mode_does_not_spawn_specialists(tmp_path):
     env = os.environ.copy()
     env["LANGCHAIN_AGENT_MODEL"] = "mock/mock-default"
     env["MOCK_API_KEY"] = "x"
+    env["PYTHONIOENCODING"] = "utf-8"  # child emits UTF-8 (we read it as UTF-8)
 
     proc = subprocess.Popen(
         [sys.executable, "cli.py", "--single", "prompt", "hello"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8",
     )
 
     seen_specialist = False

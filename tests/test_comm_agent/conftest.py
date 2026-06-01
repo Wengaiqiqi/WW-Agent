@@ -9,17 +9,26 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 import pytest
-import trustme
 import uvicorn
 from cryptography.hazmat.primitives import hashes
 from cryptography.x509 import load_pem_x509_certificate
+
+# ``trustme`` is a *dev-only* dependency (declared in pyproject ``[dev]``).
+# Import it lazily inside the fixtures via ``importorskip`` rather than at
+# module top level: a bare top-level ``import trustme`` here raises during
+# conftest collection, which pytest treats as a FATAL error that aborts the
+# ENTIRE session (every test, not just this directory). Skipping inside the
+# fixture degrades gracefully — the comm-agent TLS tests skip, the rest run.
 
 from agents.comm_agent.a2a_protocol import build_app
 from agents.comm_agent.agent_card import build_self_card
 
 
 @pytest.fixture
-def tls_ca() -> trustme.CA:
+def tls_ca() -> "trustme.CA":
+    trustme = pytest.importorskip(
+        "trustme", reason="comm-agent TLS tests need trustme (pip install -e '.[dev]')"
+    )
     return trustme.CA()
 
 

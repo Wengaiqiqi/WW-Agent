@@ -190,7 +190,10 @@ def test_static_assets_revalidate(client):
     assert client.get("/static/app.js").headers.get("cache-control") == "no-cache"
 
 
-def test_endpoint_routes_crud_and_no_key_leak(client):
+def test_endpoint_routes_crud_and_no_key_leak(client, monkeypatch):
+    # Placeholder host doesn't resolve; bypass the SSRF guard for this CRUD test
+    # (a dedicated test below covers the guard rejecting private hosts).
+    monkeypatch.setenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", "1")
     _register(client, "ned")
     r = client.post("/api/endpoints", json={
         "label": "My LLM", "base_url": "https://x.test/v1",
@@ -203,6 +206,21 @@ def test_endpoint_routes_crud_and_no_key_leak(client):
     assert listed[0]["id"] == eid and "api_key" not in listed[0]
     assert client.delete(f"/api/endpoints/{eid}").status_code == 200
     assert client.get("/api/endpoints").json() == []
+
+
+def test_endpoint_create_rejects_private_base_url(client):
+    # SSRF guard: an authenticated user must not be able to point the server's
+    # LLM client at loopback / link-local / cloud-metadata addresses.
+    _register(client, "mallory")
+    for bad in ("http://127.0.0.1:11434/v1",
+                "http://169.254.169.254/latest/meta-data/",
+                "http://[::1]:8000/v1"):
+        r = client.post("/api/endpoints", json={
+            "label": "evil", "base_url": bad,
+            "api_key": "k", "model": "m", "protocol": "openai",
+        })
+        assert r.status_code == 400, bad
+        assert "not allowed" in r.json()["detail"]
 
 
 def test_endpoint_create_validates(client):
@@ -220,7 +238,8 @@ def test_endpoints_require_auth(client):
     assert client.get("/api/endpoints").status_code == 401
 
 
-def test_cannot_delete_other_users_endpoint(db_path, web_secret):
+def test_cannot_delete_other_users_endpoint(db_path, web_secret, monkeypatch):
+    monkeypatch.setenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", "1")
     store.init_db(db_path)
 
     async def fake_bridge(prompt, **kw):
@@ -236,12 +255,14 @@ def test_cannot_delete_other_users_endpoint(db_path, web_secret):
     assert bob.delete(f"/api/endpoints/{eid}").status_code == 404
 
 
-def test_chat_with_endpoint_id_routes_endpoint_fields():
+def test_chat_with_endpoint_id_routes_endpoint_fields(
+    db_path, web_secret, tmp_config_dir, monkeypatch
+):
     """Selecting a custom endpoint passes base_url/api_key/protocol + a
-    custom/<model> id into the bridge."""
-    import tempfile, os as _os
-    db = _os.path.join(tempfile.mkdtemp(), "app.db")
-    store.init_db(db)
+    custom/<model> id into the bridge. The api_key is stored encrypted and
+    decrypted on use, so the bridge still receives the plaintext key."""
+    monkeypatch.setenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", "1")
+    store.init_db(db_path)
     captured = {}
 
     async def fake_bridge(prompt, *, trace_id, session_key, user_id,
@@ -250,7 +271,7 @@ def test_chat_with_endpoint_id_routes_endpoint_fields():
                         api_key=api_key, protocol=protocol)
         yield {"type": "done", "text": "ok"}
 
-    app = create_app(db_path=db, secret="test-secret-not-for-production",
+    app = create_app(db_path=db_path, secret=web_secret,
                      bridge_fn=fake_bridge, cookie_secure=False)
     c = TestClient(app)
     _register(c, "olivia")

@@ -332,16 +332,26 @@ async function saveEndpoint() {
 const thinkText = (e) => (e.text || e.thinking || e.content || "").trim();
 const asText = (v) => (typeof v === "string" ? v : JSON.stringify(v ?? ""));
 
-function renderProcess(events) {
+// `live` mirrors the CLI's blinking-bullet behavior: while the turn is still
+// streaming, a tool_call with no matching tool_result yet is "running" and
+// pulses; the moment its result arrives (or the turn ends with live=false) it
+// freezes. Matching is positional — a tool_call is running iff it appears
+// after the last tool_result, the same "freeze the previous call on the next
+// tool_call/result" rule the terminal UI uses.
+function renderProcess(events, live = true) {
   // Drop empty thinking events (no text) so we don't show blank 💭 rows.
   const steps = events.filter((e) => e.type !== "thinking" || thinkText(e));
+  let lastResultIdx = -1;
+  steps.forEach((e, i) => { if (e.type === "tool_result") lastResultIdx = i; });
+
   const d = document.createElement("details");
   d.className = "process";
   const s = document.createElement("summary");
-  s.textContent = `过程 · ${steps.length} 步`;
   d.appendChild(s);
 
-  for (const e of steps) {
+  let anyActive = false;
+  for (let k = 0; k < steps.length; k++) {
+    const e = steps[k];
     const row = document.createElement("div");
     row.className = "proc-step";
     let icon = "•", label = "", detail = "";
@@ -361,9 +371,18 @@ function renderProcess(events) {
       label = e.type || "事件"; detail = truncate(asText(e), 240);
     }
 
+    const isActive = live && e.type === "tool_call" && k > lastResultIdx;
+    if (isActive) { row.classList.add("active"); anyActive = true; }
+
     const head = document.createElement("div");
     head.className = "proc-head";
     head.textContent = `${icon} ${label}`;
+    if (isActive) {
+      // Pulsing dot = "this tool is still running" (terminal blink parity).
+      const dot = document.createElement("span");
+      dot.className = "run-dot";
+      head.appendChild(dot);
+    }
     row.appendChild(head);
     if (detail) {
       const body = document.createElement("div");
@@ -372,6 +391,16 @@ function renderProcess(events) {
       row.appendChild(body);
     }
     d.appendChild(row);
+  }
+
+  // Surface the running state on the (collapsed-by-default) summary too, so the
+  // pulse is visible without expanding the panel.
+  s.textContent = `过程 · ${steps.length} 步${anyActive ? " · 运行中" : ""}`;
+  if (anyActive) {
+    d.classList.add("running");
+    const dot = document.createElement("span");
+    dot.className = "run-dot";
+    s.appendChild(dot);
   }
   return d;
 }
@@ -414,10 +443,20 @@ async function sendMessage(text) {
         procEvents.push(ev);
         const existing = assistantDiv.querySelector(".process");
         const fresh = renderProcess(procEvents);
-        if (existing) existing.replaceWith(fresh); else assistantDiv.prepend(fresh);
+        // Keep the panel open if the user expanded it; re-rendering otherwise
+        // snaps it shut on every event.
+        if (existing) { fresh.open = existing.open; existing.replaceWith(fresh); }
+        else assistantDiv.prepend(fresh);
       } else if (ev.type === "done") {
         if (ev.text) { acc = ev.text; body.innerHTML = safeMarkdown(acc); }
         else if (!acc) { body.innerHTML = ""; }  // clear the 加载中 indicator if nothing streamed
+        // Turn ended — freeze any still-pulsing tool call (live=false).
+        const existing = assistantDiv.querySelector(".process");
+        if (existing) {
+          const frozen = renderProcess(procEvents, false);
+          frozen.open = existing.open;
+          existing.replaceWith(frozen);
+        }
       }
     }
     highlightAndCopy(assistantDiv);

@@ -16,11 +16,26 @@ from pathlib import Path
 
 
 DEFAULT_DIR_NAME = ".langchain-agent"
+DEFAULT_RUNTIME_DIR = Path(".agent") / "runtime"
 
 
 def config_dir() -> Path:
     override = os.getenv("LANGCHAIN_AGENT_CONFIG_DIR", "").strip()
     return Path(override) if override else Path(DEFAULT_DIR_NAME)
+
+
+def runtime_dir() -> Path:
+    """Directory for ephemeral cross-process discovery files: ``peers.json``
+    and the ``<agent-id>.a2a-url`` sidecars specialists write at startup.
+
+    Defaults to ``.agent/runtime``. Override with ``LANGCHAIN_AGENT_RUNTIME_DIR``
+    so a SECOND orchestrator sharing this process + cwd — notably a chat gateway
+    running as a REPL background task — gets an isolated dir and can't clobber
+    the REPL's ``peers.json`` / sidecars (or read the REPL's while pointing at
+    its own dying subprocesses). Callers are responsible for ``mkdir``.
+    """
+    override = os.getenv("LANGCHAIN_AGENT_RUNTIME_DIR", "").strip()
+    return Path(override) if override else DEFAULT_RUNTIME_DIR
 
 
 def settings_path() -> Path:

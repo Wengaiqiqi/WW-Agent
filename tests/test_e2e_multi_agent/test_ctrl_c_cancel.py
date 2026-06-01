@@ -11,6 +11,7 @@ def test_ctrl_c_during_repl_clean_exit():
     """Start orchestrator in REPL mode, send Ctrl+C, verify clean exit."""
     env = os.environ.copy()
     env["LANGCHAIN_AGENT_MODEL"] = "mock/mock-default"
+    env["PYTHONIOENCODING"] = "utf-8"  # child emits UTF-8 (we read it as UTF-8)
 
     creationflags = 0
     if sys.platform == "win32":
@@ -21,7 +22,7 @@ def test_ctrl_c_during_repl_clean_exit():
         [sys.executable, "cli.py"],
         env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8",
         creationflags=creationflags,
     )
     # Give it a moment to spawn specialists / print the REPL banner

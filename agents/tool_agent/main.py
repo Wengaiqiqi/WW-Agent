@@ -287,9 +287,10 @@ async def amain() -> None:
 
     # 2. Write the A2A URL to the runtime dir so orchestrator can discover it.
     agent_id = os.environ.get("AGENT_ID", "tool-agent")
-    runtime_dir = Path(".agent/runtime")
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / f"{agent_id}.a2a-url").write_text(a2a.base_url, encoding="utf-8")
+    from agent_paths import runtime_dir
+    rt_dir = runtime_dir()
+    rt_dir.mkdir(parents=True, exist_ok=True)
+    (rt_dir / f"{agent_id}.a2a-url").write_text(a2a.base_url, encoding="utf-8")
 
     # Pre-build the LLM in a worker thread now, while the MCP server is still
     # spinning up. By the time the first orchestrator delegation arrives, the

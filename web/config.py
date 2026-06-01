@@ -21,19 +21,54 @@ MAX_MESSAGE_CHARS = 8000
 _DEV_SECRET: str | None = None
 
 
+def _secret_file():
+    from agent_paths import config_dir
+
+    return config_dir() / "web" / "auth_secret"
+
+
 def auth_secret() -> str:
-    """JWT signing secret. Prefer ``WEB_AUTH_SECRET``; dev falls back to an
-    ephemeral per-process secret (tokens won't survive a restart) with a warning."""
+    """JWT signing secret. Prefer ``WEB_AUTH_SECRET``; otherwise fall back to a
+    secret PERSISTED on disk (``<config_dir>/web/auth_secret``).
+
+    Persisting matters for two reasons the old ephemeral-per-process secret got
+    wrong: tokens now survive a restart, and every uvicorn worker reads the same
+    secret (a per-process random secret made worker A's tokens fail to verify on
+    worker B). The on-disk fallback is still a dev convenience — production
+    should set ``WEB_AUTH_SECRET`` explicitly (and ``web.__main__`` refuses a
+    network bind without it)."""
     s = os.environ.get("WEB_AUTH_SECRET", "").strip()
     if s:
         return s
     global _DEV_SECRET
-    if _DEV_SECRET is None:
-        _DEV_SECRET = secrets.token_urlsafe(32)
+    if _DEV_SECRET is not None:
+        return _DEV_SECRET
+    path = _secret_file()
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            _DEV_SECRET = existing
+            return _DEV_SECRET
+    except OSError:
+        pass
+    _DEV_SECRET = secrets.token_urlsafe(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_DEV_SECRET, encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
         log.warning(
-            "WEB_AUTH_SECRET not set; using an ephemeral dev secret. "
-            "Set WEB_AUTH_SECRET in production (tokens are invalidated on restart)."
+            "WEB_AUTH_SECRET not set and could not persist a dev secret to %s; "
+            "using an ephemeral one (tokens invalidated on restart).", path,
         )
+        return _DEV_SECRET
+    log.warning(
+        "WEB_AUTH_SECRET not set; generated a persistent dev secret at %s. "
+        "Set WEB_AUTH_SECRET explicitly in production.", path,
+    )
     return _DEV_SECRET
 
 
