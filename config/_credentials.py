@@ -82,13 +82,16 @@ def is_config_ready(cfg: ActiveConfig) -> bool:
 def get_api_key(cfg: ActiveConfig) -> str:
     """Look up the API key for *cfg*.
 
-    ``LANGCHAIN_AGENT_API_KEY`` (set per-turn by the web custom-endpoint flow)
-    wins; otherwise fall back to the provider's ``api_key_env`` then the
-    credentials file.
+    A literal ``cfg.api_key`` (set per-turn from the TurnContext, e.g. the web
+    custom-endpoint flow) wins; otherwise fall back to the provider's
+    ``api_key_env`` then the credentials file. This no longer reads the
+    ``LANGCHAIN_AGENT_API_KEY`` env var directly — per-turn keys travel on the
+    context (and, for the in-process planner, are read into ``cfg.api_key`` via
+    ``TurnContext.from_env``), so a parallel turn can't pick up another turn's
+    key off process-global env.
     """
-    override = os.getenv("LANGCHAIN_AGENT_API_KEY", "").strip()
-    if override:
-        return override
+    if getattr(cfg, "api_key", ""):
+        return cfg.api_key
     return os.getenv(cfg.api_key_env) or load_credentials().get(cfg.api_key_env, "")
 
 

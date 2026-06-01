@@ -447,6 +447,9 @@ class ActiveConfig:
     base_url: str
     api_key_env: str
     protocol: str
+    # Resolved literal API key for THIS turn (web custom-endpoint flow sets it
+    # via TurnContext). Empty = fall back to api_key_env / credentials file.
+    api_key: str = ""
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     streaming: bool = DEFAULT_STREAMING

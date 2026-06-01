@@ -24,19 +24,24 @@ def test_no_overrides_leaves_registry_defaults(monkeypatch):
     assert cfg.protocol == "openai"
 
 
-def test_get_api_key_prefers_env_override(monkeypatch):
+def test_get_api_key_prefers_cfg_api_key(monkeypatch):
+    # New contract: the per-turn key lives on cfg.api_key (set from the
+    # TurnContext), not the LANGCHAIN_AGENT_API_KEY env var. The cfg key wins and
+    # the env override is no longer consulted, so a parallel turn can't pick up
+    # another turn's key off process-global env.
     from config import make_config
 
-    monkeypatch.setenv("LANGCHAIN_AGENT_API_KEY", "sk-override")
+    monkeypatch.setenv("LANGCHAIN_AGENT_API_KEY", "sk-env-should-be-ignored")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-provider-env")
     cfg = make_config("openai", model="gpt-4o")
-    assert _credentials.get_api_key(cfg) == "sk-override"
+    cfg.api_key = "sk-ctx"  # ActiveConfig is a non-frozen dataclass
+    assert _credentials.get_api_key(cfg) == "sk-ctx"
 
 
-def test_get_api_key_falls_back_when_no_override(monkeypatch):
+def test_get_api_key_falls_back_to_provider_env_when_no_cfg_key(monkeypatch):
     from config import make_config
 
     monkeypatch.delenv("LANGCHAIN_AGENT_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-provider-env")
-    cfg = make_config("openai", model="gpt-4o")
+    cfg = make_config("openai", model="gpt-4o")  # cfg.api_key defaults to ""
     assert _credentials.get_api_key(cfg) == "sk-from-provider-env"
