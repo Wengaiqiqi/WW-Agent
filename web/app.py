@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -95,7 +96,46 @@ def create_app(
         refill_per_sec=config.rate_limit_per_min() / 60.0,
     )
 
-    app = FastAPI(title="Agent Web UI")
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        # Startup: warm the capability catalog in the background so the first
+        # user turn doesn't wait ~10s for specialist spawn (held on app.state so
+        # the task isn't GC'd), and start the idle-pool sweeper when pooling is on.
+        if use_real_bridge:
+            from web.bridge import warm_capability_catalog
+
+            app.state._warm_task = asyncio.create_task(warm_capability_catalog())
+            if config.pool_enabled():
+                from web import bridge as _bridge
+
+                loop = _bridge._ensure_turn_loop()
+                app.state._sweeper = loop.run_coroutine_factory(
+                    lambda: _bridge._pool_sweeper(interval=config.pool_idle_ttl()),
+                )
+        try:
+            yield
+        finally:
+            # Shutdown: cancel the sweeper, reap pooled specialist subprocesses,
+            # and stop the turn loop so the process exits cleanly (no orphans).
+            if use_real_bridge:
+                from web import bridge as _bridge
+
+                sweeper = getattr(app.state, "_sweeper", None)
+                if sweeper is not None and not sweeper.done():
+                    _bridge._TURN_LOOP.call_soon(sweeper.cancel)
+                try:
+                    if _bridge._POOL is not None:
+                        pool = _bridge._get_pool()
+                        loop = _bridge._ensure_turn_loop()
+                        # Block on the drain via a worker thread rather than
+                        # awaiting a cross-loop wrap_future in the lifespan task
+                        # (which entangles anyio's lifespan cancel scope).
+                        fut = loop.run_coroutine_factory(pool.drain)
+                        await asyncio.to_thread(fut.result)
+                finally:
+                    _bridge._TURN_LOOP.stop()
+
+    app = FastAPI(title="Agent Web UI", lifespan=_lifespan)
 
     def current_user(session: str | None = Cookie(default=None)) -> dict:
         claims = auth.verify_token(session, jwt_secret) if session else None
@@ -135,47 +175,6 @@ def create_app(
     _mount_endpoint_routes(app, db, current_user)
     _mount_chat_route(app, db, current_user, _owned_conversation, limiter, bridge_fn)
     _mount_static(app)
-
-    if use_real_bridge:
-        @app.on_event("startup")
-        async def _warm_specialists() -> None:
-            # Warm the capability catalog in the background so the first user
-            # turn doesn't wait ~10s for specialist spawn. Held on app.state so
-            # the task isn't garbage-collected before it finishes.
-            from web.bridge import warm_capability_catalog
-
-            app.state._warm_task = asyncio.create_task(warm_capability_catalog())
-
-            if config.pool_enabled():
-                from web import bridge as _bridge
-
-                loop = _bridge._ensure_turn_loop()
-                app.state._sweeper = loop.run_coroutine_factory(
-                    lambda: _bridge._pool_sweeper(interval=config.pool_idle_ttl()),
-                )
-
-        @app.on_event("shutdown")
-        async def _drain_pool() -> None:
-            # Reap pooled specialist subprocesses + stop the turn loop so the
-            # process exits cleanly (no orphaned children).
-            from web import bridge as _bridge
-
-            sweeper = getattr(app.state, "_sweeper", None)
-            if sweeper is not None and not sweeper.done():
-                _bridge._TURN_LOOP.call_soon(sweeper.cancel)
-            try:
-                if _bridge._POOL is not None:
-                    pool = _bridge._get_pool()
-                    loop = _bridge._ensure_turn_loop()
-                    # Block on the turn loop's drain via a worker thread rather
-                    # than wrap_future: awaiting a cross-loop future directly in
-                    # the lifespan task entangles it with anyio's lifespan cancel
-                    # scope (RuntimeError on scope exit). to_thread keeps the
-                    # await loop-local. Mirrors _stream_off_loop's join pattern.
-                    fut = loop.run_coroutine_factory(pool.drain)
-                    await asyncio.to_thread(fut.result)
-            finally:
-                _bridge._TURN_LOOP.stop()
 
     return app
 
