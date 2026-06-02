@@ -15,12 +15,19 @@ from __future__ import annotations
 
 import os
 
-_FAST_TOOL_MARKERS = (
-    "http://", "https://",
+# URL markers imply a web fetch — a READ, safe under any permission mode.
+_FAST_TOOL_URL_MARKERS = ("http://", "https://")
+
+# File-extension markers imply a file operation, which may be a write. They
+# route under full access, but NOT on their own under read-only (see the
+# read-only marker selection in ``fast_route``).
+_FAST_TOOL_FILE_MARKERS = (
     ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg",
     ".ini", ".csv", ".tsv", ".docx", ".pdf", ".xlsx", ".html", ".css",
     ".js", ".ts", ".tsx", ".vue", ".svg", ".png", ".jpg", ".jpeg",
 )
+
+_FAST_TOOL_MARKERS = _FAST_TOOL_URL_MARKERS + _FAST_TOOL_FILE_MARKERS
 
 _FAST_TOOL_PREFIXES = (
     "read ", "open ", "inspect ", "list ", "search ", "grep ", "find ",
@@ -110,10 +117,17 @@ def fast_route(
         prefixes = _FAST_TOOL_READONLY_PREFIXES
         words = _FAST_TOOL_READONLY_WORDS
         cjk = _FAST_TOOL_READONLY_CJK
+        # Only URL markers route on their own under read-only. A bare file
+        # mention ("保存到 a.txt", "write a.py") is ambiguous/possibly a write
+        # and must defer to the planner (which renders a clean prose refusal)
+        # UNLESS it also carries a read verb — in which case the read-only
+        # prefix/word/CJK checks below already route it ("read config.py").
+        markers = _FAST_TOOL_URL_MARKERS
     else:
         prefixes = _FAST_TOOL_PREFIXES
         words = _FAST_TOOL_WORDS
         cjk = _FAST_TOOL_CJK
+        markers = _FAST_TOOL_MARKERS
 
     # NOTE: deliberately no bare ``lower.startswith(word)`` check here. It used
     # to misfire on ordinary prose that merely *begins* with a tool verb's
@@ -123,7 +137,7 @@ def fast_route(
     # by the trailing-space prefixes ("fix ", "update ", "read ") and by the
     # whole-word ``split()`` check below, both of which require a word boundary.
     should_delegate = (
-        any(marker in lower for marker in _FAST_TOOL_MARKERS)
+        any(marker in lower for marker in markers)
         or any(lower.startswith(prefix) for prefix in prefixes)
         or any(word in lower.split() for word in words)
         or any(word in stripped for word in cjk)
