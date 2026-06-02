@@ -61,3 +61,21 @@ async def test_run_turn_does_not_mutate_process_env(monkeypatch):
     assert captured["cfg"] is not None          # planner cfg came from ctx
     assert "LANGCHAIN_AGENT_MEMORY_USER" not in os.environ
     assert "LANGCHAIN_AGENT_MODEL" not in os.environ
+
+
+def test_feishu_ws_dispatch_semaphore_sized_from_flag(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("GATEWAY_MAX_CONCURRENCY", "3")
+    from gateway import runner, feishu_ws
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)
+    # BoundedSemaphore admits exactly N concurrent holders.
+    got = [feishu_ws._dispatch_sem.acquire(blocking=False) for _ in range(3)]
+    assert all(got)
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False  # 4th blocked
+    for _ in got:
+        feishu_ws._dispatch_sem.release()
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)

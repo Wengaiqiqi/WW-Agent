@@ -41,6 +41,7 @@ from gateway._feishu_common import (
     strip_mentions,
     truncate_reply,
 )
+from gateway import runner
 from gateway.runner import run_turn
 
 log = logging.getLogger(__name__)
@@ -57,19 +58,17 @@ _DEDUP_TTL = 86400.0  # 24h — Feishu re-pushes un-ACKed events for ~30min in
 # class of symptoms.
 _seen_msg_ids: dict[str, float] = {}
 _seen_msg_ids_lock = threading.Lock()
-# Serialise actual LLM dispatch across worker threads so concurrent inbound
-# messages do not stomp on the orchestrator's shared ``.agent/runtime/``
-# state. Per-message latency is dominated by the LLM round-trip, so a single
-# queue is fine for chat-bot throughput.
+# Bound concurrent LLM dispatch across the SDK's worker threads. The feishu WS
+# SDK runs each inbound message on its own thread (own ``asyncio.run`` -> own
+# event loop), so a threading primitive — not an asyncio one — is what spans
+# them. Sized from GATEWAY_MAX_CONCURRENCY (default 1 = the old single-lock
+# behavior, one dispatch at a time).
 #
-# Why this lock AND ``runner._CONCURRENCY_GUARD`` (asyncio.Lock):
-# * ``_dispatch_lock`` (threading) serialises across the SDK's worker
-#   threads. Each thread does its own ``asyncio.run`` -> its own event loop,
-#   so an asyncio.Lock alone would not span them.
-# * ``_CONCURRENCY_GUARD`` (asyncio) covers the in-loop callers (the REPL
-#   path / standalone QQ where dispatch is async-native).
-# Together they ensure exactly one ``run_turn`` is active per process.
-_dispatch_lock = threading.Lock()
+# This is the thread-side twin of ``runner._GATEWAY_SEMAPHORE`` (asyncio), which
+# bounds the in-loop callers (REPL / standalone QQ). Each turn is isolated via
+# its own TurnContext (per-user memory, per-turn-id runtime dir, explicit cfg),
+# so concurrent turns no longer stomp on shared ``.agent/runtime`` or env.
+_dispatch_sem = threading.BoundedSemaphore(runner.max_concurrency())
 
 
 def _is_duplicate_message(msg_id: str) -> bool:
@@ -363,10 +362,10 @@ def _run_dispatch_in_background(
     """Worker-thread body: react "got it" -> run the orchestrator turn ->
     send the reply -> remove the reaction.
 
-    Serialised across concurrent inbound messages via ``_dispatch_lock`` so
-    we never spawn two parallel orchestrators on the shared MCP runtime.
-    The reaction lifecycle runs OUTSIDE the lock so the "received" badge
-    appears immediately even when the bot is still busy on a prior turn.
+    Bounded across concurrent inbound messages via ``_dispatch_sem``
+    (GATEWAY_MAX_CONCURRENCY; default 1 = one orchestrator at a time). The
+    reaction lifecycle runs OUTSIDE the semaphore so the "received" badge
+    appears immediately even when the bot is busy on prior turns.
     """
     # Fire-and-forget the "I'm working on it" reaction. ~200ms latency to
     # Feishu so the user sees the badge within a second of their message.
@@ -375,7 +374,7 @@ def _run_dispatch_in_background(
         log.info("feishu: reaction %s -> %s on id=%s",
                  _PROCESSING_REACTION, reaction_id, message_id)
 
-    with _dispatch_lock:
+    with _dispatch_sem:
         try:
             reply = asyncio.run(
                 run_turn(
