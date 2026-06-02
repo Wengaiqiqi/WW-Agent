@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from config import resolve_config
 from gateway.runner import (
     _build_planner,
     _build_planner_context,
@@ -464,7 +465,6 @@ async def _plan_and_dispatch(
     *,
     prompt: str,
     ensure_specialists: Any,
-    hmac_key: Any,  # str | Callable[[], str] — late-bound for pooled hosts
     trace_id: str,
     history_context: str,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -478,9 +478,11 @@ async def _plan_and_dispatch(
     specialist's ``thinking`` / ``tool_call`` / ``tool_result`` events plus the
     final text.
 
-    ``ensure_specialists`` is an async callable returning ``(host, router)``;
-    it is invoked ONLY when a capability is chosen, which is the whole point of
-    lazy spawn — a prose turn never touches it."""
+    ``ensure_specialists`` is an async callable returning
+    ``(host, router, hmac_key)`` — the hmac_key is the host's own (a pooled
+    host's baked key, or the per-turn key for a cold-spawned one). It is invoked
+    ONLY when a capability is chosen, which is the whole point of lazy spawn —
+    a prose turn never touches it."""
     state = {"user_input": prompt, "trace_id": trace_id}
     astream = getattr(planner, "astream_plan", None)
 
@@ -513,15 +515,13 @@ async def _plan_and_dispatch(
 
     # Capability -> spawn the specialists now (lazy), then dispatch (A2A / MCP),
     # which streams its own thinking / tool_call / tool_result / text / done.
-    host, router = await ensure_specialists()
+    host, router, hmac_key = await ensure_specialists()
     async for ev in dispatch_decision_stream(
         decision=decision,
         prompt=prompt,
         host=host,
         router=router,
-        # hmac_key may be a late-bound getter (pooled host's baked key is only
-        # known after ensure_specialists()); resolve it here, post-spawn.
-        hmac_key=hmac_key() if callable(hmac_key) else hmac_key,
+        hmac_key=hmac_key,
         trace_id=trace_id,
         history_context=history_context,
     ):
@@ -542,25 +542,28 @@ async def _run_streaming_locked(
         protocol=protocol, session_key=session_key, trace_id=trace_id,
     )
 
+    # Resolve the planner config from the context (not process-global env) so
+    # concurrent turns can't clobber each other's model/endpoint — same explicit
+    # threading the gateway uses; no scoped_env needed.
+    cfg = resolve_config(ctx)
+
     # Specialists are obtained lazily — only a capability turn pays for them; a
     # prose turn never calls ensure_specialists. When pooling is enabled the host
-    # is leased from (and returned to) the warm pool and dispatch uses the host's
-    # baked hmac_key. When disabled we cold-spawn a private host and shut it down
-    # in the finally — byte-for-byte today's behavior, using ctx.hmac_key.
+    # is leased from (and returned to) the warm pool; when disabled we cold-spawn
+    # a private host and shut it down in the finally. Either way dispatch uses
+    # the host's own hmac_key (returned below).
     lease: Any = None
     host: Any = None
     router: Any = None
-    dispatch_hmac_key = ctx.hmac_key
 
-    async def ensure_specialists() -> tuple[Any, Any]:
+    async def ensure_specialists() -> tuple[Any, Any, str]:
         """Lease a pooled host (enabled) or cold-spawn a private one (disabled);
-        memoised for the turn."""
-        nonlocal lease, host, router, dispatch_hmac_key
+        memoised for the turn. Returns ``(host, router, hmac_key)``."""
+        nonlocal lease, host, router
         if config.pool_enabled():
             if lease is None:
                 lease = await _get_pool().acquire(ctx)
-                dispatch_hmac_key = lease.hmac_key  # host's baked key, not ctx's
-            return lease.host, lease.router
+            return lease.host, lease.router, lease.hmac_key  # host's baked key
         from orchestrator.main import _bootstrap
         from orchestrator.mcp_host import MCPHost
         from orchestrator.router import CapabilityRouter
@@ -569,48 +572,47 @@ async def _run_streaming_locked(
             host = MCPHost(hmac_key=ctx.hmac_key, turn_env=ctx.turn_env())
             router = CapabilityRouter()
             await _bootstrap(host, router)
-        return host, router
+        return host, router, ctx.hmac_key
 
     final_text = ""
-    # Scope the per-turn env in-process (for the planner config + memory
-    # snapshot); the subprocess channel is the host's turn_env above.
-    with scoped_env(ctx.turn_env()):
+    # No scoped_env: per-turn config travels explicitly — cfg into the planner,
+    # ctx.user_id into the memory snapshot, ctx.turn_env() into the host for
+    # subprocesses — so concurrent turns on the shared loop stay isolated.
+    try:
+        history_context, full_context = _build_planner_context(
+            session_key, memory_user=ctx.user_id,
+        )
+        # Build the planner from the cached static catalog — no spawn here.
+        capabilities, tool_schemas = await _capability_catalog()
+        planner = _build_planner(
+            _CatalogRouter(capabilities, tool_schemas),
+            context_text=full_context, cfg=cfg,
+        )
         try:
-            history_context, full_context = _build_planner_context(session_key)
-            # Build the planner from the cached static catalog — no spawn here.
-            capabilities, tool_schemas = await _capability_catalog()
-            planner = _build_planner(
-                _CatalogRouter(capabilities, tool_schemas),
-                context_text=full_context,
-            )
-            try:
-                async for ev in _plan_and_dispatch(
-                    planner,
-                    prompt=prompt,
-                    ensure_specialists=ensure_specialists,
-                    # Late-bound: ensure_specialists sets the host's baked key
-                    # (pooled path) before any dispatch; prose turns never use it.
-                    hmac_key=lambda: dispatch_hmac_key,
-                    trace_id=trace_id,
-                    history_context=history_context,
-                ):
-                    if ev.get("type") == "text":
-                        final_text += ev.get("chunk", "")
-                    elif ev.get("type") == "done" and ev.get("text"):
-                        final_text = ev["text"]
-                    yield ev
-            except Exception as exc:  # noqa: BLE001
-                log.exception("web: planner/dispatch failed")
-                yield {"type": "error", "message": f"planner: {exc}"}
-                yield {"type": "done", "text": ""}
-                return
-        finally:
-            # Pooled path: return the host to the warm pool (not shut down).
-            if lease is not None:
-                await _get_pool().release(lease)
-            # Disabled path: a capability turn cold-spawned a private host.
-            if host is not None:
-                await host.shutdown_all()
-            if session_key and final_text:
-                session_store.append(session_key, prompt, final_text)
-            shutil.rmtree(ctx.runtime_dir, ignore_errors=True)
+            async for ev in _plan_and_dispatch(
+                planner,
+                prompt=prompt,
+                ensure_specialists=ensure_specialists,
+                trace_id=trace_id,
+                history_context=history_context,
+            ):
+                if ev.get("type") == "text":
+                    final_text += ev.get("chunk", "")
+                elif ev.get("type") == "done" and ev.get("text"):
+                    final_text = ev["text"]
+                yield ev
+        except Exception as exc:  # noqa: BLE001
+            log.exception("web: planner/dispatch failed")
+            yield {"type": "error", "message": f"planner: {exc}"}
+            yield {"type": "done", "text": ""}
+            return
+    finally:
+        # Pooled path: return the host to the warm pool (not shut down).
+        if lease is not None:
+            await _get_pool().release(lease)
+        # Disabled path: a capability turn cold-spawned a private host.
+        if host is not None:
+            await host.shutdown_all()
+        if session_key and final_text:
+            session_store.append(session_key, prompt, final_text)
+        shutil.rmtree(ctx.runtime_dir, ignore_errors=True)

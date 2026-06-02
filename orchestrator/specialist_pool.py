@@ -122,7 +122,6 @@ class SpecialistPool:
             self._entries.append(entry)
 
         # Cold spawn OUTSIDE the lock (it's the ~7s path; don't block the pool).
-        host = router = None
         t0 = self._now()
         try:
             hmac_key = secrets.token_urlsafe(32)
@@ -135,14 +134,15 @@ class SpecialistPool:
                 self._entries.remove(entry)
                 self._slot_freed.notify()
             raise
+        elapsed = max(0.0, self._now() - t0)
         async with self._lock:
             entry.host, entry.router = host, router
             entry.hmac_key, entry.runtime_dir = hmac_key, runtime_dir
             self._stats["cold_spawns"] += 1
-            self._stats["spawn_seconds_total"] += max(0.0, self._now() - t0)
+            self._stats["spawn_seconds_total"] += elapsed
             log.debug(
                 "pool: cold-spawned host for %s in %.1fs (live=%d, hit_rate=%.0f%%)",
-                sig, self._now() - t0, len(self._entries),
+                sig, elapsed, len(self._entries),
                 100 * self._stats["hits"] / max(1, self._stats["acquires"]),
             )
             return self._lease(entry)

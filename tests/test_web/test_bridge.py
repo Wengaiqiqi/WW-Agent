@@ -124,7 +124,7 @@ def test_plan_and_dispatch_streams_prose_token_by_token():
 
     events = _collect(bridge_mod._plan_and_dispatch(
         FakePlanner(), prompt="hi", ensure_specialists=_ensure_must_not_be_called,
-        hmac_key="k", trace_id="t", history_context="",
+        trace_id="t", history_context="",
     ))
     assert events == [
         {"type": "text", "chunk": "你"},
@@ -142,7 +142,7 @@ def test_plan_and_dispatch_non_streaming_planner_prose():
 
     events = _collect(bridge_mod._plan_and_dispatch(
         stub, prompt="hi", ensure_specialists=_ensure_must_not_be_called,
-        hmac_key="k", trace_id="t", history_context="",
+        trace_id="t", history_context="",
     ))
     assert events == [
         {"type": "text", "chunk": "完整答案"},
@@ -156,7 +156,7 @@ def test_plan_and_dispatch_capability_calls_ensure_specialists():
 
     async def ensure():
         ensured["n"] += 1
-        return ("HOST", "ROUTER")
+        return ("HOST", "ROUTER", "k")
 
     captured = {}
 
@@ -164,6 +164,7 @@ def test_plan_and_dispatch_capability_calls_ensure_specialists():
                             trace_id, history_context, delegate=None):
         captured["host"] = host
         captured["router"] = router
+        captured["hmac_key"] = hmac_key
         yield {"type": "done", "text": "ok"}
 
     import web.bridge as wb
@@ -175,13 +176,14 @@ def test_plan_and_dispatch_capability_calls_ensure_specialists():
 
         events = _collect(bridge_mod._plan_and_dispatch(
             stub, prompt="do", ensure_specialists=ensure,
-            hmac_key="k", trace_id="t", history_context="",
+            trace_id="t", history_context="",
         ))
     finally:
         wb.dispatch_decision_stream = orig
 
     assert ensured["n"] == 1
     assert captured["host"] == "HOST" and captured["router"] == "ROUTER"
+    assert captured["hmac_key"] == "k"  # dispatch uses the host's own key
     assert events[-1] == {"type": "done", "text": "ok"}
 
 
@@ -254,7 +256,7 @@ def test_prose_turn_spawns_no_specialists(tmp_config_dir, monkeypatch):
     monkeypatch.setattr(om, "_bootstrap", spy_bootstrap)
     monkeypatch.setattr(wb, "_capability_catalog", fake_catalog)
     monkeypatch.setattr(wb, "_build_planner", lambda *a, **k: fake_planner)
-    monkeypatch.setattr(wb, "_build_planner_context", lambda sk: ("", ""))
+    monkeypatch.setattr(wb, "_build_planner_context", lambda sk, **k: ("", ""))
 
     events = _collect(wb._run_streaming_locked(
         "hi", trace_id="t", session_key="", user_id="u", model_id="mock",
@@ -298,7 +300,7 @@ def test_capability_turn_bootstraps_once(tmp_config_dir, monkeypatch):
     monkeypatch.setattr(mh, "MCPHost", FakeHost)
     monkeypatch.setattr(wb, "_capability_catalog", fake_catalog)
     monkeypatch.setattr(wb, "_build_planner", lambda *a, **k: fake_planner)
-    monkeypatch.setattr(wb, "_build_planner_context", lambda sk: ("", ""))
+    monkeypatch.setattr(wb, "_build_planner_context", lambda sk, **k: ("", ""))
     monkeypatch.setattr(wb, "dispatch_decision_stream", fake_dispatch)
 
     events = _collect(wb._run_streaming_locked(
