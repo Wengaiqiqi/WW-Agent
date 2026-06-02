@@ -146,12 +146,23 @@ def create_app(
 
             app.state._warm_task = asyncio.create_task(warm_capability_catalog())
 
+            if config.pool_enabled():
+                from web import bridge as _bridge
+
+                loop = _bridge._ensure_turn_loop()
+                app.state._sweeper = loop.run_coroutine_factory(
+                    lambda: _bridge._pool_sweeper(interval=config.pool_idle_ttl()),
+                )
+
         @app.on_event("shutdown")
         async def _drain_pool() -> None:
             # Reap pooled specialist subprocesses + stop the turn loop so the
             # process exits cleanly (no orphaned children).
             from web import bridge as _bridge
 
+            sweeper = getattr(app.state, "_sweeper", None)
+            if sweeper is not None and not sweeper.done():
+                _bridge._TURN_LOOP.call_soon(sweeper.cancel)
             try:
                 if _bridge._POOL is not None:
                     pool = _bridge._get_pool()

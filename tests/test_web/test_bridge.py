@@ -421,6 +421,33 @@ def test_warm_capability_catalog_seeds_pool_when_enabled(monkeypatch, tmp_config
     assert seeded["n"] == 1   # warm-up acquired+released one pooled host
 
 
+def test_pool_sweeper_calls_sweep_periodically(monkeypatch):
+    import asyncio as _a
+
+    from web import bridge
+
+    calls = {"n": 0}
+
+    class _FakePool:
+        async def sweep(self):
+            calls["n"] += 1
+
+    monkeypatch.setattr(bridge, "_get_pool", lambda: _FakePool())
+
+    async def _drive():
+        # interval tiny so the loop ticks a few times fast
+        task = _a.create_task(bridge._pool_sweeper(interval=0.01))
+        await _a.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except _a.CancelledError:
+            pass
+
+    _a.run(_drive())
+    assert calls["n"] >= 2
+
+
 def test_web_turn_context_custom_endpoint_in_turn_env(tmp_config_dir, monkeypatch):
     for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
               "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):

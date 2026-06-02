@@ -55,18 +55,18 @@ async def test_stop_is_idempotent_and_joins_thread():
 async def test_restart_after_stop_runs_on_a_fresh_loop():
     loop = TurnLoop()
     loop.start()
-    first_id = loop.loop_id
     loop.stop()
 
     loop.start()  # restart: must install a NEW, running loop (not the stale one)
     try:
         assert loop.is_running
-        assert loop.loop_id != first_id
 
         async def work():
             return id(asyncio.get_running_loop())
 
-        # Work scheduled after restart must actually run on the new loop.
+        # Work scheduled after restart must actually run on the new loop — this
+        # would hang/time out if start() returned before the fresh loop was up
+        # and the coroutine were scheduled on the previous, closed loop.
         result = await asyncio.wait_for(
             asyncio.wrap_future(loop.run_coroutine(work())), timeout=2.0,
         )

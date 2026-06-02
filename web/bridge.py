@@ -196,6 +196,19 @@ async def warm_capability_catalog() -> None:
         )
 
 
+async def _pool_sweeper(*, interval: float = 60.0) -> None:
+    """Periodically shut down idle pooled hosts past their TTL. Cancelled at
+    server shutdown. Best-effort: a sweep failure is logged, never fatal."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _get_pool().sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.warning("web: pool sweep failed", exc_info=True)
+
+
 def _user_workspace(user_id: str) -> Path:
     from agent_paths import config_dir
 
