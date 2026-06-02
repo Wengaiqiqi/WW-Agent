@@ -202,7 +202,18 @@ async def _pool_sweeper(*, interval: float = 60.0) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            await _get_pool().sweep()
+            pool = _get_pool()
+            await pool.sweep()
+            # Surface the win (or lack of it) so an operator can decide whether
+            # to keep WEB_POOL_ENABLED on: watch hit_rate and avg_spawn_seconds.
+            s = pool.stats()
+            log.info(
+                "web: pool stats — live=%d hit_rate=%.0f%% avg_spawn=%.1fs "
+                "(acquires=%d hits=%d cold=%d evicted=%d swept=%d)",
+                s["live_hosts"], 100 * s["hit_rate"], s["avg_spawn_seconds"],
+                s["acquires"], s["hits"], s["cold_spawns"],
+                s["evictions"], s["sweeps"],
+            )
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

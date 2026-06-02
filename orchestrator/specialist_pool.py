@@ -88,10 +88,17 @@ class SpecialistPool:
         # references tasks, so without this a GC pass could cancel an eviction
         # mid-flight and orphan the host's specialist subprocesses.
         self._evicting: set[asyncio.Task] = set()
+        # Lightweight counters so the warm-pool win is measurable before
+        # flipping WEB_POOL_ENABLED on in prod (see stats()).
+        self._stats: dict[str, float] = {
+            "acquires": 0, "hits": 0, "cold_spawns": 0,
+            "evictions": 0, "sweeps": 0, "spawn_seconds_total": 0.0,
+        }
 
     async def acquire(self, ctx: TurnContext) -> Lease:
         sig = pool_signature(ctx)
         async with self._lock:
+            self._stats["acquires"] += 1
             while True:
                 idle_match = next(
                     (e for e in self._entries
@@ -99,6 +106,7 @@ class SpecialistPool:
                 )
                 if idle_match is not None:
                     idle_match.leased = True
+                    self._stats["hits"] += 1
                     return self._lease(idle_match)
 
                 if len(self._entries) < self._max_hosts:
@@ -115,6 +123,7 @@ class SpecialistPool:
 
         # Cold spawn OUTSIDE the lock (it's the ~7s path; don't block the pool).
         host = router = None
+        t0 = self._now()
         try:
             hmac_key = secrets.token_urlsafe(32)
             runtime_dir = self._runtime_root / f"pool-{secrets.token_hex(8)}"
@@ -129,6 +138,13 @@ class SpecialistPool:
         async with self._lock:
             entry.host, entry.router = host, router
             entry.hmac_key, entry.runtime_dir = hmac_key, runtime_dir
+            self._stats["cold_spawns"] += 1
+            self._stats["spawn_seconds_total"] += max(0.0, self._now() - t0)
+            log.debug(
+                "pool: cold-spawned host for %s in %.1fs (live=%d, hit_rate=%.0f%%)",
+                sig, self._now() - t0, len(self._entries),
+                100 * self._stats["hits"] / max(1, self._stats["acquires"]),
+            )
             return self._lease(entry)
 
     async def release(self, lease: Lease) -> None:
@@ -146,6 +162,7 @@ class SpecialistPool:
                      if not e.leased and e.last_used <= cutoff]
             for e in stale:
                 self._entries.remove(e)
+            self._stats["sweeps"] += len(stale)
             self._slot_freed.notify_all()
         for e in stale:
             await self._shutdown(e)
@@ -159,6 +176,18 @@ class SpecialistPool:
         for e in entries:
             await self._shutdown(e)
 
+    def stats(self) -> dict[str, float]:
+        """A snapshot of pool counters for logging/observability. ``hit_rate``
+        (reused / acquired) and ``avg_spawn_seconds`` are the two numbers worth
+        watching to decide whether to raise WEB_POOL_ENABLED in production."""
+        s = dict(self._stats)
+        s["hit_rate"] = (s["hits"] / s["acquires"]) if s["acquires"] else 0.0
+        s["avg_spawn_seconds"] = (
+            s["spawn_seconds_total"] / s["cold_spawns"] if s["cold_spawns"] else 0.0
+        )
+        s["live_hosts"] = len(self._entries)
+        return s
+
     # ---- internals (call only while holding self._lock, except _shutdown) ----
 
     def _lease(self, entry: _Entry) -> Lease:
@@ -171,6 +200,7 @@ class SpecialistPool:
             return False
         victim = min(idle, key=lambda e: e.last_used)
         self._entries.remove(victim)
+        self._stats["evictions"] += 1
         # Schedule shutdown without awaiting under the lock. Hold a reference
         # (see self._evicting) until it completes so it can't be GC'd mid-flight.
         task = asyncio.create_task(self._shutdown(victim))

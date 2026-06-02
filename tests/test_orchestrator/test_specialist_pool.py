@@ -204,3 +204,55 @@ async def test_eviction_task_is_tracked_until_done(tmp_path):
     assert spawned[0].shutdown_called is True
     assert not spawned[0].runtime_dir.exists()
     assert not pool._evicting              # discarded on done
+
+
+# --- observability: pool stats so the warm-pool win is measurable ---
+
+
+@pytest.mark.asyncio
+async def test_stats_track_hits_misses_and_live_hosts():
+    pool, spawned = _make_pool()
+    l1 = await pool.acquire(_ctx())   # cold spawn (miss)
+    await pool.release(l1)
+    await pool.acquire(_ctx())        # reuse (hit)
+    s = pool.stats()
+    assert s["acquires"] == 2
+    assert s["cold_spawns"] == 1
+    assert s["hits"] == 1
+    assert s["live_hosts"] == 1
+    assert s["hit_rate"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_stats_record_cold_spawn_latency():
+    clock = {"t": 0.0}
+    spawned: list = []
+
+    async def factory(*, signature, runtime_dir, hmac_key):
+        clock["t"] += 7.0           # simulate a ~7s cold start
+        h = _FakeHost(hmac_key=hmac_key, turn_env={})
+        spawned.append(h)
+        return h, object()
+
+    pool = SpecialistPool(factory=factory, max_hosts=4, idle_ttl=60.0,
+                          now=lambda: clock["t"])
+    await pool.acquire(_ctx())
+    s = pool.stats()
+    assert s["cold_spawns"] == 1
+    assert s["avg_spawn_seconds"] == pytest.approx(7.0)
+
+
+@pytest.mark.asyncio
+async def test_stats_count_evictions_and_sweeps():
+    pool, spawned = _make_pool(max_hosts=1, idle_ttl=30.0)
+    clock = {"t": 0.0}
+    pool._now = lambda: clock["t"]
+    a = await pool.acquire(_ctx(user_id="a"))
+    await pool.release(a)
+    b = await pool.acquire(_ctx(user_id="b"))   # over cap -> evict a
+    await _asyncio.sleep(0)
+    assert pool.stats()["evictions"] == 1
+    await pool.release(b)                        # b idle (last_used = now)
+    clock["t"] = 1000.0
+    await pool.sweep()                           # b idle long past ttl
+    assert pool.stats()["sweeps"] == 1
