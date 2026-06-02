@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +84,10 @@ class SpecialistPool:
         self._entries: list[_Entry] = []           # all live (idle + leased)
         self._lock = asyncio.Lock()
         self._slot_freed = asyncio.Condition(self._lock)
+        # Strong refs to in-flight eviction shutdowns — asyncio only weakly
+        # references tasks, so without this a GC pass could cancel an eviction
+        # mid-flight and orphan the host's specialist subprocesses.
+        self._evicting: set[asyncio.Task] = set()
 
     async def acquire(self, ctx: TurnContext) -> Lease:
         sig = pool_signature(ctx)
@@ -166,12 +171,25 @@ class SpecialistPool:
             return False
         victim = min(idle, key=lambda e: e.last_used)
         self._entries.remove(victim)
-        # Schedule shutdown without awaiting under the lock.
-        asyncio.create_task(self._shutdown(victim))
+        # Schedule shutdown without awaiting under the lock. Hold a reference
+        # (see self._evicting) until it completes so it can't be GC'd mid-flight.
+        task = asyncio.create_task(self._shutdown(victim))
+        self._evicting.add(task)
+        task.add_done_callback(self._evicting.discard)
         return True
 
     async def _shutdown(self, entry: _Entry) -> None:
         try:
-            await entry.host.shutdown_all()
+            if entry.host is not None:
+                await entry.host.shutdown_all()
         except Exception:  # noqa: BLE001
             log.warning("pool: host shutdown failed", exc_info=True)
+        finally:
+            # Reap this host's per-host runtime-discovery dir (peers.json etc).
+            # Unlike the per-turn path, pooled hosts outlive a single turn, so
+            # their dirs would otherwise accumulate under .agent/runtime. Guard
+            # the reserved-slot sentinel (Path() == ".") so a drain that races an
+            # in-flight cold-spawn can never rmtree the current directory.
+            rt = entry.runtime_dir
+            if rt and str(rt) not in (".", ""):
+                shutil.rmtree(rt, ignore_errors=True)

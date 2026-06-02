@@ -156,3 +156,51 @@ async def test_drain_shuts_down_all_hosts():
     await pool.release(a)          # a idle, b still leased
     await pool.drain()
     assert all(h.shutdown_called for h in spawned)  # drains idle AND leased
+
+
+# --- review follow-ups: eviction task lifetime + runtime-dir cleanup ---
+
+
+def _make_pool_with_real_dirs(runtime_root, **over):
+    """A pool whose factory creates the host's runtime_dir on disk (like the
+    real MCPHost bootstrap) so cleanup can be asserted."""
+    spawned: list[_FakeHost] = []
+
+    async def factory(*, signature, runtime_dir, hmac_key):
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "peers.json").write_text("{}", encoding="utf-8")
+        host = _FakeHost(hmac_key=hmac_key,
+                         turn_env={"LANGCHAIN_AGENT_RUNTIME_DIR": str(runtime_dir)})
+        host.runtime_dir = runtime_dir
+        spawned.append(host)
+        return host, object()
+
+    kw = dict(factory=factory, max_hosts=8, idle_ttl=60.0, runtime_root=runtime_root)
+    kw.update(over)
+    return SpecialistPool(**kw), spawned
+
+
+@pytest.mark.asyncio
+async def test_shutdown_removes_pooled_runtime_dir(tmp_path):
+    pool, spawned = _make_pool_with_real_dirs(tmp_path)
+    lease = await pool.acquire(_ctx(user_id="a"))
+    rt = spawned[0].runtime_dir
+    assert rt.is_dir()                    # factory created it
+    await pool.drain()                    # drain -> _shutdown each host
+    assert not rt.exists()                # runtime dir cleaned up
+
+
+@pytest.mark.asyncio
+async def test_eviction_task_is_tracked_until_done(tmp_path):
+    # The eviction shutdown runs as a background task; the pool must hold a
+    # reference so it can't be GC'd mid-flight (which would orphan the host's
+    # subprocesses). After it completes, the tracking set is empty again.
+    pool, spawned = _make_pool_with_real_dirs(tmp_path, max_hosts=1)
+    a = await pool.acquire(_ctx(user_id="a"))
+    await pool.release(a)                  # a idle, evictable
+    await pool.acquire(_ctx(user_id="b"))  # over cap -> evict a (background)
+    assert pool._evicting                  # tracked while in flight
+    await _asyncio.gather(*list(pool._evicting))  # let it finish
+    assert spawned[0].shutdown_called is True
+    assert not spawned[0].runtime_dir.exists()
+    assert not pool._evicting              # discarded on done
