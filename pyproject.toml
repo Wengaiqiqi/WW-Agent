@@ -94,6 +94,7 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.0.0",
     "trustme>=1.0.0",
+    "bandit>=1.7.0",
 ]
 
 [project.scripts]
@@ -246,3 +247,11 @@ no_implicit_reexport = true
 [tool.black]
 line-length = 100
 target-version = ["py311", "py312"]
+
+[tool.bandit]
+# First-party static security scan. Scope to product code; tests use asserts
+# and spawn subprocess fixtures freely.
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+# B101 assert_used: invariants in non-test code. B404/B603/B607 subprocess:
+# spawning specialist subprocesses over MCP/A2A IS the product architecture.
+skips = ["B101", "B404", "B603", "B607"]

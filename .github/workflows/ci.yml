@@ -117,3 +117,27 @@ jobs:
             orchestrator/permission_gate.py \
             skills/skill_loader.py \
             tool/tool_registry.py
+
+  # ---------------------------------------------------------------------
+  # Static security scan. Gates NEW findings against a checked-in baseline
+  # (bandit-baseline.json) so it doesn't drown in pre-existing, reviewed
+  # findings. To accept a new finding, review it then regenerate the baseline:
+  #   bandit -c pyproject.toml -r . -f json -o bandit-baseline.json
+  # ---------------------------------------------------------------------
+  bandit:
+    name: bandit (static security scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run bandit (first-party, gates new findings vs baseline)
+        env:
+          PYTHONUTF8: "1"
+        run: bandit -c pyproject.toml -r . -b bandit-baseline.json
