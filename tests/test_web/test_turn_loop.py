@@ -49,3 +49,27 @@ async def test_stop_is_idempotent_and_joins_thread():
     loop.stop()
     loop.stop()  # second stop must not raise
     assert not loop.is_running
+
+
+@pytest.mark.asyncio
+async def test_restart_after_stop_runs_on_a_fresh_loop():
+    loop = TurnLoop()
+    loop.start()
+    first_id = loop.loop_id
+    loop.stop()
+
+    loop.start()  # restart: must install a NEW, running loop (not the stale one)
+    try:
+        assert loop.is_running
+        assert loop.loop_id != first_id
+
+        async def work():
+            return id(asyncio.get_running_loop())
+
+        # Work scheduled after restart must actually run on the new loop.
+        result = await asyncio.wait_for(
+            asyncio.wrap_future(loop.run_coroutine(work())), timeout=2.0,
+        )
+        assert result == loop.loop_id
+    finally:
+        loop.stop()

@@ -24,6 +24,13 @@ class TurnLoop:
     def start(self) -> None:
         if self._thread is not None:
             return
+        # Restart-safe: clear any state left by a prior start/stop so ``wait()``
+        # blocks until the NEW thread has installed a fresh loop (otherwise a
+        # second start would return immediately on the already-set event while
+        # ``self._loop`` still points at the previous, closed loop — work would
+        # then be scheduled on a dead loop and never run).
+        self._ready.clear()
+        self._loop = None
         self._thread = threading.Thread(
             target=self._run, name="web-turn-loop", daemon=True,
         )

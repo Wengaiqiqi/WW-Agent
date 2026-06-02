@@ -146,6 +146,20 @@ def create_app(
 
             app.state._warm_task = asyncio.create_task(warm_capability_catalog())
 
+        @app.on_event("shutdown")
+        async def _drain_pool() -> None:
+            # Reap pooled specialist subprocesses + stop the turn loop so the
+            # process exits cleanly (no orphaned children).
+            from web import bridge as _bridge
+
+            try:
+                if _bridge._POOL is not None:
+                    pool = _bridge._get_pool()
+                    loop = _bridge._ensure_turn_loop()
+                    await asyncio.wrap_future(loop.run_coroutine_factory(pool.drain))
+            finally:
+                _bridge._TURN_LOOP.stop()
+
     return app
 
 

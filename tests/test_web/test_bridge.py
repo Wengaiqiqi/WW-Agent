@@ -394,6 +394,33 @@ def test_warm_capability_catalog_swallows_errors(monkeypatch):
     asyncio.run(wb.warm_capability_catalog())
 
 
+def test_warm_capability_catalog_seeds_pool_when_enabled(monkeypatch, tmp_config_dir):
+    import asyncio as _a
+
+    from web import bridge
+
+    monkeypatch.setenv("WEB_POOL_ENABLED", "1")
+    seeded = {"n": 0}
+
+    class _FakeLease:
+        host = object(); router = object(); hmac_key = "h"
+
+    class _FakePool:
+        async def acquire(self, ctx):
+            seeded["n"] += 1
+            return _FakeLease()
+        async def release(self, lease):
+            pass
+
+    monkeypatch.setattr(bridge, "_get_pool", lambda: _FakePool())
+    # Avoid the real catalog spawn — only assert the seeding path runs.
+    monkeypatch.setattr(bridge, "_capability_catalog",
+                        lambda: _a.sleep(0, result=([], {})))
+
+    _a.run(bridge.warm_capability_catalog())
+    assert seeded["n"] == 1   # warm-up acquired+released one pooled host
+
+
 def test_web_turn_context_custom_endpoint_in_turn_env(tmp_config_dir, monkeypatch):
     for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
               "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):

@@ -173,9 +173,22 @@ async def warm_capability_catalog() -> None:
     rather than racing the global. Best-effort: on failure the first turn just
     builds the catalog lazily."""
     try:
-        if _CATALOG is not None:
-            return
-        await asyncio.to_thread(lambda: asyncio.run(_capability_catalog()))
+        if _CATALOG is None:
+            await asyncio.to_thread(lambda: asyncio.run(_capability_catalog()))
+        if config.pool_enabled():
+            # Pre-warm one pooled host for the default (anonymous, default-model)
+            # signature so the FIRST capability turn is hot, not cold. acquire +
+            # release leaves a warm idle host. Runs on the turn loop because the
+            # host it spawns is loop-affine.
+            loop = _ensure_turn_loop()
+            ctx = _web_turn_context(user_id="", model_id="",
+                                    session_key="", trace_id="warm")
+
+            async def _seed() -> None:
+                lease = await _get_pool().acquire(ctx)
+                await _get_pool().release(lease)
+
+            await asyncio.wrap_future(loop.run_coroutine_factory(_seed))
     except Exception:  # noqa: BLE001
         log.warning(
             "web: catalog warm-up failed; first turn will build it lazily",

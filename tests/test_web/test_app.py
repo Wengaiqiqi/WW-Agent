@@ -287,3 +287,31 @@ def test_chat_with_endpoint_id_routes_endpoint_fields(
         "model_id": "custom/gpt-5.4", "base_url": "https://x.test/v1",
         "api_key": "sk-z", "protocol": "anthropic",
     }
+
+
+def test_app_shutdown_drains_pool(db_path, web_secret, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from web import bridge
+
+    drained = {"n": 0}
+
+    class _FakePool:
+        async def drain(self):
+            drained["n"] += 1
+
+    monkeypatch.setattr(bridge, "_POOL", _FakePool())
+    monkeypatch.setattr(bridge, "_get_pool", lambda: bridge._POOL)
+
+    # Real bridge => the shutdown hook is registered, but keep startup hermetic
+    # (no real specialist spawn from the catalog warm-up).
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(bridge, "warm_capability_catalog", _noop)
+
+    from web.app import create_app
+    app = create_app(db_path=db_path, secret=web_secret, cookie_secure=False)
+    with TestClient(app):
+        pass  # entering+exiting the context triggers startup+shutdown
+    assert drained["n"] == 1
