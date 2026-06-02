@@ -21,22 +21,45 @@ COOKIE_NAME = "session"
 
 
 def _assert_safe_base_url(base_url: str) -> None:
-    """Reject a custom-endpoint ``base_url`` that resolves to a private /
-    loopback / link-local / metadata address — otherwise an authenticated user
-    could point the server-side LLM client at ``http://169.254.169.254/`` or an
-    internal service and exfiltrate the response (SSRF). Reuses the same
-    DNS-resolving guard ``tool_web`` applies to ``web_extract``; the
-    ``LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1`` escape hatch still works for local
-    dev (e.g. a localhost Ollama endpoint)."""
+    """Reject an unsafe custom-endpoint ``base_url``.
+
+    Two checks:
+
+    1. SSRF — reject a host that resolves to a private / loopback / link-local /
+       metadata address, else an authenticated user could point the server-side
+       LLM client at ``http://169.254.169.254/`` or an internal service and
+       exfiltrate the response. Reuses the same DNS-resolving guard ``tool_web``
+       applies to ``web_extract``.
+    2. Transport — require ``https`` for remote endpoints. A plaintext ``http``
+       endpoint sends the user's API key in the clear AND, unlike https, gives
+       no protection against DNS rebinding between this check and the actual
+       request (TLS cert validation pins the https case to the intended host).
+
+    The ``LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1`` escape hatch relaxes BOTH for
+    local dev (e.g. a localhost ``http`` Ollama endpoint).
+
+    Residual (accepted): for https endpoints a determined attacker controlling
+    DNS could still rebind, but TLS verification (on by default in build_llm —
+    never disabled) makes the rebound host fail cert validation. Full IP pinning
+    would close the remaining gap but is out of scope here."""
+    import os
     from urllib.parse import urlparse
 
     from tool.tool_web import hostname_is_safe
 
-    host = urlparse(base_url).hostname or ""
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
     allowed, reason = hostname_is_safe(host)
     if not allowed:
         raise HTTPException(
             status_code=400, detail=f"base_url host not allowed: {reason}"
+        )
+    allow_private = os.environ.get("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS") == "1"
+    if (parsed.scheme or "").lower() != "https" and not allow_private:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url must use https (set LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1 "
+                   "for local http dev endpoints)",
         )
 
 BridgeFn = Callable[..., Any]  # async generator: (prompt, *, trace_id, session_key, user_id, model_id)

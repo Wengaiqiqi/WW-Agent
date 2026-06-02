@@ -38,3 +38,22 @@ def test_escape_hatch_allows_private(monkeypatch):
     monkeypatch.setenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", "1")
     # With the documented dev escape hatch, a localhost endpoint is allowed.
     _assert_safe_base_url("http://127.0.0.1:11434/v1")  # no raise
+
+
+def test_remote_http_endpoint_rejected_requires_https(monkeypatch):
+    # A plaintext http endpoint to a public host leaks the API key and isn't
+    # rebinding-protected — must be rejected (use https).
+    import tool.tool_web as tw
+    monkeypatch.delenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", raising=False)
+    monkeypatch.setattr(tw, "hostname_is_safe", lambda host: (True, ""))
+    with pytest.raises(HTTPException) as ei:
+        _assert_safe_base_url("http://api.example.com/v1")
+    assert ei.value.status_code == 400
+    assert "https" in ei.value.detail
+
+
+def test_remote_https_endpoint_allowed(monkeypatch):
+    import tool.tool_web as tw
+    monkeypatch.delenv("LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS", raising=False)
+    monkeypatch.setattr(tw, "hostname_is_safe", lambda host: (True, ""))
+    _assert_safe_base_url("https://api.example.com/v1")  # no raise
