@@ -6,35 +6,45 @@ from pathlib import Path
 from web import bridge
 
 
-def test_web_turn_env_sets_and_restores(tmp_config_dir, monkeypatch):
-    monkeypatch.setenv("LANGCHAIN_AGENT_PERMISSION_MODE", "read-only")
+def test_web_turn_context_builds_turn_env(tmp_config_dir, monkeypatch):
+    # The web turn no longer mutates os.environ; it builds a TurnContext whose
+    # turn_env() is the explicit per-turn overlay (server-enforced workspace-write
+    # tier, per-user workspace, selected model).
     monkeypatch.delenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", raising=False)
     monkeypatch.delenv("LANGCHAIN_AGENT_MEMORY_USER", raising=False)
     monkeypatch.delenv("LANGCHAIN_AGENT_MODEL", raising=False)
 
-    with bridge._web_turn_env(user_id="u-alice", model_id="anthropic/claude-opus-4-7") as ws:
-        assert os.environ["LANGCHAIN_AGENT_PERMISSION_MODE"] == "workspace-write"
-        assert os.environ["LANGCHAIN_AGENT_MEMORY_USER"] == "u-alice"
-        assert os.environ["LANGCHAIN_AGENT_MODEL"] == "anthropic/claude-opus-4-7"
-        # per-user workspace under the config dir, and it exists
-        assert "u-alice" in os.environ["LANGCHAIN_AGENT_WORKSPACE_ROOT"]
-        assert Path(os.environ["LANGCHAIN_AGENT_WORKSPACE_ROOT"]).is_dir()
-        assert Path(ws) == Path(os.environ["LANGCHAIN_AGENT_WORKSPACE_ROOT"])
+    ctx = bridge._web_turn_context(
+        user_id="u-alice", model_id="anthropic/claude-opus-4-7",
+        session_key="s", trace_id="tr",
+    )
+    env = ctx.turn_env()
+    assert env["LANGCHAIN_AGENT_PERMISSION_MODE"] == "workspace-write"
+    assert env["LANGCHAIN_AGENT_MEMORY_USER"] == "u-alice"
+    assert env["LANGCHAIN_AGENT_MODEL"] == "anthropic/claude-opus-4-7"
+    # per-user workspace under the config dir, and it exists
+    assert "u-alice" in env["LANGCHAIN_AGENT_WORKSPACE_ROOT"]
+    assert Path(env["LANGCHAIN_AGENT_WORKSPACE_ROOT"]).is_dir()
+    assert ctx.workspace_root == Path(env["LANGCHAIN_AGENT_WORKSPACE_ROOT"])
+    # per-turn-id runtime dir so parallel turns don't collide
+    assert ctx.turn_id and ctx.turn_id in env["LANGCHAIN_AGENT_RUNTIME_DIR"]
 
-    # restored to the pre-existing value, model var removed (was unset before)
-    assert os.environ["LANGCHAIN_AGENT_PERMISSION_MODE"] == "read-only"
+    # Building the context does NOT touch the parent process env.
     assert "LANGCHAIN_AGENT_WORKSPACE_ROOT" not in os.environ
     assert "LANGCHAIN_AGENT_MEMORY_USER" not in os.environ
     assert "LANGCHAIN_AGENT_MODEL" not in os.environ
 
 
-def test_web_turn_env_two_users_isolated(tmp_config_dir):
-    with bridge._web_turn_env(user_id="u-alice", model_id="") as ws_a:
-        pass
-    with bridge._web_turn_env(user_id="u-bob", model_id="") as ws_b:
-        pass
-    assert Path(ws_a) != Path(ws_b)
-    assert "u-alice" in str(ws_a) and "u-bob" in str(ws_b)
+def test_web_turn_context_two_users_isolated(tmp_config_dir):
+    ctx_a = bridge._web_turn_context(user_id="u-alice", model_id="",
+                                     session_key="s", trace_id="tr")
+    ctx_b = bridge._web_turn_context(user_id="u-bob", model_id="",
+                                     session_key="s", trace_id="tr")
+    assert ctx_a.workspace_root != ctx_b.workspace_root
+    assert "u-alice" in str(ctx_a.workspace_root)
+    assert "u-bob" in str(ctx_b.workspace_root)
+    # distinct per-turn runtime dirs too
+    assert ctx_a.runtime_dir != ctx_b.runtime_dir
 
 
 import asyncio
@@ -384,30 +394,36 @@ def test_warm_capability_catalog_swallows_errors(monkeypatch):
     asyncio.run(wb.warm_capability_catalog())
 
 
-def test_web_turn_env_custom_endpoint_sets_and_restores(tmp_config_dir, monkeypatch):
+def test_web_turn_context_custom_endpoint_in_turn_env(tmp_config_dir, monkeypatch):
     for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
               "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):
         monkeypatch.delenv(k, raising=False)
 
-    with bridge._web_turn_env(
+    ctx = bridge._web_turn_context(
         user_id="u-alice", model_id="custom/gpt-5.4",
         base_url="https://x.test/v1", api_key="sk-z", protocol="anthropic",
-    ):
-        assert os.environ["LANGCHAIN_AGENT_MODEL"] == "custom/gpt-5.4"
-        assert os.environ["LANGCHAIN_AGENT_BASE_URL"] == "https://x.test/v1"
-        assert os.environ["LANGCHAIN_AGENT_API_KEY"] == "sk-z"
-        assert os.environ["LANGCHAIN_AGENT_PROTOCOL"] == "anthropic"
+        session_key="s", trace_id="tr",
+    )
+    env = ctx.turn_env()
+    assert env["LANGCHAIN_AGENT_MODEL"] == "custom/gpt-5.4"
+    assert env["LANGCHAIN_AGENT_BASE_URL"] == "https://x.test/v1"
+    assert env["LANGCHAIN_AGENT_API_KEY"] == "sk-z"
+    assert env["LANGCHAIN_AGENT_PROTOCOL"] == "anthropic"
 
+    # Parent env untouched.
     for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
               "LANGCHAIN_AGENT_PROTOCOL", "LANGCHAIN_AGENT_MODEL"):
         assert k not in os.environ
 
 
-def test_web_turn_env_no_endpoint_leaves_custom_vars_unset(tmp_config_dir, monkeypatch):
+def test_web_turn_context_no_endpoint_omits_custom_vars(tmp_config_dir, monkeypatch):
     for k in ("LANGCHAIN_AGENT_BASE_URL", "LANGCHAIN_AGENT_API_KEY",
               "LANGCHAIN_AGENT_PROTOCOL"):
         monkeypatch.delenv(k, raising=False)
-    with bridge._web_turn_env(user_id="u-bob", model_id="openai/gpt-4o"):
-        assert "LANGCHAIN_AGENT_BASE_URL" not in os.environ
-        assert "LANGCHAIN_AGENT_API_KEY" not in os.environ
-        assert "LANGCHAIN_AGENT_PROTOCOL" not in os.environ
+    ctx = bridge._web_turn_context(user_id="u-bob", model_id="openai/gpt-4o",
+                                   session_key="s", trace_id="tr")
+    env = ctx.turn_env()
+    # Empty optionals are omitted (not set to "") so they don't clobber a child default.
+    assert "LANGCHAIN_AGENT_BASE_URL" not in env
+    assert "LANGCHAIN_AGENT_API_KEY" not in env
+    assert "LANGCHAIN_AGENT_PROTOCOL" not in env
