@@ -167,7 +167,13 @@ def create_app(
                 if _bridge._POOL is not None:
                     pool = _bridge._get_pool()
                     loop = _bridge._ensure_turn_loop()
-                    await asyncio.wrap_future(loop.run_coroutine_factory(pool.drain))
+                    # Block on the turn loop's drain via a worker thread rather
+                    # than wrap_future: awaiting a cross-loop future directly in
+                    # the lifespan task entangles it with anyio's lifespan cancel
+                    # scope (RuntimeError on scope exit). to_thread keeps the
+                    # await loop-local. Mirrors _stream_off_loop's join pattern.
+                    fut = loop.run_coroutine_factory(pool.drain)
+                    await asyncio.to_thread(fut.result)
             finally:
                 _bridge._TURN_LOOP.stop()
 
