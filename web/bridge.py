@@ -20,6 +20,7 @@ from gateway.runner import (
 )
 from orchestrator.turn_context import TurnContext
 from web import config
+from web.turn_loop import TurnLoop
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,59 @@ _TURN_SEMAPHORE = asyncio.Semaphore(config.max_concurrency())
 # yet another thread, so the catalog snapshot must be serialized with a plain
 # threading lock rather than an event-loop-bound asyncio.Lock.
 _CATALOG_LOCK = threading.Lock()
+
+
+# The single persistent loop that owns the pool and runs every turn coroutine.
+# Lazily started on the first turn (and by warm-up) so importing the module is
+# side-effect-free for tests that monkeypatch _stream_off_loop.
+_TURN_LOOP = TurnLoop()
+_POOL: Any = None          # orchestrator.specialist_pool.SpecialistPool | None
+_POOL_LOCK = threading.Lock()
+
+
+def _ensure_turn_loop() -> TurnLoop:
+    if not _TURN_LOOP.is_running:
+        _TURN_LOOP.start()
+    return _TURN_LOOP
+
+
+async def _host_factory(*, signature, runtime_dir, hmac_key):
+    """Cold-spawn a bootstrapped (host, router) for a pool signature. Runs ON the
+    turn loop. The signature's fields are reconstructed into a turn_env via a
+    throwaway TurnContext so the spawn env matches the per-turn path exactly."""
+    from orchestrator.main import _bootstrap
+    from orchestrator.mcp_host import MCPHost
+    from orchestrator.router import CapabilityRouter
+
+    user_id, workspace_root, model_id, base_url, api_key, protocol = signature
+    ctx = TurnContext(
+        turn_id="pool", user_id=user_id, workspace_root=Path(workspace_root),
+        permission_mode=config.WEB_PERMISSION_MODE, model_id=model_id,
+        base_url=base_url, api_key=api_key, protocol=protocol,
+        session_key="", trace_id="pool", hmac_key=hmac_key,
+        runtime_dir=runtime_dir,
+    )
+    host = MCPHost(hmac_key=hmac_key, turn_env=ctx.turn_env())
+    router = CapabilityRouter()
+    await _bootstrap(host, router)
+    return host, router
+
+
+def _get_pool() -> Any:
+    """Lazily build the process-wide pool (thread-safe). The pool object itself
+    is loop-agnostic to *create*; only its coroutines must run on the turn loop."""
+    global _POOL
+    if _POOL is not None:
+        return _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            from orchestrator.specialist_pool import SpecialistPool
+            _POOL = SpecialistPool(
+                factory=_host_factory,
+                max_hosts=config.pool_max_hosts(),
+                idle_ttl=config.pool_idle_ttl(),
+            )
+    return _POOL
 
 
 # Process-wide cache of the STATIC capability catalog (capability names + tool
@@ -274,8 +328,8 @@ async def _stream_off_loop(
     *, trace_id: str, session_key: str, user_id: str, model_id: str,
     base_url: str = "", api_key: str = "", protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run the whole turn on a dedicated worker thread (with its own event
-    loop) and forward its events to the serving loop via a queue.
+    """Run the whole turn on the shared persistent ``TurnLoop`` and forward its
+    events to the serving loop via a queue.
 
     The orchestrator turn is sync-heavy — the planner is a blocking LLM
     ``.invoke`` and bootstrap spawns specialist subprocesses. Driven directly
@@ -283,10 +337,14 @@ async def _stream_off_loop(
     server until it returns, so a browser switching conversations mid-turn just
     hangs. Running the turn off the serving loop keeps that loop free to serve
     other requests; the caller still holds a ``_TURN_SEMAPHORE`` slot for the
-    worker's full lifetime, so at most WEB_MAX_CONCURRENCY turns run at once.
-    Each turn now carries its own per-turn-id runtime dir and explicit spawn env
-    (TurnContext), so concurrent turns no longer collide on ``.agent/runtime``
-    or process-global env."""
+    turn's full lifetime, so at most WEB_MAX_CONCURRENCY turns run at once.
+
+    Why one PERSISTENT loop (not a fresh thread per turn): pooled ``MCPHost``s
+    hold stdio transports bound to the loop that created them, so every turn
+    that touches a pooled host must run on that one loop. Each turn still carries
+    its own per-turn-id runtime dir and explicit spawn env (TurnContext), so
+    concurrent turns on the shared loop never collide on ``.agent/runtime`` or
+    process-global env."""
     serving_loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     done = object()
@@ -299,45 +357,39 @@ async def _stream_off_loop(
         except RuntimeError:
             pass
 
-    def _worker() -> None:
-        async def _produce() -> None:
-            try:
-                async for ev in _run_streaming_locked(
-                    prompt,
-                    trace_id=trace_id,
-                    session_key=session_key,
-                    user_id=user_id,
-                    model_id=model_id,
-                    base_url=base_url,
-                    api_key=api_key,
-                    protocol=protocol,
-                ):
-                    _emit(ev)
-            except asyncio.CancelledError:
-                # Turn aborted mid-stream — the browser disconnected (closed
-                # the tab, switched conversations) and Starlette cancelled the
-                # SSE response. Expected, not a crash: log quietly and let the
-                # finally signal done so the consuming side unblocks. The
-                # ``async for`` already ran ``_run_streaming_locked``'s finally
-                # (host.shutdown_all, env restore) during unwinding.
-                log.info("web: turn cancelled mid-stream (client disconnected)")
-            except Exception as exc:  # noqa: BLE001  — never drop the stream
-                log.exception("web: turn worker crashed")
-                _emit({"type": "error", "message": str(exc)})
-                _emit({"type": "done", "text": ""})
-            finally:
-                _emit(done)
-
-        # CancelledError is a BaseException, not Exception — if it ever escapes
-        # _produce (e.g. raised during loop shutdown), keep it from crashing the
-        # worker thread with a noisy traceback.
+    async def _produce() -> None:
         try:
-            asyncio.run(_produce())
+            async for ev in _run_streaming_locked(
+                prompt,
+                trace_id=trace_id,
+                session_key=session_key,
+                user_id=user_id,
+                model_id=model_id,
+                base_url=base_url,
+                api_key=api_key,
+                protocol=protocol,
+            ):
+                _emit(ev)
         except asyncio.CancelledError:
-            pass
+            # Turn aborted mid-stream — the browser disconnected (closed the
+            # tab, switched conversations) and the turn was cancelled on the
+            # turn loop. Expected, not a crash. The ``async for`` already ran
+            # ``_run_streaming_locked``'s finally (lease release / host
+            # shutdown, runtime-dir cleanup) during unwinding. Re-raise so the
+            # task records as cancelled.
+            log.info("web: turn cancelled mid-stream (client disconnected)")
+            raise
+        except Exception as exc:  # noqa: BLE001  — never drop the stream
+            log.exception("web: turn worker crashed")
+            _emit({"type": "error", "message": str(exc)})
+            _emit({"type": "done", "text": ""})
+        finally:
+            _emit(done)
 
-    thread = threading.Thread(target=_worker, name="web-turn", daemon=True)
-    thread.start()
+    # Create the coroutine ON the turn loop (loop-affine: it may touch pooled
+    # hosts). run_coroutine_factory returns a concurrent.futures.Future.
+    turn_loop = _ensure_turn_loop()
+    future = turn_loop.run_coroutine_factory(_produce)
     # Open the stream with an immediate keepalive so the connection carries
     # bytes from the start. The first real token can be 10s+ away (specialist
     # spawn on the first turn, or a slow LLM behind a proxy), and an idle SSE
@@ -356,10 +408,18 @@ async def _stream_off_loop(
                 break
             yield ev
     finally:
-        # Hold the turn open until the worker (and its subprocesses) finish,
-        # even if the client disconnected mid-stream — otherwise the guard would
-        # release and let a second turn clobber the shared runtime/env.
-        await asyncio.to_thread(thread.join)
+        # Hold the turn open until the turn coroutine (and its subprocesses)
+        # finish, even if the client disconnected mid-stream — its finally
+        # releases the lease / shuts the host down before we free the semaphore
+        # slot. On disconnect, cancel the turn on its own loop first.
+        # run_coroutine_threadsafe's future stays PENDING until the task
+        # completes, so cancel() reliably propagates to the asyncio task.
+        if not future.done():
+            future.cancel()
+        try:
+            await asyncio.to_thread(future.result)
+        except BaseException:  # noqa: BLE001 — cancelled or already surfaced
+            pass
 
 
 async def _plan_and_dispatch(
@@ -367,7 +427,7 @@ async def _plan_and_dispatch(
     *,
     prompt: str,
     ensure_specialists: Any,
-    hmac_key: str,
+    hmac_key: Any,  # str | Callable[[], str] — late-bound for pooled hosts
     trace_id: str,
     history_context: str,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -422,7 +482,9 @@ async def _plan_and_dispatch(
         prompt=prompt,
         host=host,
         router=router,
-        hmac_key=hmac_key,
+        # hmac_key may be a late-bound getter (pooled host's baked key is only
+        # known after ensure_specialists()); resolve it here, post-spawn.
+        hmac_key=hmac_key() if callable(hmac_key) else hmac_key,
         trace_id=trace_id,
         history_context=history_context,
     ):
@@ -443,13 +505,25 @@ async def _run_streaming_locked(
         protocol=protocol, session_key=session_key, trace_id=trace_id,
     )
 
-    # Lazily-created MCP host/router — only a capability turn pays the spawn.
+    # Specialists are obtained lazily — only a capability turn pays for them; a
+    # prose turn never calls ensure_specialists. When pooling is enabled the host
+    # is leased from (and returned to) the warm pool and dispatch uses the host's
+    # baked hmac_key. When disabled we cold-spawn a private host and shut it down
+    # in the finally — byte-for-byte today's behavior, using ctx.hmac_key.
+    lease: Any = None
     host: Any = None
     router: Any = None
+    dispatch_hmac_key = ctx.hmac_key
 
     async def ensure_specialists() -> tuple[Any, Any]:
-        """Spawn specialists on first capability use; memoised for the turn."""
-        nonlocal host, router
+        """Lease a pooled host (enabled) or cold-spawn a private one (disabled);
+        memoised for the turn."""
+        nonlocal lease, host, router, dispatch_hmac_key
+        if config.pool_enabled():
+            if lease is None:
+                lease = await _get_pool().acquire(ctx)
+                dispatch_hmac_key = lease.hmac_key  # host's baked key, not ctx's
+            return lease.host, lease.router
         from orchestrator.main import _bootstrap
         from orchestrator.mcp_host import MCPHost
         from orchestrator.router import CapabilityRouter
@@ -477,7 +551,9 @@ async def _run_streaming_locked(
                     planner,
                     prompt=prompt,
                     ensure_specialists=ensure_specialists,
-                    hmac_key=ctx.hmac_key,
+                    # Late-bound: ensure_specialists sets the host's baked key
+                    # (pooled path) before any dispatch; prose turns never use it.
+                    hmac_key=lambda: dispatch_hmac_key,
                     trace_id=trace_id,
                     history_context=history_context,
                 ):
@@ -492,7 +568,10 @@ async def _run_streaming_locked(
                 yield {"type": "done", "text": ""}
                 return
         finally:
-            # Only shut down if a capability turn actually spawned the host.
+            # Pooled path: return the host to the warm pool (not shut down).
+            if lease is not None:
+                await _get_pool().release(lease)
+            # Disabled path: a capability turn cold-spawned a private host.
             if host is not None:
                 await host.shutdown_all()
             if session_key and final_text:
