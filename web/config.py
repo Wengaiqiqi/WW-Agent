@@ -15,6 +15,40 @@ log = logging.getLogger(__name__)
 # Server-enforced permission tier for ALL web users. Not user-selectable.
 WEB_PERMISSION_MODE = "workspace-write"
 
+
+class UnsafeExposureError(RuntimeError):
+    """Raised when the server would bind to a network-reachable address without
+    the secrets required to expose it safely."""
+
+
+def is_loopback(host: str) -> bool:
+    """True for binds reachable only from the local machine. ``0.0.0.0`` / ``::``
+    (all-interfaces) and any concrete LAN/public address are NOT loopback."""
+    h = (host or "").strip().strip("[]").lower()
+    return h in ("127.0.0.1", "localhost", "::1")
+
+
+def assert_safe_for_exposure(host: str) -> None:
+    """Refuse a network-exposed bind without the mandatory secrets.
+
+    On a non-loopback bind, anyone who can reach the port can register an
+    account and drive a workspace-write agent (shell/file/python tools), so a
+    persistent JWT secret AND a registration gate are required. Loopback binds
+    stay zero-config for local dev. Single source of truth for "safe to expose"
+    — both ``web.__main__`` and any embedding server call this."""
+    if is_loopback(host):
+        return
+    missing = [
+        name for name in ("WEB_AUTH_SECRET", "WEB_SIGNUP_CODE")
+        if not os.environ.get(name, "").strip()
+    ]
+    if missing:
+        raise UnsafeExposureError(
+            f"Refusing to bind {host} (network-exposed) without "
+            f"{' and '.join(missing)} set. Set them, or bind 127.0.0.1 for "
+            "local-only use."
+        )
+
 # Hard cap on a single user message (chars), checked before dispatch.
 MAX_MESSAGE_CHARS = 8000
 

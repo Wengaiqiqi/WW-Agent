@@ -18,14 +18,6 @@ import os
 import sys
 
 
-def _is_loopback(host: str) -> bool:
-    """True for binds reachable only from the local machine. ``0.0.0.0`` and
-    ``::`` (all-interfaces) and any concrete LAN/public address are NOT
-    loopback and require secure config before exposure."""
-    h = (host or "").strip().strip("[]").lower()
-    return h in ("127.0.0.1", "localhost", "::1")
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m web")
     p.add_argument(
@@ -47,24 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Refuse to expose the server to the network without explicit secure config.
-    # On a non-loopback bind, anyone who can reach the port can register an
-    # account and drive a workspace-write agent (shell/file/python tools), so a
-    # persistent JWT secret AND a registration gate are mandatory. Loopback
-    # binds stay zero-config for local dev.
-    if not _is_loopback(args.host):
-        missing = [
-            name
-            for name in ("WEB_AUTH_SECRET", "WEB_SIGNUP_CODE")
-            if not os.environ.get(name, "").strip()
-        ]
-        if missing:
-            print(
-                f"Refusing to bind {args.host} (network-exposed) without "
-                f"{' and '.join(missing)} set. Set them, or bind 127.0.0.1 for "
-                "local-only use.",
-                file=sys.stderr,
-            )
-            return 2
+    # Single source of truth for "safe to expose" lives in web.config.
+    from web import config
+
+    try:
+        config.assert_safe_for_exposure(args.host)
+    except config.UnsafeExposureError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     import uvicorn
 
