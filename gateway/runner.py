@@ -41,7 +41,20 @@ from orchestrator.turns import LLMPlanner, _stub_planner, TurnRunner
 log = logging.getLogger(__name__)
 
 
-_CONCURRENCY_GUARD = asyncio.Lock()
+def max_concurrency() -> int:
+    """Max simultaneous gateway turns. Default 1 = today's serialized behavior
+    (reversible rollout); raise ``GATEWAY_MAX_CONCURRENCY`` to enable multi-user
+    parallelism now that per-turn state lives on the TurnContext (per-user
+    memory, per-turn-id runtime dir, explicit planner cfg)."""
+    try:
+        return max(1, int(os.environ.get("GATEWAY_MAX_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
+
+
+# Bounded gateway concurrency. Default 1 reproduces the old single asyncio-lock
+# behavior; GATEWAY_MAX_CONCURRENCY>1 lets independent turns run in parallel.
+_GATEWAY_SEMAPHORE = asyncio.Semaphore(max_concurrency())
 
 
 @contextlib.contextmanager
@@ -110,14 +123,16 @@ async def run_turn(
     See :mod:`tool.tool_memory` for the on-disk layout. Empty user_id falls
     back to the global ``memories/`` layout.
 
-    Concurrency: one turn at a time per process. The orchestrator and its
-    spawned MCP children rely on ``.agent/runtime/`` files that are not safe
-    for concurrent writers; serialising turns sidesteps that.
+    Concurrency: bounded by ``_GATEWAY_SEMAPHORE`` (GATEWAY_MAX_CONCURRENCY;
+    default 1 = serialized). Each turn carries its own TurnContext — per-user
+    memory, per-turn-id ``.agent/runtime`` dir, and an explicitly-resolved
+    planner cfg — so concurrent turns no longer collide on shared runtime files
+    or process-global env.
     """
     if not prompt or not prompt.strip():
         return ""
 
-    async with _CONCURRENCY_GUARD:
+    async with _GATEWAY_SEMAPHORE:
         return await _run_turn_locked(
             prompt,
             trace_id=trace_id or "gw1",
