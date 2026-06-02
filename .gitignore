@@ -39,3 +39,8 @@ Thumbs.db
 /try/
 /legacy/
 /.mypy_cache/
+
+# Local tooling / scratch output that kept showing up as untracked noise.
+.gstack/
+/7766.txt
+*temp_wt.txt

@@ -1,0 +1,13 @@
+# Normalize line endings: store LF in the repo, check out native on each OS.
+# Stops the "LF will be replaced by CRLF" churn warnings on Windows and keeps
+# diffs/blame stable across Windows + Linux (CI runs on both).
+* text=auto eol=lf
+
+# Binary assets — never touch their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.svg text eol=lf
+*.pdf binary
+*.xlsx binary
+*.docx binary
