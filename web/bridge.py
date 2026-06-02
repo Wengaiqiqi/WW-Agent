@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from gateway.runner import (
-    _CONCURRENCY_GUARD,
     _build_planner,
     _build_planner_context,
     scoped_env,
@@ -28,6 +27,19 @@ log = logging.getLogger(__name__)
 # How often to emit an SSE keepalive while waiting for the next real event.
 # Must be comfortably below typical proxy/browser idle timeouts (~30-60s).
 _HEARTBEAT_SECONDS = 10.0
+
+
+# Bounded concurrency for web turns. Default 1 reproduces the old single-guard
+# behavior; WEB_MAX_CONCURRENCY>1 lets independent turns run in parallel now
+# that per-turn state lives on the TurnContext (per-user workspace, per-turn-id
+# runtime dir, explicit spawn env) instead of process-global os.environ.
+_TURN_SEMAPHORE = asyncio.Semaphore(config.max_concurrency())
+
+# Guards the one-time _CATALOG build. Cross-THREAD (not asyncio): turns run on
+# worker threads each with their own event loop, and the startup warm-up runs on
+# yet another thread, so the catalog snapshot must be serialized with a plain
+# threading lock rather than an event-loop-bound asyncio.Lock.
+_CATALOG_LOCK = threading.Lock()
 
 
 # Process-wide cache of the STATIC capability catalog (capability names + tool
@@ -60,8 +72,9 @@ async def _capability_catalog() -> tuple[list[str], dict[str, dict]]:
 
     On the first call, spawn the specialists once in an ISOLATED runtime dir,
     snapshot the router state, then tear them down. Subsequent calls hit the
-    cache. Turns are serialised on ``_CONCURRENCY_GUARD`` so there's no race on
-    the module global.
+    cache. The build is guarded by ``_CATALOG_LOCK`` (double-checked) so that
+    when WEB_MAX_CONCURRENCY>1 lets several turns run at once, only one of them
+    pays the spawn and there's no race on the module global.
     """
     global _CATALOG
     if _CATALOG is not None:
@@ -74,19 +87,25 @@ async def _capability_catalog() -> tuple[list[str], dict[str, dict]]:
     from orchestrator.mcp_host import MCPHost
     from orchestrator.router import CapabilityRouter
 
-    snap_dir = Path(tempfile.mkdtemp(prefix="ww-catalog-"))
-    host = MCPHost(hmac_key=secrets.token_urlsafe(32))
-    router = CapabilityRouter()
-    try:
-        with scoped_env({"LANGCHAIN_AGENT_RUNTIME_DIR": str(snap_dir)}):
-            await _bootstrap(host, router)
-            _CATALOG = {
-                "capabilities": list(router.all_capabilities()),
-                "tool_schemas": dict(router.describe_tools()),
-            }
-    finally:
-        await host.shutdown_all()
-        shutil.rmtree(snap_dir, ignore_errors=True)
+    # Cross-thread guard: re-check under the lock (another turn/the warm-up may
+    # have just built it) so the heavy spawn happens exactly once.
+    with _CATALOG_LOCK:
+        if _CATALOG is not None:
+            return _CATALOG["capabilities"], _CATALOG["tool_schemas"]
+
+        snap_dir = Path(tempfile.mkdtemp(prefix="ww-catalog-"))
+        host = MCPHost(hmac_key=secrets.token_urlsafe(32))
+        router = CapabilityRouter()
+        try:
+            with scoped_env({"LANGCHAIN_AGENT_RUNTIME_DIR": str(snap_dir)}):
+                await _bootstrap(host, router)
+                _CATALOG = {
+                    "capabilities": list(router.all_capabilities()),
+                    "tool_schemas": dict(router.describe_tools()),
+                }
+        finally:
+            await host.shutdown_all()
+            shutil.rmtree(snap_dir, ignore_errors=True)
     return _CATALOG["capabilities"], _CATALOG["tool_schemas"]
 
 
@@ -94,15 +113,15 @@ async def warm_capability_catalog() -> None:
     """Pre-build the capability catalog at startup so the FIRST user turn
     doesn't pay the one-time specialist spawn (~10s before first token).
 
-    Runs the spawn OFF the serving loop (its own loop in a worker thread) and
-    UNDER the turn guard, so it neither freezes the event loop nor races a
-    concurrent turn's env/runtime mutations. Best-effort: on failure the first
-    turn just builds the catalog lazily."""
+    Runs the spawn OFF the serving loop (its own loop in a worker thread) so it
+    doesn't freeze the event loop. The catalog build is itself serialized on
+    ``_CATALOG_LOCK``, so a turn that arrives mid-warm-up blocks on that lock
+    rather than racing the global. Best-effort: on failure the first turn just
+    builds the catalog lazily."""
     try:
-        async with _CONCURRENCY_GUARD:
-            if _CATALOG is not None:
-                return
-            await asyncio.to_thread(lambda: asyncio.run(_capability_catalog()))
+        if _CATALOG is not None:
+            return
+        await asyncio.to_thread(lambda: asyncio.run(_capability_catalog()))
     except Exception:  # noqa: BLE001
         log.warning(
             "web: catalog warm-up failed; first turn will build it lazily",
@@ -227,15 +246,16 @@ async def run_turn_streaming(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one orchestrator turn and yield SSE event dicts.
 
-    Serialised on the shared concurrency guard. Sets the per-turn env scope,
-    bootstraps a private MCPHost, runs the planner, streams the dispatch, then
-    appends the final pair to session_store (planner context). The route layer
-    is responsible for persisting to SQLite for the UI."""
+    Bounded by ``_TURN_SEMAPHORE`` (WEB_MAX_CONCURRENCY; default 1 = serialized).
+    Builds the per-turn TurnContext, bootstraps a private MCPHost, runs the
+    planner, streams the dispatch, then appends the final pair to session_store
+    (planner context). The route layer is responsible for persisting to SQLite
+    for the UI."""
     if not prompt or not prompt.strip():
         yield {"type": "done", "text": ""}
         return
 
-    async with _CONCURRENCY_GUARD:
+    async with _TURN_SEMAPHORE:
         async for ev in _stream_off_loop(
             prompt,
             trace_id=trace_id,
@@ -262,9 +282,11 @@ async def _stream_off_loop(
     on uvicorn's single serving loop, every blocking step freezes the whole
     server until it returns, so a browser switching conversations mid-turn just
     hangs. Running the turn off the serving loop keeps that loop free to serve
-    other requests; the caller still holds ``_CONCURRENCY_GUARD`` for the
-    worker's full lifetime, so turns stay serialised (they share
-    ``.agent/runtime`` + process-global env)."""
+    other requests; the caller still holds a ``_TURN_SEMAPHORE`` slot for the
+    worker's full lifetime, so at most WEB_MAX_CONCURRENCY turns run at once.
+    Each turn now carries its own per-turn-id runtime dir and explicit spawn env
+    (TurnContext), so concurrent turns no longer collide on ``.agent/runtime``
+    or process-global env."""
     serving_loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     done = object()

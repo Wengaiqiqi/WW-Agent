@@ -85,6 +85,16 @@ def rate_limit_per_min() -> int:
         return 20
 
 
+def max_concurrency() -> int:
+    """Max simultaneous web turns. Default 1 = today's serialized behavior
+    (reversible rollout); raise ``WEB_MAX_CONCURRENCY`` to enable multi-user
+    parallelism now that per-turn state lives on the TurnContext."""
+    try:
+        return max(1, int(os.environ.get("WEB_MAX_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
+
+
 def cookie_secure() -> bool:
     """Whether the session cookie carries the Secure flag. Default true; set
     ``WEB_COOKIE_SECURE=0`` for local http dev."""
