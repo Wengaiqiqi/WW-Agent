@@ -72,19 +72,22 @@ def _scan(content: str) -> Optional[str]:
     return None
 
 
-def _user_scope_dir() -> Optional[Path]:
-    """Return the per-user memory dir when ``LANGCHAIN_AGENT_MEMORY_USER`` is
-    set, else ``None`` (caller uses the legacy global location)."""
-    user_id = (os.environ.get(_USER_ENV_VAR) or "").strip()
+def _user_scope_dir(user: Optional[str] = None) -> Optional[Path]:
+    """Return the per-user memory dir for ``user`` (or, when ``user`` is None,
+    the ``LANGCHAIN_AGENT_MEMORY_USER`` env). Empty user => ``None`` (caller uses
+    the legacy global location). Passing ``user`` explicitly lets a per-turn
+    caller scope memory without mutating process-global env — required for
+    concurrent multi-user turns."""
+    user_id = (user if user is not None else os.environ.get(_USER_ENV_VAR) or "").strip()
     if not user_id:
         return None
     digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
     return agent_paths.memories_dir() / "users" / digest
 
 
-def _path_for(target: str) -> Path:
+def _path_for(target: str, user: Optional[str] = None) -> Path:
     name = "USER.md" if target == "user" else "MEMORY.md"
-    scoped = _user_scope_dir()
+    scoped = _user_scope_dir(user)
     if scoped is not None:
         return scoped / name
     return agent_paths.memories_dir() / name
@@ -94,8 +97,8 @@ def _limit_for(target: str) -> int:
     return _USER_CHAR_LIMIT if target == "user" else _MEMORY_CHAR_LIMIT
 
 
-def _read_entries(target: str) -> List[str]:
-    path = _path_for(target)
+def _read_entries(target: str, user: Optional[str] = None) -> List[str]:
+    path = _path_for(target, user)
     if not path.is_file():
         return []
     try:
@@ -212,14 +215,17 @@ def memory_tool(action: str, target: str = "memory", content: str = "", old_text
 # ---------------------------------------------------------------------------
 # System-prompt snapshot — read at session start, never mutated mid-session.
 # ---------------------------------------------------------------------------
-def snapshot_for_system_prompt() -> str:
+def snapshot_for_system_prompt(user: Optional[str] = None) -> str:
     """Return a Markdown block to inject into the system prompt.
 
-    Empty string if no memory has been recorded yet.
+    Empty string if no memory has been recorded yet. ``user`` scopes the
+    snapshot to that user's memory dir explicitly (defaults to the
+    ``LANGCHAIN_AGENT_MEMORY_USER`` env); pass it per-turn to avoid relying on
+    process-global env under concurrency.
     """
     parts: list[str] = []
-    user_entries = _read_entries("user")
-    memory_entries = _read_entries("memory")
+    user_entries = _read_entries("user", user)
+    memory_entries = _read_entries("memory", user)
     if user_entries:
         parts.append("## What you know about the user (USER.md)")
         parts.extend(f"- {e}" for e in user_entries)

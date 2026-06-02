@@ -128,12 +128,17 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         })
 
 
-def _build_orchestrator_llm():
-    """Build a chat model for the orchestrator's planner (one-shot mode)."""
+def _build_orchestrator_llm(cfg=None):
+    """Build a chat model for the orchestrator's planner (one-shot mode).
+
+    ``cfg`` (a resolved ActiveConfig, e.g. from ``resolve_config(ctx)``) lets a
+    caller avoid the process-global ``load_active_config()`` env read so two
+    concurrent turns can't clobber each other's model selection. ``None`` keeps
+    the legacy env-driven path for the CLI / single-user callers."""
     from config import build_llm, hydrate_env_from_credentials, load_active_config
 
     hydrate_env_from_credentials()
-    return build_llm(load_active_config())
+    return build_llm(cfg if cfg is not None else load_active_config())
 
 
 async def run_prompt(prompt: str) -> int:
