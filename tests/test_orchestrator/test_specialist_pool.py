@@ -81,3 +81,49 @@ async def test_acquire_different_signature_spawns_separate_host():
     b = await pool.acquire(_ctx(user_id="bob"))
     assert len(spawned) == 2
     assert a.host is not b.host
+
+
+import asyncio as _asyncio
+
+
+@pytest.mark.asyncio
+async def test_lru_evicts_oldest_idle_when_over_cap():
+    pool, spawned = _make_pool(max_hosts=2)
+    clock = {"t": 100.0}
+    pool._now = lambda: clock["t"]  # deterministic LRU ordering
+
+    a = await pool.acquire(_ctx(user_id="a"))
+    b = await pool.acquire(_ctx(user_id="b"))
+    clock["t"] = 101.0
+    await pool.release(a)          # a idle, last_used=101
+    clock["t"] = 102.0
+    await pool.release(b)          # b idle, last_used=102 (newer)
+
+    # New signature at cap (2) -> evict the OLDEST idle (a), keep b.
+    c = await pool.acquire(_ctx(user_id="c"))
+    await _asyncio.sleep(0)        # let the eviction task run
+    assert spawned[0].shutdown_called is True   # a evicted
+    assert spawned[1].shutdown_called is False  # b kept
+    assert len(spawned) == 3                     # c cold-spawned
+
+
+@pytest.mark.asyncio
+async def test_acquire_blocks_until_release_when_all_leased_at_cap():
+    pool, spawned = _make_pool(max_hosts=1)
+    a = await pool.acquire(_ctx(user_id="a"))
+
+    started = _asyncio.Event()
+
+    async def waiter():
+        started.set()
+        # Different signature, but cap=1 and the only host is leased -> must wait.
+        return await pool.acquire(_ctx(user_id="b"))
+
+    task = _asyncio.create_task(waiter())
+    await started.wait()
+    await _asyncio.sleep(0.05)
+    assert not task.done()         # still blocked at cap
+
+    await pool.release(a)          # frees the slot (a is idle, evictable)
+    lease_b = await _asyncio.wait_for(task, timeout=1.0)
+    assert lease_b.host is not a.host
