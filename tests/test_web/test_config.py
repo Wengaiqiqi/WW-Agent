@@ -33,3 +33,32 @@ def test_rate_limit_default_and_override(monkeypatch):
     assert config.rate_limit_per_min() == 5
     monkeypatch.setenv("WEB_RATE_LIMIT_PER_MIN", "garbage")
     assert config.rate_limit_per_min() == 20
+
+
+def test_pool_knobs_defaults_and_overrides(monkeypatch):
+    import importlib
+
+    from web import config
+    monkeypatch.delenv("WEB_POOL_ENABLED", raising=False)
+    monkeypatch.delenv("WEB_POOL_MAX_HOSTS", raising=False)
+    monkeypatch.delenv("WEB_POOL_IDLE_TTL", raising=False)
+    importlib.reload(config)
+    # Defaults: pool OFF (reversible rollout), sane bounds.
+    assert config.pool_enabled() is False
+    assert config.pool_max_hosts() == 8
+    assert config.pool_idle_ttl() == 600.0
+
+    monkeypatch.setenv("WEB_POOL_ENABLED", "1")
+    monkeypatch.setenv("WEB_POOL_MAX_HOSTS", "3")
+    monkeypatch.setenv("WEB_POOL_IDLE_TTL", "30")
+    assert config.pool_enabled() is True
+    assert config.pool_max_hosts() == 3
+    assert config.pool_idle_ttl() == 30.0
+
+
+def test_pool_knobs_bad_values_fall_back(monkeypatch):
+    from web import config
+    monkeypatch.setenv("WEB_POOL_MAX_HOSTS", "nope")
+    monkeypatch.setenv("WEB_POOL_IDLE_TTL", "nope")
+    assert config.pool_max_hosts() == 8
+    assert config.pool_idle_ttl() == 600.0

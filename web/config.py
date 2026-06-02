@@ -95,6 +95,29 @@ def max_concurrency() -> int:
         return 1
 
 
+def pool_enabled() -> bool:
+    """Whether to reuse bootstrapped specialist hosts across turns. Default off
+    = today's per-turn cold spawn (reversible rollout); set WEB_POOL_ENABLED=1
+    to remove the ~7s cold-start on most turns."""
+    return os.environ.get("WEB_POOL_ENABLED", "0").strip() not in ("", "0")
+
+
+def pool_max_hosts() -> int:
+    """Global cap on live pooled hosts; LRU-evict the oldest idle over cap."""
+    try:
+        return max(1, int(os.environ.get("WEB_POOL_MAX_HOSTS", "8")))
+    except ValueError:
+        return 8
+
+
+def pool_idle_ttl() -> float:
+    """Seconds an idle pooled host survives before the sweeper shuts it down."""
+    try:
+        return max(1.0, float(os.environ.get("WEB_POOL_IDLE_TTL", "600")))
+    except ValueError:
+        return 600.0
+
+
 def cookie_secure() -> bool:
     """Whether the session cookie carries the Secure flag. Default true; set
     ``WEB_COOKIE_SECURE=0`` for local http dev."""
