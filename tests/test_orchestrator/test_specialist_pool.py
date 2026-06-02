@@ -127,3 +127,32 @@ async def test_acquire_blocks_until_release_when_all_leased_at_cap():
     await pool.release(a)          # frees the slot (a is idle, evictable)
     lease_b = await _asyncio.wait_for(task, timeout=1.0)
     assert lease_b.host is not a.host
+
+
+@pytest.mark.asyncio
+async def test_sweep_shuts_down_idle_past_ttl_only():
+    pool, spawned = _make_pool(max_hosts=4, idle_ttl=30.0)
+    clock = {"t": 0.0}
+    pool._now = lambda: clock["t"]
+
+    a = await pool.acquire(_ctx(user_id="a"))
+    b = await pool.acquire(_ctx(user_id="b"))
+    clock["t"] = 10.0
+    await pool.release(a)          # idle at 10
+    clock["t"] = 50.0
+    await pool.release(b)          # idle at 50
+
+    clock["t"] = 50.0              # a idle 40s (> ttl), b idle 0s
+    await pool.sweep()
+    assert spawned[0].shutdown_called is True    # a swept
+    assert spawned[1].shutdown_called is False   # b kept
+
+
+@pytest.mark.asyncio
+async def test_drain_shuts_down_all_hosts():
+    pool, spawned = _make_pool()
+    a = await pool.acquire(_ctx(user_id="a"))
+    b = await pool.acquire(_ctx(user_id="b"))
+    await pool.release(a)          # a idle, b still leased
+    await pool.drain()
+    assert all(h.shutdown_called for h in spawned)  # drains idle AND leased
