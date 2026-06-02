@@ -236,7 +236,7 @@ async def test_run_turn_non_slash_still_reaches_planner(tmp_config_dir, monkeypa
 
     monkeypatch.setattr(runner, "_bootstrap", fake_bootstrap)
     monkeypatch.setattr("gateway.slash.handle_slash", fake_handle_slash)
-    monkeypatch.setattr(runner, "_build_planner", lambda router, context_text="": (lambda state: {"capability": "", "response": "PLANNER_REPLY"}))
+    monkeypatch.setattr(runner, "_build_planner", lambda router, context_text="", cfg=None: (lambda state: {"capability": "", "response": "PLANNER_REPLY"}))
     monkeypatch.setattr(runner, "_dispatch_decision", fake_dispatch)
 
     reply = await runner.run_turn("ordinary message", session_key="qq:7", user_id="ou_a")

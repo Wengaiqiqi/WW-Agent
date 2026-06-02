@@ -141,17 +141,20 @@ async def run_turn(
         )
 
 
-def _build_planner(router: CapabilityRouter, *, context_text: str = ""):
+def _build_planner(router: CapabilityRouter, *, context_text: str = "", cfg=None):
     """Return either an LLMPlanner (preferred) or the stub planner.
 
     ``context_text`` is rendered into the planner's "Session context" slot
-    via the ``context_provider`` closure. The stub planner ignores it.
+    via the ``context_provider`` closure. The stub planner ignores it. ``cfg``
+    (a resolved ActiveConfig from ``resolve_config(ctx)``) is the per-turn model
+    selection — preferred over the process-global ``LANGCHAIN_AGENT_MODEL`` env
+    so concurrent turns don't share a planner config.
     """
-    provider = os.environ.get("LANGCHAIN_AGENT_MODEL", "")
-    if provider.startswith("mock"):
+    provider = cfg.provider if cfg is not None else os.environ.get("LANGCHAIN_AGENT_MODEL", "")
+    if (provider or "").startswith("mock"):
         return _stub_planner
     try:
-        llm = _build_orchestrator_llm()
+        llm = _build_orchestrator_llm(cfg)
         return LLMPlanner(
             llm=llm,
             available_capabilities=router.all_capabilities(),
@@ -175,19 +178,22 @@ async def _delegate_via_a2a(
     hmac_key: str,
     trace_id: str,
     history_context: str = "",
+    permission_mode: Optional[str] = None,
 ) -> str:
     """Stream a task to tool-agent or skill-agent via A2A and return the text.
 
     Thin adapter over :func:`orchestrator.delegation.delegate_via_a2a` (the
     single source of truth shared with the REPL controller and the one-shot
-    ``cli.py prompt`` path). Reads the gateway's permission mode from env and
-    forwards the planner's ``arguments``.
+    ``cli.py prompt`` path). ``permission_mode`` comes from the per-turn
+    TurnContext; it falls back to the env default only when not supplied (legacy
+    callers), so concurrent turns don't share it via process-global env.
     """
     from orchestrator.delegation import delegate_via_a2a
 
-    permission_mode = os.environ.get(
-        "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
-    )
+    if permission_mode is None:
+        permission_mode = os.environ.get(
+            "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
+        )
     return await delegate_via_a2a(
         capability=capability,
         arguments=decision.get("arguments") or {},
@@ -199,7 +205,7 @@ async def _delegate_via_a2a(
     )
 
 
-def _build_planner_context(session_key: str) -> tuple[str, str]:
+def _build_planner_context(session_key: str, *, memory_user: str = "") -> tuple[str, str]:
     """Return ``(history_context_for_a2a, full_context_for_planner)``.
 
     * ``history_context_for_a2a``: just the recent-conversation block; the
@@ -207,6 +213,10 @@ def _build_planner_context(session_key: str) -> tuple[str, str]:
     * ``full_context_for_planner``: history + persistent ``memory`` snapshot,
       injected into the planner's "Session context" slot so prose answers
       can reference saved facts ("what's my name?").
+
+    ``memory_user`` scopes the memory snapshot to that user explicitly (from the
+    per-turn TurnContext) instead of the process-global ``LANGCHAIN_AGENT_MEMORY_USER``
+    env, so concurrent turns read the right user's memory.
     """
     from gateway import session_store
 
@@ -215,7 +225,7 @@ def _build_planner_context(session_key: str) -> tuple[str, str]:
     try:
         from tool.tool_memory import snapshot_for_system_prompt
 
-        memory_snapshot = snapshot_for_system_prompt() or ""
+        memory_snapshot = snapshot_for_system_prompt(user=memory_user or None) or ""
     except Exception:  # noqa: BLE001
         memory_snapshot = ""
     parts = [p for p in (memory_snapshot, history_context) if p]
@@ -253,6 +263,7 @@ async def _dispatch_decision(
     hmac_key: str,
     trace_id: str,
     history_context: str,
+    permission_mode: Optional[str] = None,
 ) -> str:
     """Drive the right dispatch path based on the planner's decision.
 
@@ -276,6 +287,7 @@ async def _dispatch_decision(
                 hmac_key=hmac_key,
                 trace_id=trace_id,
                 history_context=history_context,
+                permission_mode=permission_mode,
             )
         except Exception as exc:  # noqa: BLE001
             log.exception("gateway: A2A delegate failed")
@@ -289,8 +301,9 @@ async def _dispatch_decision(
         host=host,
         router=router,
         hmac_key=hmac_key,
-        permission_mode_provider=lambda: os.environ.get(
-            "LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write"
+        permission_mode_provider=(
+            lambda _pm=permission_mode: _pm if _pm is not None
+            else os.environ.get("LANGCHAIN_AGENT_PERMISSION_MODE", "workspace-write")
         ),
         planner=lambda _state, _d=decision: _d,
     )
@@ -335,6 +348,12 @@ async def _run_turn_locked(
         runtime_dir=Path(".agent") / "runtime" / f"gw-{ctx.turn_id}",
     )
 
+    # Resolve the planner config from the context (not process-global env), so
+    # two concurrent turns can't clobber each other's model/endpoint selection.
+    from config import resolve_config
+
+    cfg = resolve_config(ctx)
+
     host = MCPHost(hmac_key=ctx.hmac_key, turn_env=ctx.turn_env())
     router = CapabilityRouter()
     # Mux receives streaming output during the turn but we discard it --
@@ -345,64 +364,60 @@ async def _run_turn_locked(
     is_slash_command = False
     stop_tail = None
 
-    # Scope the per-turn env in-process for the turn's duration (the subprocess
-    # channel is the host's turn_env above). CRITICAL: the memory env must be set
-    # BEFORE ``_build_planner_context`` — it reads the memory file via
-    # ``snapshot_for_system_prompt``, which keys off LANGCHAIN_AGENT_MEMORY_USER
-    # to pick the right user directory.
-    #
-    # Caveat: env is process-global, so the in-process gateway-as-REPL-
-    # background-task mode still shares these vars during a turn; turns are
-    # serialised by the caller's lock and resolve to live specialists, so the
-    # worst case is a REPL turn briefly using the gateway's specialist.
-    with scoped_env(ctx.turn_env()):
-        try:
-            history_context, full_context = _build_planner_context(session_key)
+    # No scoped_env: per-turn config travels explicitly — cfg into the planner,
+    # ctx.user_id into the memory snapshot, ctx.permission_mode into dispatch,
+    # and ctx.turn_env() into the host for subprocesses. Nothing reads per-turn
+    # state off process-global env, so concurrent turns stay isolated.
+    try:
+        history_context, full_context = _build_planner_context(
+            session_key, memory_user=ctx.user_id,
+        )
 
-            await _bootstrap(host, router)
+        await _bootstrap(host, router)
 
-            # Slash commands (/task /chat /peers /help) for whitelisted users.
-            # A string reply short-circuits the planner; None falls through to
-            # normal chat. comm.* tools are available because _bootstrap spawned
-            # the comm-agent onto this per-turn host.
-            from gateway.slash import handle_slash
-            slash_reply = await handle_slash(
-                prompt, host=host, session_key=session_key, user_id=user_id,
-            )
-            if slash_reply is not None:
-                is_slash_command = True
-                reply_text = slash_reply
-                return reply_text
-
-            planner = _build_planner(router, context_text=full_context)
-            stop_tail = await _drive_telemetry_tail(mux)
-
-            try:
-                decision = planner({"user_input": prompt, "trace_id": trace_id})
-            except Exception as exc:  # noqa: BLE001
-                log.exception("gateway: planner failed")
-                reply_text = f"[error] planner: {exc}"
-                return reply_text
-
-            reply_text = await _dispatch_decision(
-                decision=decision,
-                prompt=prompt,
-                host=host,
-                router=router,
-                hmac_key=ctx.hmac_key,
-                trace_id=trace_id,
-                history_context=history_context,
-            )
+        # Slash commands (/task /chat /peers /help) for whitelisted users.
+        # A string reply short-circuits the planner; None falls through to
+        # normal chat. comm.* tools are available because _bootstrap spawned
+        # the comm-agent onto this per-turn host.
+        from gateway.slash import handle_slash
+        slash_reply = await handle_slash(
+            prompt, host=host, session_key=session_key, user_id=user_id,
+        )
+        if slash_reply is not None:
+            is_slash_command = True
+            reply_text = slash_reply
             return reply_text
-        finally:
-            if stop_tail is not None:
-                await stop_tail()
-            await host.shutdown_all()
-            # Persist the turn even when the reply was an error -- a future turn
-            # might still want to refer to it. Slash commands are operator
-            # actions / remote conversations, not local chat, so they are
-            # deliberately excluded from the planner's history.
-            if session_key and reply_text and not is_slash_command:
-                session_store.append(session_key, prompt, reply_text)
-            # Best-effort cleanup of this turn's private discovery dir.
-            shutil.rmtree(ctx.runtime_dir, ignore_errors=True)
+
+        planner = _build_planner(router, context_text=full_context, cfg=cfg)
+        stop_tail = await _drive_telemetry_tail(mux)
+
+        try:
+            decision = planner({"user_input": prompt, "trace_id": trace_id})
+        except Exception as exc:  # noqa: BLE001
+            log.exception("gateway: planner failed")
+            reply_text = f"[error] planner: {exc}"
+            return reply_text
+
+        reply_text = await _dispatch_decision(
+            decision=decision,
+            prompt=prompt,
+            host=host,
+            router=router,
+            hmac_key=ctx.hmac_key,
+            trace_id=trace_id,
+            history_context=history_context,
+            permission_mode=ctx.permission_mode,
+        )
+        return reply_text
+    finally:
+        if stop_tail is not None:
+            await stop_tail()
+        await host.shutdown_all()
+        # Persist the turn even when the reply was an error -- a future turn
+        # might still want to refer to it. Slash commands are operator
+        # actions / remote conversations, not local chat, so they are
+        # deliberately excluded from the planner's history.
+        if session_key and reply_text and not is_slash_command:
+            session_store.append(session_key, prompt, reply_text)
+        # Best-effort cleanup of this turn's private discovery dir.
+        shutil.rmtree(ctx.runtime_dir, ignore_errors=True)

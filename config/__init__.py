@@ -41,6 +41,7 @@ from ._providers import (
 )
 from ._settings import (
     load_active_config,
+    resolve_config,
     save_active_config,
     settings_path,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "make_config",
     # settings
     "load_active_config",
+    "resolve_config",
     "save_active_config",
     "settings_path",
     # credentials
