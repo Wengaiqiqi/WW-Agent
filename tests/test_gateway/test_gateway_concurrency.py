@@ -79,3 +79,37 @@ def test_feishu_ws_dispatch_semaphore_sized_from_flag(monkeypatch):
     monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
     importlib.reload(runner)
     importlib.reload(feishu_ws)
+
+
+@pytest.mark.asyncio
+async def test_two_turns_overlap_when_limit_raised(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("GATEWAY_MAX_CONCURRENCY", "2")
+    from gateway import runner
+    importlib.reload(runner)
+    try:
+        both_in = asyncio.Semaphore(0)
+
+        async def _wait_two(sem):
+            await sem.acquire()
+            await sem.acquire()
+            sem.release()
+            sem.release()
+
+        async def fake_locked(prompt, **kw):
+            both_in.release()
+            # Only completes once BOTH turns have entered — proves overlap (would
+            # time out under the old single-lock / semaphore(1)).
+            await asyncio.wait_for(_wait_two(both_in), timeout=2.0)
+            return prompt
+
+        monkeypatch.setattr(runner, "_run_turn_locked", fake_locked)
+        results = await asyncio.gather(
+            runner.run_turn("a", session_key="a"),
+            runner.run_turn("b", session_key="b"),
+        )
+        assert set(results) == {"a", "b"}
+    finally:
+        monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+        importlib.reload(runner)

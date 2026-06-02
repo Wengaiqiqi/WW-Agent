@@ -1,6 +1,6 @@
 {
   "errors": [],
-  "generated_at": "2026-06-02T08:32:02Z",
+  "generated_at": "2026-06-02T10:47:20Z",
   "metrics": {
     "./.langchain-agent/web/workspaces/b6f7208a68a09b4dc8864b2f96183637/\u6768\u8f89\u4e09\u89d2.py": {
       "CONFIDENCE.HIGH": 0,
@@ -518,7 +518,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 76,
+      "loc": 78,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -687,7 +687,7 @@
       "SEVERITY.LOW": 1,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 363,
+      "loc": 364,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -739,7 +739,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 303,
+      "loc": 330,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -843,7 +843,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 97,
+      "loc": 100,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -869,7 +869,7 @@
       "SEVERITY.LOW": 4,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 269,
+      "loc": 273,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1012,7 +1012,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 145,
+      "loc": 181,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1324,7 +1324,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 181,
+      "loc": 187,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1493,7 +1493,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 288,
+      "loc": 310,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1519,7 +1519,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 459,
+      "loc": 468,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1610,7 +1610,7 @@
       "SEVERITY.LOW": 22,
       "SEVERITY.MEDIUM": 10,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 18892,
+      "loc": 19002,
       "nosec": 0,
       "skipped_tests": 0
     }
@@ -1701,7 +1701,7 @@
       "test_name": "hardcoded_bind_all_interfaces"
     },
     {
-      "code": "422             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n423         except Exception:  # noqa: BLE001\n424             pass\n425 \n",
+      "code": "421             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n422         except Exception:  # noqa: BLE001\n423             pass\n424 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./gateway/feishu_ws.py",
@@ -1712,10 +1712,10 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 423,
+      "line_number": 422,
       "line_range": [
-        423,
-        424
+        422,
+        423
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
@@ -1954,7 +1954,7 @@
       "test_name": "hardcoded_sql_expressions"
     },
     {
-      "code": "210             memory_snapshot = tool_memory.snapshot_for_system_prompt()\n211         except Exception:\n212             pass\n213 \n",
+      "code": "215             memory_snapshot = tool_memory.snapshot_for_system_prompt()\n216         except Exception:\n217             pass\n218 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -1965,17 +1965,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 211,
+      "line_number": 216,
       "line_range": [
-        211,
-        212
+        216,
+        217
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "217             skills_list = load_skills()\n218         except Exception:\n219             pass\n220 \n",
+      "code": "222             skills_list = load_skills()\n223         except Exception:\n224             pass\n225 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -1986,17 +1986,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 218,
+      "line_number": 223,
       "line_range": [
-        218,
-        219
+        223,
+        224
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "224             instruction_files = discover_instruction_files()\n225         except Exception:\n226             pass\n227 \n",
+      "code": "229             instruction_files = discover_instruction_files()\n230         except Exception:\n231             pass\n232 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -2007,17 +2007,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 225,
+      "line_number": 230,
       "line_range": [
-        225,
-        226
+        230,
+        231
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "295             await get_manager().shutdown_all()\n296         except Exception:  # noqa: BLE001 - shutdown is best-effort\n297             pass\n298         await host.shutdown_all()\n",
+      "code": "300             await get_manager().shutdown_all()\n301         except Exception:  # noqa: BLE001 - shutdown is best-effort\n302             pass\n303         await host.shutdown_all()\n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -2028,10 +2028,10 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 296,
+      "line_number": 301,
       "line_range": [
-        296,
-        297
+        301,
+        302
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
