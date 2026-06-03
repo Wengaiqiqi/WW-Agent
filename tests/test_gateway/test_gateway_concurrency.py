@@ -113,3 +113,89 @@ async def test_two_turns_overlap_when_limit_raised(monkeypatch):
     finally:
         monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
         importlib.reload(runner)
+
+
+def test_feishu_set_dispatch_limit_rebinds(monkeypatch):
+    import importlib
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    from gateway import runner, feishu_ws
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)
+    # default is 1 -> exactly one holder
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is True
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    feishu_ws._dispatch_sem.release()
+
+    feishu_ws.set_dispatch_limit(3)
+    got = [feishu_ws._dispatch_sem.acquire(blocking=False) for _ in range(3)]
+    assert all(got)
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    for _ in got:
+        feishu_ws._dispatch_sem.release()
+
+    feishu_ws.set_dispatch_limit(0)  # floored to 1
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is True
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    feishu_ws._dispatch_sem.release()
+
+    importlib.reload(feishu_ws)
+
+
+def test_runner_set_and_current_max_concurrency(monkeypatch):
+    import importlib
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    from gateway import runner
+    importlib.reload(runner)
+    assert runner.current_max_concurrency() == 1  # env default
+
+    returned = runner.set_max_concurrency(4)
+    assert returned == 4
+    assert runner.current_max_concurrency() == 4
+    # asyncio semaphore now admits exactly 4 before blocking
+    assert runner._GATEWAY_SEMAPHORE._value == 4
+
+    assert runner.set_max_concurrency(0) == 1  # floored
+    assert runner.current_max_concurrency() == 1
+    assert runner._GATEWAY_SEMAPHORE._value == 1
+
+    importlib.reload(runner)
+
+
+def test_set_max_concurrency_propagates_to_feishu(monkeypatch):
+    import importlib
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    from gateway import runner, feishu_ws
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)
+
+    runner.set_max_concurrency(3)
+    got = [feishu_ws._dispatch_sem.acquire(blocking=False) for _ in range(3)]
+    assert all(got)
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    for _ in got:
+        feishu_ws._dispatch_sem.release()
+
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)
+
+
+def test_set_max_concurrency_survives_feishu_import_failure(monkeypatch):
+    """QQ-only / lark-not-installed: rebinding feishu must not raise."""
+    import importlib
+    import builtins
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    from gateway import runner
+    importlib.reload(runner)
+
+    real_import = builtins.__import__
+
+    def boom(name, *args, **kwargs):
+        if name == "gateway.feishu_ws" or name.endswith("feishu_ws"):
+            raise ImportError("no lark")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", boom)
+    assert runner.set_max_concurrency(2) == 2  # does not raise
+    assert runner.current_max_concurrency() == 2
+    monkeypatch.setattr(builtins, "__import__", real_import)
+    importlib.reload(runner)

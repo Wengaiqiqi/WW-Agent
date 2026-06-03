@@ -784,8 +784,30 @@ class ReplCommandHandler:
             return None
         return "ws" if idx == 0 else "webhook"
 
+    @staticmethod
+    def _parse_concurrency(raw: str, current: int) -> int | None:
+        """Parse the Start-time concurrency input.
+
+        Empty/whitespace keeps ``current``. A positive integer is returned as
+        the new limit. Anything else (non-integer, zero, negative) returns
+        ``None`` so the caller can report an error and abort the start instead
+        of silently changing the limit."""
+        raw = (raw or "").strip()
+        if not raw:
+            return current
+        try:
+            n = int(raw)
+        except ValueError:
+            return None
+        if n < 1:
+            return None
+        return n
+
     def _gw_start(self, platform: str) -> None:
+        from rich.prompt import Prompt
+
         from gateway import credentials as gw_creds
+        from gateway import runner
         from gateway.manager import get_manager
 
         cfg = gw_creds.load(platform)
@@ -795,6 +817,28 @@ class ReplCommandHandler:
                 "Pick [bold]Setup credentials[/bold] first.",
             )
             return
+
+        # Ask for the process-wide concurrency limit before starting. Enter
+        # keeps the current value; an invalid entry aborts without starting so
+        # we never silently change the limit. 1 = serialized (one turn at a
+        # time), >1 = parallel.
+        current = runner.current_max_concurrency()
+        raw = Prompt.ask(
+            f"  concurrency  [dim][max simultaneous turns, 1 = serialized][/dim]"
+            f" [dim](current: {current})[/dim]",
+            console=self.ui.console,
+            default="",
+            show_default=False,
+        )
+        n = self._parse_concurrency(raw, current)
+        if n is None:
+            self.ui.render_command_error(
+                "Invalid concurrency",
+                "Enter a positive integer (1 = serialized), or press Enter to "
+                "keep the current value. Gateway not started.",
+            )
+            return
+        runner.set_max_concurrency(n)
 
         mgr = get_manager()
         try:
@@ -809,6 +853,8 @@ class ReplCommandHandler:
         except Exception as exc:  # noqa: BLE001
             self.ui.render_command_error(f"{platform} start failed", str(exc))
             return
+        mode_word = "serialized" if n == 1 else "parallel"
+        msg = f"{msg}\nconcurrency: {n} ({mode_word})"
         self.ui.render_text(title=f"{platform} started", text=msg, style="green")
 
     def _gw_stop(self, platform: str) -> None:

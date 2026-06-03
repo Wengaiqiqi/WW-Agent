@@ -71,6 +71,16 @@ _seen_msg_ids_lock = threading.Lock()
 _dispatch_sem = threading.BoundedSemaphore(runner.max_concurrency())
 
 
+def set_dispatch_limit(n: int) -> None:
+    """Rebind the cross-thread dispatch semaphore to admit ``max(1, n)``
+    concurrent inbound-message handlers. Called at gateway start so the
+    user-chosen GATEWAY_MAX_CONCURRENCY takes effect without a reimport.
+    New ``with _dispatch_sem:`` blocks read this module global, so only
+    dispatches started after the rebind see the new limit."""
+    global _dispatch_sem
+    _dispatch_sem = threading.BoundedSemaphore(max(1, int(n)))
+
+
 def _is_duplicate_message(msg_id: str) -> bool:
     now = time.time()
     with _seen_msg_ids_lock:

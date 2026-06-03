@@ -54,7 +54,39 @@ def max_concurrency() -> int:
 
 # Bounded gateway concurrency. Default 1 reproduces the old single asyncio-lock
 # behavior; GATEWAY_MAX_CONCURRENCY>1 lets independent turns run in parallel.
-_GATEWAY_SEMAPHORE = asyncio.Semaphore(max_concurrency())
+# Rebound at runtime by ``set_max_concurrency`` (the /gateway Start prompt).
+_CURRENT_MAX: int = max_concurrency()
+_GATEWAY_SEMAPHORE = asyncio.Semaphore(_CURRENT_MAX)
+
+
+def current_max_concurrency() -> int:
+    """The concurrency limit in effect right now (env default until the user
+    overrides it via ``set_max_concurrency``). Used as the prompt default."""
+    return _CURRENT_MAX
+
+
+def set_max_concurrency(n: int) -> int:
+    """Set the process-wide gateway concurrency to ``max(1, n)`` and return the
+    effective value.
+
+    Rebinds this module's asyncio semaphore (in-loop callers: REPL / QQ) and
+    best-effort the feishu_ws threading semaphore (cross-thread Feishu SDK
+    dispatch). Both ``async with _GATEWAY_SEMAPHORE`` and ``with _dispatch_sem``
+    read their module global per call, so only turns started after this call
+    see the new limit; in-flight turns hold the old object and finish normally.
+
+    feishu_ws is imported lazily and any failure is swallowed so QQ-only or
+    lark-not-installed deployments keep working."""
+    global _GATEWAY_SEMAPHORE, _CURRENT_MAX
+    n = max(1, int(n))
+    _CURRENT_MAX = n
+    _GATEWAY_SEMAPHORE = asyncio.Semaphore(n)
+    try:
+        from gateway import feishu_ws
+        feishu_ws.set_dispatch_limit(n)
+    except Exception:  # noqa: BLE001 - lark may be absent (QQ-only)
+        log.debug("set_max_concurrency: could not update feishu_ws limit", exc_info=True)
+    return n
 
 
 @contextlib.contextmanager

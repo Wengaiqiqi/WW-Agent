@@ -207,3 +207,19 @@ def test_command_exception_is_caught(tmp_path):
         assert "boom" in buf.getvalue()
     finally:
         handler._cmd_help = original
+
+
+def test_parse_concurrency():
+    from orchestrator.repl_commands import ReplCommandHandler as H
+
+    # empty / whitespace -> keep current
+    assert H._parse_concurrency("", 3) == 3
+    assert H._parse_concurrency("   ", 1) == 1
+    # valid integers
+    assert H._parse_concurrency("4", 1) == 4
+    assert H._parse_concurrency(" 2 ", 1) == 2
+    # invalid -> None (caller reports error, aborts start)
+    assert H._parse_concurrency("abc", 1) is None
+    assert H._parse_concurrency("2.5", 1) is None
+    assert H._parse_concurrency("0", 1) is None
+    assert H._parse_concurrency("-1", 1) is None
