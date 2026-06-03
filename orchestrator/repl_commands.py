@@ -823,8 +823,10 @@ class ReplCommandHandler:
         # we never silently change the limit. 1 = serialized (one turn at a
         # time), >1 = parallel.
         current = runner.current_max_concurrency()
+        # Hint uses parentheses, not square brackets: Rich treats ``[...]`` as
+        # markup tags and would silently drop a bracketed phrase from the prompt.
         raw = Prompt.ask(
-            f"  concurrency  [dim][max simultaneous turns, 1 = serialized][/dim]"
+            f"  concurrency  [dim](max simultaneous turns, 1 = serialized)[/dim]"
             f" [dim](current: {current})[/dim]",
             console=self.ui.console,
             default="",
