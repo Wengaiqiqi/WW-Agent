@@ -113,3 +113,29 @@ async def test_two_turns_overlap_when_limit_raised(monkeypatch):
     finally:
         monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
         importlib.reload(runner)
+
+
+def test_feishu_set_dispatch_limit_rebinds(monkeypatch):
+    import importlib
+    monkeypatch.delenv("GATEWAY_MAX_CONCURRENCY", raising=False)
+    from gateway import runner, feishu_ws
+    importlib.reload(runner)
+    importlib.reload(feishu_ws)
+    # default is 1 -> exactly one holder
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is True
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    feishu_ws._dispatch_sem.release()
+
+    feishu_ws.set_dispatch_limit(3)
+    got = [feishu_ws._dispatch_sem.acquire(blocking=False) for _ in range(3)]
+    assert all(got)
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    for _ in got:
+        feishu_ws._dispatch_sem.release()
+
+    feishu_ws.set_dispatch_limit(0)  # floored to 1
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is True
+    assert feishu_ws._dispatch_sem.acquire(blocking=False) is False
+    feishu_ws._dispatch_sem.release()
+
+    importlib.reload(feishu_ws)
