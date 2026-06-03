@@ -784,6 +784,25 @@ class ReplCommandHandler:
             return None
         return "ws" if idx == 0 else "webhook"
 
+    @staticmethod
+    def _parse_concurrency(raw: str, current: int) -> int | None:
+        """Parse the Start-time concurrency input.
+
+        Empty/whitespace keeps ``current``. A positive integer is returned as
+        the new limit. Anything else (non-integer, zero, negative) returns
+        ``None`` so the caller can report an error and abort the start instead
+        of silently changing the limit."""
+        raw = (raw or "").strip()
+        if not raw:
+            return current
+        try:
+            n = int(raw)
+        except ValueError:
+            return None
+        if n < 1:
+            return None
+        return n
+
     def _gw_start(self, platform: str) -> None:
         from gateway import credentials as gw_creds
         from gateway.manager import get_manager
