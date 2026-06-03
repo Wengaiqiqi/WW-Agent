@@ -75,8 +75,10 @@ def set_max_concurrency(n: int) -> int:
     read their module global per call, so only turns started after this call
     see the new limit; in-flight turns hold the old object and finish normally.
 
-    feishu_ws is imported lazily and any failure is swallowed so QQ-only or
-    lark-not-installed deployments keep working."""
+    The feishu_ws fan-out is wrapped defensively: importing it is safe (lark is
+    imported lazily inside its functions, not at module load), but a concurrency
+    update must never be what breaks gateway start, so any unexpected failure is
+    logged and swallowed."""
     global _GATEWAY_SEMAPHORE, _CURRENT_MAX
     n = max(1, int(n))
     _CURRENT_MAX = n
@@ -84,7 +86,7 @@ def set_max_concurrency(n: int) -> int:
     try:
         from gateway import feishu_ws
         feishu_ws.set_dispatch_limit(n)
-    except Exception:  # noqa: BLE001 - lark may be absent (QQ-only)
+    except Exception:  # noqa: BLE001 - never let a concurrency update block start
         log.debug("set_max_concurrency: could not update feishu_ws limit", exc_info=True)
     return n
 
