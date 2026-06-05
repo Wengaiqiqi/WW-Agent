@@ -50,6 +50,15 @@ class _SlowHost:
     def a2a_urls(self) -> dict[str, str]:
         return {cid: f"http://127.0.0.1/{cid}" for cid in self.spawned}
 
+    @property
+    def runtime_dir(self):
+        # Legacy host: resolve from the global helper (the autouse fixture
+        # points LANGCHAIN_AGENT_RUNTIME_DIR at a tmp dir), matching a real
+        # MCPHost built without a per-turn turn_env.
+        from agent_paths import runtime_dir
+
+        return runtime_dir()
+
 
 @pytest.fixture(autouse=True)
 def _isolated_runtime_dir(tmp_path, monkeypatch):

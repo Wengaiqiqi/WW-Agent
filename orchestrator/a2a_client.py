@@ -15,11 +15,25 @@ import httpx
 log = logging.getLogger(__name__)
 
 
-def _load_peers() -> dict[str, str]:
-    """Read {agent_id: url} from the runtime peers file written by the orchestrator."""
-    from agent_paths import runtime_dir
+def _load_peers(runtime_dir: Path | None = None) -> dict[str, str]:
+    """Read {agent_id: url} from the runtime peers file written by the orchestrator.
 
-    peers_file = runtime_dir() / "peers.json"
+    ``runtime_dir`` lets a caller that bootstrapped its specialists into a
+    *per-turn* discovery dir (the web bridge hands each turn its own
+    ``.agent/runtime/web-<id>``) read THAT turn's peers.json, instead of the
+    process-global ``agent_paths.runtime_dir()`` which the web process never
+    points at the per-turn dir. Falling back to the global helper keeps the
+    REPL/gateway/CLI paths — which DO set ``LANGCHAIN_AGENT_RUNTIME_DIR`` in
+    os.environ — working unchanged. Reading the wrong dir is what produced
+    "All connection attempts failed": the web turn dialed a stale/foreign
+    peers.json shared on the same cwd.
+    """
+    if runtime_dir is None:
+        from agent_paths import runtime_dir as _global_runtime_dir
+
+        runtime_dir = _global_runtime_dir()
+
+    peers_file = runtime_dir / "peers.json"
     if not peers_file.exists():
         raise RuntimeError(f"peers file not found: {peers_file}")
     return json.loads(peers_file.read_text(encoding="utf-8"))
@@ -27,12 +41,17 @@ def _load_peers() -> dict[str, str]:
 
 async def delegate_task(
     *, peer_id: str, task: str, meta: dict, context: str = "",
+    runtime_dir: Path | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Send a task to a peer agent's /a2a/stream endpoint and yield SSE events.
 
     Yields event dicts: thinking, tool_call, tool_result, text, done, error.
+
+    ``runtime_dir`` selects which peers.json to discover the peer from — pass
+    the per-turn dir when the host was bootstrapped into one (see
+    :func:`_load_peers`); ``None`` falls back to the process-global dir.
     """
-    peers = _load_peers()
+    peers = _load_peers(runtime_dir)
     url = peers.get(peer_id)
     if not url:
         raise RuntimeError(f"unknown peer: {peer_id}")
@@ -123,9 +142,13 @@ async def send_clarify_response(
 
 async def call_peer(
     *, peer_id: str, skill_id: str, input: dict, meta: dict,
+    runtime_dir: Path | None = None,
 ) -> dict:
-    """Non-streaming A2A RPC call (backward-compatible with skill-agent pattern)."""
-    peers = _load_peers()
+    """Non-streaming A2A RPC call (backward-compatible with skill-agent pattern).
+
+    ``runtime_dir`` selects the peers.json to read (per-turn vs. global); see
+    :func:`_load_peers`."""
+    peers = _load_peers(runtime_dir)
     url = peers.get(peer_id)
     if not url:
         raise RuntimeError(f"unknown peer: {peer_id}")

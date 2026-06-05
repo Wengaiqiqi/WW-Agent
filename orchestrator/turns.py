@@ -527,6 +527,10 @@ class TurnRunner:
                     trace_id=trace_id,
                     permission_mode=self.permission_mode_provider(),
                     delegate=self._delegate,
+                    # Discover peers from the host's own runtime dir (per-turn
+                    # when set), keeping parent delegation and child sidecars on
+                    # one dir; falls back to the global dir for legacy hosts.
+                    runtime_dir=getattr(self.host, "runtime_dir", None),
                 )
             except asyncio.CancelledError:
                 raise

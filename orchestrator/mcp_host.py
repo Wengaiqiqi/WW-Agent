@@ -166,6 +166,28 @@ class MCPHost:
         self._turn_env = turn_env or {}
         self._clients: dict[str, _ClientHandle] = {}
 
+    @property
+    def runtime_dir(self):
+        """The discovery dir for this host's specialists' ``peers.json`` and
+        ``<id>.a2a-url`` sidecars.
+
+        Prefer the per-turn dir carried in ``turn_env`` (the web bridge hands
+        each turn its own ``.agent/runtime/web-<id>``); fall back to the
+        process-global ``agent_paths.runtime_dir()`` for the legacy
+        REPL/gateway/CLI paths that set ``LANGCHAIN_AGENT_RUNTIME_DIR`` in
+        os.environ. Sourcing it here — rather than calling the global helper at
+        each read/write site — is what keeps the parent (sidecar read, peers
+        write, delegation lookup) and the spawned children agreeing on ONE dir,
+        so a web turn can't dial a foreign peers.json shared on the same cwd."""
+        from pathlib import Path
+
+        override = self._turn_env.get("LANGCHAIN_AGENT_RUNTIME_DIR", "").strip()
+        if override:
+            return Path(override)
+        from agent_paths import runtime_dir as _global_runtime_dir
+
+        return _global_runtime_dir()
+
     async def spawn(self, card: Card) -> None:
         if card.id in self._clients:
             raise RuntimeError(f"specialist already spawned: {card.id}")
@@ -197,9 +219,12 @@ class MCPHost:
             init_result = await session.initialize()
 
             # Read A2A URL sidecar file written by the specialist at startup.
-            from agent_paths import runtime_dir
+            # Resolve from THIS host's runtime dir (per-turn when set via
+            # turn_env), not the process-global helper — otherwise a web turn
+            # reads a foreign/stale sidecar from the shared default dir and
+            # records a dead URL (the "All connection attempts failed" bug).
             a2a_url = None
-            url_file = runtime_dir() / f"{card.id}.a2a-url"
+            url_file = self.runtime_dir / f"{card.id}.a2a-url"
             # Poll for up to 5 seconds. Tool-agent imports langchain + langgraph
             # before binding its A2A port; on a cold pip cache or slow disk the
             # import chain can take 3+ seconds, well past the previous 1s budget.

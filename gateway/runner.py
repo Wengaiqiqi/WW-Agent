@@ -213,6 +213,7 @@ async def _delegate_via_a2a(
     trace_id: str,
     history_context: str = "",
     permission_mode: Optional[str] = None,
+    host: Optional[MCPHost] = None,
 ) -> str:
     """Stream a task to tool-agent or skill-agent via A2A and return the text.
 
@@ -221,7 +222,12 @@ async def _delegate_via_a2a(
     ``cli.py prompt`` path). ``permission_mode`` comes from the per-turn
     TurnContext; it falls back to the env default only when not supplied (legacy
     callers), so concurrent turns don't share it via process-global env.
-    """
+
+    ``host`` supplies its per-turn ``runtime_dir`` so peer discovery reads the
+    SAME ``peers.json`` ``_bootstrap`` wrote for this turn — the gateway keys
+    its runtime dir per turn_id via ``turn_env`` (not os.environ), so without
+    this the delegate would fall back to the global dir and miss this turn's
+    peers ("All connection attempts failed")."""
     from orchestrator.delegation import delegate_via_a2a
 
     if permission_mode is None:
@@ -236,6 +242,7 @@ async def _delegate_via_a2a(
         trace_id=trace_id,
         permission_mode=permission_mode,
         history_context=history_context,
+        runtime_dir=getattr(host, "runtime_dir", None),
     )
 
 
@@ -322,6 +329,7 @@ async def _dispatch_decision(
                 trace_id=trace_id,
                 history_context=history_context,
                 permission_mode=permission_mode,
+                host=host,
             )
         except Exception as exc:  # noqa: BLE001
             log.exception("gateway: A2A delegate failed")

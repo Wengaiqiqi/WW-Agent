@@ -291,6 +291,11 @@ async def dispatch_decision_stream(
                 permission_mode=config.WEB_PERMISSION_MODE,
                 history_context=history_context,
                 delegate=delegate,
+                # Discover the peer from THIS host's per-turn runtime dir, not
+                # the process-global default that a REPL/gateway on the same cwd
+                # may have clobbered — the root of "All connection attempts
+                # failed". A pooled or cold-spawned host both expose it.
+                runtime_dir=getattr(host, "runtime_dir", None),
             ):
                 yield event
         except Exception as exc:  # noqa: BLE001
