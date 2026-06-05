@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ww-agent-cli"
 version = "0.1.0"
 description = "W&W Agent CLI — multi-agent + single-agent LangChain/LangGraph terminal assistant."
-readme = "README.md"
+readme = "用户手册.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [
@@ -154,7 +154,7 @@ include = [
     "cli.py",
     "project_context.py",
     "prompt_rules.py",
-    "README.md",
+    "用户手册.md",
     "agent.md",
     "requirements.txt",
     "setup.cfg",
