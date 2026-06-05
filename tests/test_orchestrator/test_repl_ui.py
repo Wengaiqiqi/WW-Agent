@@ -26,7 +26,7 @@ def test_replui_is_not_tty():
 
 def test_command_list_has_all_expected_commands():
     assert set(COMMANDS) == {
-        "/help", "/exit", "/quit", "/status", "/agents", "/tools",
+        "/help", "/exit", "/status", "/agents", "/tools",
         "/permissions", "/config", "/model", "/skills",
         "/instructions", "/clear", "/compact", "/gateway",
         "/comm", "/task", "/chat",

@@ -209,6 +209,32 @@ def test_comm_rm_other_peer_keeps_current(tmp_path):
     assert handler._current_peer == "keep-me"
 
 
+# ---- current-peer persistence ----
+
+
+def test_comm_use_persists_across_restart(tmp_path):
+    handler, ui, state, buf, host = _make(tmp_path)
+    host.set_response("comm.list_peers", {
+        "peers": [{"peer_id": "alpha", "display_name": "", "url": "", "last_seen": None}]
+    })
+    _call(handler, "/comm use alpha")
+    # A fresh handler (simulating a restart) reloads the saved selection.
+    handler2, *_ = _make(tmp_path)
+    assert handler2._current_peer == "alpha"
+
+
+def test_comm_rm_current_clears_persisted_peer(tmp_path):
+    handler, ui, state, buf, host = _make(tmp_path)
+    host.set_response("comm.list_peers", {
+        "peers": [{"peer_id": "alpha", "display_name": "", "url": "", "last_seen": None}]
+    })
+    _call(handler, "/comm use alpha")
+    host.set_response("comm.remove_peer", {"ok": True, "peer_id": "alpha", "removed": True})
+    _call(handler, "/comm rm alpha")
+    handler2, *_ = _make(tmp_path)
+    assert handler2._current_peer is None
+
+
 # ---- /comm (no subcommand) ----
 
 

@@ -60,3 +60,9 @@ def log_path() -> Path:
 
 def todos_path() -> Path:
     return config_dir() / "todos.json"
+
+
+def comm_session_path() -> Path:
+    """Where the REPL persists its ``/comm use`` selection so the current
+    peer survives a restart."""
+    return config_dir() / "comm_session.json"

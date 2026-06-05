@@ -75,10 +75,9 @@ def test_help_continues_and_renders(tmp_path):
     assert "Slash Commands" in buf.getvalue()
 
 
-def test_exit_and_quit_return_exit(tmp_path):
+def test_exit_returns_exit(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
     assert _call(handler,"/exit") == LoopAction.EXIT
-    assert _call(handler,"/quit") == LoopAction.EXIT
 
 
 def test_agents_renders_table(tmp_path):

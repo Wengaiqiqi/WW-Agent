@@ -10,14 +10,50 @@ from orchestrator.repl_ui import ReplUI
 COMM_AGENT_ID = "comm-agent"
 
 
+def _load_persisted_peer() -> str | None:
+    """Read the persisted ``/comm use`` selection. Returns None if absent or
+    unreadable — a missing/corrupt file should never block REPL startup."""
+    from agent_paths import comm_session_path
+
+    p = comm_session_path()
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    peer = data.get("current_peer") if isinstance(data, dict) else None
+    return peer if isinstance(peer, str) and peer else None
+
+
+def _persist_peer(peer_id: str | None) -> None:
+    """Write the current peer to disk so it survives a restart. Best-effort:
+    failures are logged, not raised, so a read-only FS can't crash /comm."""
+    import logging
+    from agent_paths import comm_session_path
+
+    p = comm_session_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({"current_peer": peer_id}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:  # pragma: no cover - filesystem permission issue
+        logging.getLogger(__name__).warning(
+            "could not persist current peer to %s: %s", p, exc
+        )
+
+
 class ReplCommandHandler:
     def __init__(self, *, ui: ReplUI, state, host, router):
         self.ui = ui
         self.state = state
         self.host = host
         self.router = router
-        # comm session state (memory-only, not persisted)
-        self._current_peer: str | None = None
+        # current peer persists across restarts (comm_session.json); chat
+        # contexts stay memory-only.
+        self._current_peer: str | None = _load_persisted_peer()
         self._chat_contexts: dict[str, str] = {}
 
     async def handle(self, line: str) -> LoopAction | None:
@@ -32,7 +68,7 @@ class ReplCommandHandler:
         if not command.startswith("/"):
             return None
         try:
-            if command in {"/exit", "/quit"}:
+            if command == "/exit":
                 return LoopAction.EXIT
             if command == "/help":
                 return self._cmd_help()
@@ -1121,6 +1157,7 @@ class ReplCommandHandler:
             )
             return LoopAction.CONTINUE
         self._current_peer = name
+        _persist_peer(name)
         self.ui.render_text(
             title="Current peer",
             text=f"Switched to {name}",
@@ -1137,6 +1174,7 @@ class ReplCommandHandler:
             return LoopAction.CONTINUE
         if self._current_peer == name:
             self._current_peer = None
+            _persist_peer(None)
             self._chat_contexts.pop(name, None)
         self.ui.render_text(
             title="Peer removed",
