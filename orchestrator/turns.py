@@ -17,6 +17,27 @@ from orchestrator.router import CapabilityRouter
 from orchestrator.stream_mux import StreamMux
 from prompt_rules import LANGUAGE_RULE
 
+
+def _is_cancellation(exc: BaseException) -> bool:
+    """True if *exc* is an ``asyncio.CancelledError`` or wraps one in its
+    ``__cause__`` / ``__context__`` chain.
+
+    A node that raises ``CancelledError`` (Ctrl-C / turn abort) must propagate
+    as cancellation so the caller can run its abort path (e.g. the REPL
+    controller's ``host.cancel_all()``). Older LangGraph let the bare
+    CancelledError bubble through ``graph.ainvoke``; newer runtimes can surface
+    it WRAPPED in a plain exception, which would otherwise be swallowed into a
+    ``TurnResult(error=...)``. Walking the chain keeps cancellation working
+    across langgraph versions (the bare case is still caught directly first)."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, asyncio.CancelledError):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return False
+
 log = logging.getLogger(__name__)
 
 # Fragments a trailing unclosed ``<…`` chunk must be a prefix of to count as a
@@ -535,6 +556,8 @@ class TurnRunner:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if _is_cancellation(exc):
+                    raise asyncio.CancelledError from exc
                 return TurnResult(error=str(exc))
             try:
                 owner = self.router.resolve(capability)
@@ -554,6 +577,10 @@ class TurnRunner:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # A node's CancelledError may arrive WRAPPED on newer langgraph;
+            # re-raise as cancellation so the caller's abort path runs.
+            if _is_cancellation(exc):
+                raise asyncio.CancelledError from exc
             return TurnResult(error=str(exc))
         if result.get("error"):
             return TurnResult(error=str(result["error"]))
