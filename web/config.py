@@ -38,10 +38,13 @@ def assert_safe_for_exposure(host: str) -> None:
     — both ``web.__main__`` and any embedding server call this."""
     if is_loopback(host):
         return
-    missing = [
-        name for name in ("WEB_AUTH_SECRET", "WEB_SIGNUP_CODE")
-        if not os.environ.get(name, "").strip()
-    ]
+    missing = []
+    if not os.environ.get("WEB_AUTH_SECRET", "").strip():
+        missing.append("WEB_AUTH_SECRET")
+    # Resolve the gate, not just the env var: a code set on disk by the toggle
+    # counts as a real gate, so don't refuse exposure when one is configured.
+    if not signup_code():
+        missing.append("WEB_SIGNUP_CODE")
     if missing:
         raise UnsafeExposureError(
             f"Refusing to bind {host} (network-exposed) without "
@@ -106,9 +109,30 @@ def auth_secret() -> str:
     return _DEV_SECRET
 
 
+def _signup_code_file():
+    from agent_paths import config_dir
+
+    return config_dir() / "web" / "signup_code"
+
+
 def signup_code() -> str:
-    """Optional registration gate. Blank = open registration."""
-    return os.environ.get("WEB_SIGNUP_CODE", "").strip()
+    """Optional registration gate. Blank = open registration.
+
+    Prefer ``WEB_SIGNUP_CODE`` from the environment; otherwise fall back to a
+    code PERSISTED on disk (``<config_dir>/web/signup_code``) — the same on-disk
+    pattern as ``auth_secret``. The on-disk fallback is what the 邀请码开关
+    toggle writes. An environment variable only reaches a process launched
+    AFTER it was set, so a server that was already running when the operator
+    flipped the toggle never saw the var and left registration open. Reading the
+    file here resolves the gate per request from live on-disk state, so toggling
+    it takes effect on the next registration with no server restart."""
+    s = os.environ.get("WEB_SIGNUP_CODE", "").strip()
+    if s:
+        return s
+    try:
+        return _signup_code_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def rate_limit_per_min() -> int:

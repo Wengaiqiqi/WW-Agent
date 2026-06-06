@@ -21,9 +21,30 @@ def test_auth_secret_dev_fallback_is_stable(monkeypatch):
     assert s1 and s1 == s2  # ephemeral but stable within a process
 
 
-def test_signup_code_blank_by_default(monkeypatch):
+def test_signup_code_blank_by_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("LANGCHAIN_AGENT_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("WEB_SIGNUP_CODE", raising=False)
     assert config.signup_code() == ""
+
+
+def test_signup_code_reads_file_when_env_unset(monkeypatch, tmp_path):
+    # The toggle persists the gate on disk; the server must pick it up even
+    # when the env var never propagated to it (already-running process).
+    monkeypatch.setenv("LANGCHAIN_AGENT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("WEB_SIGNUP_CODE", raising=False)
+    code_file = tmp_path / "web" / "signup_code"
+    code_file.parent.mkdir(parents=True)
+    code_file.write_text("  letmein\n", encoding="utf-8")
+    assert config.signup_code() == "letmein"
+
+
+def test_signup_code_env_overrides_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("LANGCHAIN_AGENT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("WEB_SIGNUP_CODE", "from-env")
+    code_file = tmp_path / "web" / "signup_code"
+    code_file.parent.mkdir(parents=True)
+    code_file.write_text("from-file", encoding="utf-8")
+    assert config.signup_code() == "from-env"
 
 
 def test_rate_limit_default_and_override(monkeypatch):

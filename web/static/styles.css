@@ -116,24 +116,49 @@ input, textarea, select { font: inherit; color: inherit; }
   border-color: var(--faint);
   box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.06);
 }
-.auth-actions { display: flex; gap: 8px; margin-top: 4px; }
-.auth-actions button {
-  flex: 1;
-  height: 42px;
-  border: 1px solid var(--line-2);
+/* Segmented login / register switch */
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--accent-soft);
   border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-weight: 600;
-  transition: background 120ms ease, border-color 120ms ease;
 }
-.auth-actions button:hover { background: var(--accent-soft); }
-.auth-actions .primary,
+.auth-tab {
+  flex: 1;
+  height: 36px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 14px;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+.auth-tab:hover { color: var(--ink-2); }
+.auth-tab.active {
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: var(--shadow-soft);
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-submit {
+  height: 44px;
+  margin-top: 2px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
 button.primary {
   background: var(--accent);
   color: #fff;
-  border-color: var(--accent);
+  border: 1px solid var(--accent);
 }
-.auth-actions .primary:hover,
 button.primary:hover { background: var(--accent-hover); }
 .error {
   color: var(--danger);

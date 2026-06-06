@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Web JWT signing secret persisted by 邀请码开关.bat — never commit (leaking it
+# lets anyone forge login tokens for any user).
+.web_auth_secret
 htmlcov/
 .coverage
 .agent/runtime/

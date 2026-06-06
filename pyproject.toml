@@ -29,6 +29,9 @@ classifiers = [
 # PyMuPDF / CairoSVG / google-genai / etc.
 dependencies = [
     "langchain>=0.3.0",
+    # langchain-core is pulled in transitively by langchain, but we import it
+    # directly across the agent loop / tools, so pin it as a first-class dep.
+    "langchain-core>=0.3.0",
     "langchain-openai>=0.3.0",
     "langchain-anthropic>=0.3.0",
     "langchain-community>=0.3.0",
@@ -41,6 +44,10 @@ dependencies = [
     "pyjwt>=2.8.0",
     "httpx>=0.27.0",
     "fastapi>=0.110.0",
+    # Imported directly by the hand-rolled A2A server/protocol layer
+    # (agents/comm_agent/a2a_protocol.py, agents/shared/a2a_server.py), not
+    # only as a fastapi transitive dep.
+    "starlette>=0.37.0",
     "uvicorn>=0.29.0",
     "psutil>=5.9.0",
     # Encrypts custom-endpoint API keys at rest (web/crypto.py); also used by
@@ -49,6 +56,11 @@ dependencies = [
     # Pydantic is brought in by langchain/fastapi but we use it explicitly
     # for planner decision validation.
     "pydantic>=2.0",
+    # Chat-platform gateways: QQ Official Bot (websockets) + Feishu
+    # long-connection adapter (lark-oapi). Part of the booted surface, so
+    # kept in runtime deps rather than an optional extra.
+    "websockets>=12.0",
+    "lark-oapi>=1.4.0",
 ]
 
 [project.optional-dependencies]

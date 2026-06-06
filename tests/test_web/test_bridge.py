@@ -267,6 +267,72 @@ def test_prose_turn_spawns_no_specialists(tmp_config_dir, monkeypatch):
     assert bootstrap_calls == [], "prose turn must not spawn specialists"
 
 
+def test_capability_turn_runtime_dir_isolated_in_process(tmp_config_dir, monkeypatch):
+    """Regression: the IN-PROCESS A2A discovery must resolve ``runtime_dir()`` to
+    the same per-turn dir the child specialists write their ``<id>.a2a-url``
+    sidecars into.
+
+    The bug: ``ctx.runtime_dir`` reached only the subprocess overlay
+    (``turn_env()``), so the in-process readers — ``_bootstrap`` (writes
+    peers.json), ``mcp_host.spawn`` (reads the sidecar), ``delegate_task`` (reads
+    peers.json) — all fell back to the shared default ``.agent/runtime``. There
+    they read STALE sidecars left by a prior REPL run and baked dead ports into
+    peers.json, so the delegate hit ``ConnectError: All connection attempts
+    failed``. Both the bootstrap and the dispatch (delegate-read) phases must see
+    the per-turn dir, not the default."""
+    import orchestrator.main as om
+    import orchestrator.mcp_host as mh
+    import web.bridge as wb
+    from agent_paths import DEFAULT_RUNTIME_DIR, runtime_dir
+
+    seen: dict[str, Path] = {}
+
+    async def spy_bootstrap(host, router):
+        seen["bootstrap"] = runtime_dir()
+
+    class FakeHost:
+        def __init__(self, *a, **k):
+            pass
+
+        async def shutdown_all(self):
+            pass
+
+    async def fake_catalog():
+        return (["tool.task"], {"tool.task": {"description": "d", "inputSchema": {}}})
+
+    def fake_planner(state):
+        return {"capability": "tool.task", "arguments": {"task": "x"}}
+
+    async def fake_dispatch(*, decision, prompt, host, router, hmac_key,
+                            trace_id, history_context, delegate=None):
+        seen["dispatch"] = runtime_dir()
+        yield {"type": "done", "text": "ans"}
+
+    monkeypatch.setattr(om, "_bootstrap", spy_bootstrap)
+    monkeypatch.setattr(mh, "MCPHost", FakeHost)
+    monkeypatch.setattr(wb, "_capability_catalog", fake_catalog)
+    monkeypatch.setattr(wb, "_build_planner", lambda *a, **k: fake_planner)
+    monkeypatch.setattr(wb, "_build_planner_context", lambda sk, **k: ("", ""))
+    monkeypatch.setattr(wb, "dispatch_decision_stream", fake_dispatch)
+
+    _collect(wb._run_streaming_locked(
+        "do it", trace_id="t", session_key="", user_id="u", model_id="mock",
+    ))
+
+    assert seen["bootstrap"].resolve() != DEFAULT_RUNTIME_DIR.resolve(), (
+        "in-process runtime_dir() must NOT be the shared default during bootstrap"
+    )
+    assert "web-" in seen["bootstrap"].name, (
+        f"bootstrap saw {seen['bootstrap']}, expected the per-turn web-<id> dir"
+    )
+    # The delegate reads peers.json from the same dir the bootstrap wrote it to.
+    assert seen["dispatch"] == seen["bootstrap"]
+
+    # The per-turn override must be unwound after the turn — no leak into the
+    # parent process env (the property the bridge's shared-loop design relies on).
+    assert "web-" not in os.environ.get("LANGCHAIN_AGENT_RUNTIME_DIR", "")
+
+
 def test_capability_turn_bootstraps_once(tmp_config_dir, monkeypatch):
     """A capability turn lazily bootstraps exactly once, then dispatches."""
     import orchestrator.main as om

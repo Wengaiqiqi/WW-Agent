@@ -575,44 +575,68 @@ async def _run_streaming_locked(
         return host, router, ctx.hmac_key
 
     final_text = ""
-    # No scoped_env: per-turn config travels explicitly — cfg into the planner,
-    # ctx.user_id into the memory snapshot, ctx.turn_env() into the host for
-    # subprocesses — so concurrent turns on the shared loop stay isolated.
-    try:
-        history_context, full_context = _build_planner_context(
-            session_key, memory_user=ctx.user_id,
-        )
-        # Build the planner from the cached static catalog — no spawn here.
-        capabilities, tool_schemas = await _capability_catalog()
-        planner = _build_planner(
-            _CatalogRouter(capabilities, tool_schemas),
-            context_text=full_context, cfg=cfg,
-        )
+    # Most per-turn config travels explicitly (cfg into the planner, ctx.user_id
+    # into the memory snapshot, ctx.turn_env() into the host for subprocesses) so
+    # concurrent turns stay isolated. The ONE thing that can't on the cold-spawn
+    # path: the in-process A2A discovery — _bootstrap writing peers.json,
+    # mcp_host.spawn reading the <id>.a2a-url sidecar, and delegate_task reading
+    # peers.json — calls the bare runtime_dir(), which resolves off os.environ.
+    # ctx.turn_env() carries the per-turn LANGCHAIN_AGENT_RUNTIME_DIR to the
+    # *child* specialists, but not to these in-process readers, so without scoping
+    # the parent reads the shared default .agent/runtime (and any STALE sidecars a
+    # prior REPL run left there) while the children write the per-turn dir — the
+    # delegate then connects to dead ports and fails with "All connection attempts
+    # failed". Scope it into the in-process env so parent and children agree on
+    # one dir; a fresh per-turn dir is empty, which also removes the stale-sidecar
+    # trap. Safe because _TURN_SEMAPHORE serializes turns at the default
+    # WEB_MAX_CONCURRENCY=1; true concurrency>1 isolation would need the dir
+    # threaded through the readers instead of process-global env.
+    #
+    # Pooled path (WEB_POOL_ENABLED=1): the live host's discovery dir is the
+    # pool's per-host pool-<hash>, NOT ctx.runtime_dir, so scoping to ctx here
+    # would be wrong. Leave it as a no-op ({} => scoped_env changes nothing) and
+    # let the pool own its dir; that path's bootstrap discovery is a separate
+    # concern handled in _host_factory.
+    env_scope = (
+        {} if config.pool_enabled()
+        else {"LANGCHAIN_AGENT_RUNTIME_DIR": str(ctx.runtime_dir)}
+    )
+    with scoped_env(env_scope):
         try:
-            async for ev in _plan_and_dispatch(
-                planner,
-                prompt=prompt,
-                ensure_specialists=ensure_specialists,
-                trace_id=trace_id,
-                history_context=history_context,
-            ):
-                if ev.get("type") == "text":
-                    final_text += ev.get("chunk", "")
-                elif ev.get("type") == "done" and ev.get("text"):
-                    final_text = ev["text"]
-                yield ev
-        except Exception as exc:  # noqa: BLE001
-            log.exception("web: planner/dispatch failed")
-            yield {"type": "error", "message": f"planner: {exc}"}
-            yield {"type": "done", "text": ""}
-            return
-    finally:
-        # Pooled path: return the host to the warm pool (not shut down).
-        if lease is not None:
-            await _get_pool().release(lease)
-        # Disabled path: a capability turn cold-spawned a private host.
-        if host is not None:
-            await host.shutdown_all()
-        if session_key and final_text:
-            session_store.append(session_key, prompt, final_text)
-        shutil.rmtree(ctx.runtime_dir, ignore_errors=True)
+            history_context, full_context = _build_planner_context(
+                session_key, memory_user=ctx.user_id,
+            )
+            # Build the planner from the cached static catalog — no spawn here.
+            capabilities, tool_schemas = await _capability_catalog()
+            planner = _build_planner(
+                _CatalogRouter(capabilities, tool_schemas),
+                context_text=full_context, cfg=cfg,
+            )
+            try:
+                async for ev in _plan_and_dispatch(
+                    planner,
+                    prompt=prompt,
+                    ensure_specialists=ensure_specialists,
+                    trace_id=trace_id,
+                    history_context=history_context,
+                ):
+                    if ev.get("type") == "text":
+                        final_text += ev.get("chunk", "")
+                    elif ev.get("type") == "done" and ev.get("text"):
+                        final_text = ev["text"]
+                    yield ev
+            except Exception as exc:  # noqa: BLE001
+                log.exception("web: planner/dispatch failed")
+                yield {"type": "error", "message": f"planner: {exc}"}
+                yield {"type": "done", "text": ""}
+                return
+        finally:
+            # Pooled path: return the host to the warm pool (not shut down).
+            if lease is not None:
+                await _get_pool().release(lease)
+            # Disabled path: a capability turn cold-spawned a private host.
+            if host is not None:
+                await host.shutdown_all()
+            if session_key and final_text:
+                session_store.append(session_key, prompt, final_text)
+            shutil.rmtree(ctx.runtime_dir, ignore_errors=True)

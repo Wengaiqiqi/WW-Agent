@@ -3,6 +3,14 @@
 # diffs/blame stable across Windows + Linux (CI runs on both).
 * text=auto eol=lf
 
+# Windows batch files MUST check out with CRLF. cmd.exe seeks batch source by
+# byte offset; with LF-only endings a longer .bat falls through `goto :eof` and
+# tries to run the lines below it as commands — the window errors out and closes
+# instantly (the 邀请码开关.bat "闪退"). The global `eol=lf` above would otherwise
+# force LF here, so override it explicitly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Binary assets — never touch their bytes.
 *.png binary
 *.jpg binary

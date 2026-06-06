@@ -25,16 +25,23 @@ async function init() {
 function showAuth() { $("auth-view").classList.remove("hidden"); $("app-view").classList.add("hidden"); }
 function showApp() { $("auth-view").classList.add("hidden"); $("app-view").classList.remove("hidden"); }
 
-async function doAuth(path) {
+function switchAuthTab(mode) {
+  const login = mode === "login";
+  $("tab-login").classList.toggle("active", login);
+  $("tab-register").classList.toggle("active", !login);
+  $("tab-login").setAttribute("aria-selected", String(login));
+  $("tab-register").setAttribute("aria-selected", String(!login));
+  $("login-form").classList.toggle("hidden", !login);
+  $("register-form").classList.toggle("hidden", login);
+  $("auth-sub").textContent = login ? "登录后开始与多智能体对话" : "创建账号，开启你的多智能体助手";
   $("auth-error").textContent = "";
-  const body = {
-    username: $("auth-username").value.trim(),
-    password: $("auth-password").value,
-    signup_code: $("auth-signup-code").value.trim() || undefined,
-  };
-  const r = await api(path, { method: "POST", body: JSON.stringify(body) });
+}
+
+async function submitAuth(path, fields) {
+  $("auth-error").textContent = "";
+  const r = await api(path, { method: "POST", body: JSON.stringify(fields) });
   if (r.ok) { state.user = await r.json(); await enterApp(); }
-  else { const e = await r.json().catch(() => ({})); $("auth-error").textContent = e.detail || "失败"; }
+  else { const e = await r.json().catch(() => ({})); $("auth-error").textContent = e.detail || "操作失败"; }
 }
 
 async function enterApp() {
@@ -504,8 +511,23 @@ function safeMarkdown(text) {
 }
 
 // Wire events
-$("btn-login").onclick = () => doAuth("/api/auth/login");
-$("btn-register").onclick = () => doAuth("/api/auth/register");
+$("tab-login").onclick = () => switchAuthTab("login");
+$("tab-register").onclick = () => switchAuthTab("register");
+$("login-form").onsubmit = (e) => {
+  e.preventDefault();
+  submitAuth("/api/auth/login", {
+    username: $("login-username").value.trim(),
+    password: $("login-password").value,
+  });
+};
+$("register-form").onsubmit = (e) => {
+  e.preventDefault();
+  submitAuth("/api/auth/register", {
+    username: $("register-username").value.trim(),
+    password: $("register-password").value,
+    signup_code: $("register-signup-code").value.trim() || undefined,
+  });
+};
 $("btn-logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.reload(); };
 $("btn-new-conv").onclick = newConv;
 $("btn-endpoints").onclick = openEndpoints;

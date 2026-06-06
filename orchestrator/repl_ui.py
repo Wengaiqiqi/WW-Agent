@@ -16,7 +16,6 @@ from orchestrator.ui_input import ask_boxed_input
 COMMANDS: dict[str, str] = {
     "/help": "Show available commands",
     "/exit": "Exit the CLI",
-    "/quit": "Exit the CLI",
     "/status": "Show current session status",
     "/agents": "List multi-agent specialists",
     "/tools": "List registered specialist capabilities",

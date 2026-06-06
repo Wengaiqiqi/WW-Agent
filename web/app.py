@@ -207,14 +207,14 @@ def _mount_auth_routes(app, db, secret, set_cookie):
     def register(req: RegisterReq) -> JSONResponse:
         gate = config.signup_code()
         if gate and (req.signup_code or "") != gate:
-            raise HTTPException(status_code=403, detail="invalid signup code")
+            raise HTTPException(status_code=403, detail="邀请码无效")
         if not req.username.strip() or len(req.password) < 6:
-            raise HTTPException(status_code=400, detail="username required, password >= 6 chars")
+            raise HTTPException(status_code=400, detail="请填写用户名，且密码至少 6 位")
         pwd_hash, salt = auth.hash_password(req.password)
         try:
             uid = store.create_user(db, req.username.strip(), pwd_hash, salt)
         except store.DuplicateUsername:
-            raise HTTPException(status_code=409, detail="username taken")
+            raise HTTPException(status_code=409, detail="用户名已被占用")
         token = auth.mint_token(user_id=uid, username=req.username.strip(), secret=secret)
         resp = JSONResponse({"id": uid, "username": req.username.strip()})
         set_cookie(resp, token)
@@ -224,7 +224,7 @@ def _mount_auth_routes(app, db, secret, set_cookie):
     def login(req: LoginReq) -> JSONResponse:
         user = store.get_user_by_username(db, req.username.strip())
         if not user or not auth.verify_password(req.password, user["pwd_hash"], user["salt"]):
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
         token = auth.mint_token(user_id=user["id"], username=user["username"], secret=secret)
         resp = JSONResponse({"id": user["id"], "username": user["username"]})
         set_cookie(resp, token)
