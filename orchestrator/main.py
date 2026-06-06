@@ -88,10 +88,13 @@ async def _bootstrap(host: MCPHost, router: CapabilityRouter) -> None:
         }
         router.register(card.id, [t.name for t in tools], tool_metas=tool_metas)
 
-    # After all specialists are up, broadcast their A2A URLs.
-    from agent_paths import runtime_dir
+    # After all specialists are up, broadcast their A2A URLs into THIS host's
+    # runtime dir (per-turn when the web bridge set one via turn_env, else the
+    # process-global dir). Writing via host.runtime_dir keeps the peers.json the
+    # parent writes and the dir delegation later reads in lockstep with the
+    # sidecars the children wrote — no cross-process clobber on a shared cwd.
     peers = host.a2a_urls()  # already returns {id: url} from Task 5.2
-    rt_dir = runtime_dir()
+    rt_dir = host.runtime_dir
     rt_dir.mkdir(parents=True, exist_ok=True)
     (rt_dir / "peers.json").write_text(json.dumps(peers), encoding="utf-8")
 

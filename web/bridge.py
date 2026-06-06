@@ -291,6 +291,11 @@ async def dispatch_decision_stream(
                 permission_mode=config.WEB_PERMISSION_MODE,
                 history_context=history_context,
                 delegate=delegate,
+                # Discover the peer from THIS host's per-turn runtime dir, not
+                # the process-global default that a REPL/gateway on the same cwd
+                # may have clobbered — the root of "All connection attempts
+                # failed". A pooled or cold-spawned host both expose it.
+                runtime_dir=getattr(host, "runtime_dir", None),
             ):
                 yield event
         except Exception as exc:  # noqa: BLE001
@@ -528,6 +533,42 @@ async def _plan_and_dispatch(
         yield ev
 
 
+def _pin_llm_config(ctx: TurnContext, cfg: Any) -> TurnContext:
+    """Return *ctx* with the resolved LLM selection pinned onto its per-turn
+    fields, so ``turn_env()`` carries authoritative model/base_url/api_key/
+    protocol to spawned specialists.
+
+    Why this is load-bearing: ``mcp_host._build_agent_env`` passes
+    ``LANGCHAIN_AGENT_MODEL`` / ``_API_KEY`` / ``_BASE_URL`` / ``_PROTOCOL``
+    through from the web SERVER's os.environ, and ``turn_env`` only overrides
+    them when non-empty. A web turn that relied on settings.json (empty
+    per-request model/key) therefore let the tool-agent subprocess INHERIT
+    whatever stale values the launching shell had — observed as a leftover
+    ``openai`` / api-key ``"x"`` that 401'd, while the in-process planner
+    correctly used settings.json (deepseek). Pinning the planner's own resolved
+    cfg makes the specialist use the SAME provider+key as the planner and
+    overrides any ambient leak. The api_key is resolved from cfg / env /
+    credentials; left unset only when none is discoverable (so the specialist
+    falls back to its own credential hydration rather than receiving ``""``)."""
+    from dataclasses import replace
+
+    from config._credentials import get_api_key
+
+    resolved_key = ""
+    try:
+        resolved_key = get_api_key(cfg) or ""
+    except Exception:  # noqa: BLE001 — never let key lookup break the turn
+        resolved_key = ctx.api_key
+    model_id = f"{cfg.provider}/{cfg.model}" if cfg.model else cfg.provider
+    return replace(
+        ctx,
+        model_id=model_id,
+        base_url=cfg.base_url or ctx.base_url,
+        api_key=resolved_key or ctx.api_key,
+        protocol=cfg.protocol or ctx.protocol,
+    )
+
+
 async def _run_streaming_locked(
     prompt: str,
     *, trace_id: str, session_key: str, user_id: str, model_id: str,
@@ -546,6 +587,12 @@ async def _run_streaming_locked(
     # concurrent turns can't clobber each other's model/endpoint — same explicit
     # threading the gateway uses; no scoped_env needed.
     cfg = resolve_config(ctx)
+
+    # Pin that resolved config onto the context so the specialists we spawn use
+    # the SAME provider/model/key as the planner — not a stale LANGCHAIN_AGENT_*
+    # the server inherited from its launching shell (which the child would
+    # otherwise inherit and 401 on). See _pin_llm_config.
+    ctx = _pin_llm_config(ctx, cfg)
 
     # Specialists are obtained lazily — only a capability turn pays for them; a
     # prose turn never calls ensure_specialists. When pooling is enabled the host

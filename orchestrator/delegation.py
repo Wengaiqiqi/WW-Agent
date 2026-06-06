@@ -15,6 +15,8 @@ the gateway once and the one-shot path once).
 from __future__ import annotations
 
 import json
+from functools import partial
+from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from orchestrator.permission_gate import PermissionGate
@@ -33,14 +35,22 @@ async def delegate_via_a2a_stream(
     permission_mode: str,
     history_context: str = "",
     delegate: DelegateFn | None = None,
+    runtime_dir: Path | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Mint the authz grant, build the task + meta, and yield the specialist's
     raw SSE events (thinking / tool_call / tool_result / text / done / error).
 
     Single source of truth for grant-minting; both the non-streaming
-    ``delegate_via_a2a`` and the web bridge consume this."""
+    ``delegate_via_a2a`` and the web bridge consume this.
+
+    ``runtime_dir`` selects which peers.json the real delegate discovers the
+    peer from — pass the per-turn dir (``host.runtime_dir``) when the host was
+    bootstrapped into one, so the web bridge doesn't read a foreign peers.json
+    from the shared default dir. It is bound onto the real ``delegate_task``;
+    an injected ``delegate`` (tests) keeps its own narrower signature."""
     if delegate is None:
-        from orchestrator.a2a_client import delegate_task as delegate
+        from orchestrator.a2a_client import delegate_task
+        delegate = partial(delegate_task, runtime_dir=runtime_dir)
 
     arguments = arguments or {}
     gate = PermissionGate(mode=permission_mode, hmac_key=hmac_key, trace_id=trace_id)
@@ -90,11 +100,15 @@ async def delegate_via_a2a(
     permission_mode: str,
     history_context: str = "",
     delegate: DelegateFn | None = None,
+    runtime_dir: Path | None = None,
 ) -> str:
     """Stream a ``tool.task`` / ``skill.<slug>`` and return the final text.
 
     Thin wrapper over :func:`delegate_via_a2a_stream` that collects ``text``
-    deltas and returns when ``done`` arrives (or raises on ``error``)."""
+    deltas and returns when ``done`` arrives (or raises on ``error``).
+
+    ``runtime_dir`` is forwarded to the stream so the real delegate discovers
+    peers from the per-turn dir (see :func:`delegate_via_a2a_stream`)."""
     text_buffer = ""
     final_text = ""
     saw_done = False
@@ -107,6 +121,7 @@ async def delegate_via_a2a(
         permission_mode=permission_mode,
         history_context=history_context,
         delegate=delegate,
+        runtime_dir=runtime_dir,
     ):
         etype = event.get("type", "")
         if etype == "text":
