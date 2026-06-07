@@ -20,7 +20,7 @@ _MODE_WHITELIST: dict[str, list[str]] = {
     "read-only": [
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "calculator", "current_datetime",
-        "tool_manifest", "config", "clarify",
+        "clarify",
         # ``tool.task`` is *delegation*, not a tool — it's always allowed.
         # The inner tool set tool-agent then exposes to its ReAct loop is
         # what's actually mode-gated (see ``tool_executor.tools_for_mode``).
@@ -32,8 +32,8 @@ _MODE_WHITELIST: dict[str, list[str]] = {
     "workspace-write": [
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "calculator", "current_datetime",
-        "tool_manifest", "config", "clarify",
-        "write_file", "edit_file", "apply_patch", "memory", "todo_write",
+        "clarify",
+        "write_file", "edit_file", "apply_patch", "memory",
         "tool.task",
     ],
     "danger-full-access": ["*"],
@@ -61,12 +61,21 @@ _TOOL_AGENT_MODE_TOOLS: dict[str, list[str]] = {
     "read-only": [
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "web_crawl", "clarify",
+        # Pure-compute + read-class capabilities (no state mutation).
+        "calculator", "current_datetime", "sleep",
+        "osv_check", "x_search", "vision_analyze", "mixture_of_agents",
     ],
     "workspace-write": [
         "read_file", "grep_search", "glob_search", "list_directory",
         "web_search", "web_extract", "web_crawl", "clarify",
+        "calculator", "current_datetime", "sleep",
+        "osv_check", "x_search", "vision_analyze", "mixture_of_agents",
         "write_file", "run_python", "run_command",
+        # Workspace-mutating edits.
+        "edit_file", "apply_patch",
     ],
+    # home_assistant can actuate real-world devices, so it stays danger-only
+    # (reachable solely under the "*" mode below).
     "danger-full-access": ["*"],
 }
 

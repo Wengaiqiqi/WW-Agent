@@ -339,6 +339,157 @@ async def _wrap_clarify(args: dict) -> Any:
     )
 
 
+# --- Absorbed from the removed single-agent ``tool/tools.py`` surface -------
+# calculator / current_datetime are pure + fast, so they return directly
+# without ``to_thread``. Everything that touches disk, the network, or an LLM
+# is offloaded, matching the rationale on the file/web wrappers above.
+
+
+async def _wrap_calculator(args: dict) -> Any:
+    from tool.tool_basic import evaluate_expression
+
+    return evaluate_expression(str(args.get("expression", "")))
+
+
+async def _wrap_current_datetime(args: dict) -> Any:
+    from tool.tool_basic import current_datetime_str
+
+    return current_datetime_str()
+
+
+async def _wrap_sleep(args: dict) -> Any:
+    # Use ``asyncio.sleep`` rather than ``time.sleep`` + ``to_thread`` so the
+    # event loop keeps pumping SSE heartbeats while the agent waits.
+    ms = int(args.get("duration_ms", 0))
+    await asyncio.sleep(max(0, ms) / 1000)
+    return f"Slept for {ms}ms"
+
+
+async def _wrap_edit_file(args: dict) -> Any:
+    from tool.tool_file_ops import edit_text_file
+
+    # ``edit_text_file`` runs ``resolve_workspace_path`` itself, so the
+    # workspace boundary is enforced exactly like read/write/list.
+    return await asyncio.to_thread(
+        edit_text_file,
+        args["path"],
+        args["old_string"],
+        args["new_string"],
+        bool(args.get("replace_all", False)),
+    )
+
+
+async def _wrap_apply_patch(args: dict) -> Any:
+    from tool.tool_patch import apply_patch_tool
+
+    # ``apply_patch_tool`` resolves every touched path through
+    # ``resolve_workspace_path`` before writing anything.
+    return await asyncio.to_thread(apply_patch_tool, args["patch"])
+
+
+def _do_osv_check(package: str, ecosystem: str, version, malware_only: bool) -> str:
+    from tool.tool_osv import osv_lookup
+
+    return json.dumps(
+        osv_lookup(package, ecosystem, version=version, malware_only=malware_only),
+        ensure_ascii=False, indent=2,
+    )
+
+
+async def _wrap_osv_check(args: dict) -> Any:
+    return await asyncio.to_thread(
+        _do_osv_check,
+        args["package"],
+        args.get("ecosystem", "npm"),
+        args.get("version"),
+        bool(args.get("malware_only", False)),
+    )
+
+
+def _do_home_assistant(action, domain, area, entity_id, service, data) -> str:
+    from tool.tool_homeassistant import dispatch
+
+    return json.dumps(
+        dispatch(
+            action, domain=domain, area=area, entity_id=entity_id,
+            service=service, data=data,
+        ),
+        ensure_ascii=False, indent=2,
+    )
+
+
+async def _wrap_home_assistant(args: dict) -> Any:
+    return await asyncio.to_thread(
+        _do_home_assistant,
+        args["action"],
+        args.get("domain"),
+        args.get("area"),
+        args.get("entity_id"),
+        args.get("service"),
+        args.get("data"),
+    )
+
+
+def _do_x_search(args: dict) -> str:
+    from tool.tool_x_search import x_search
+
+    return json.dumps(
+        x_search(
+            query=args["query"],
+            allowed_x_handles=args.get("allowed_x_handles"),
+            excluded_x_handles=args.get("excluded_x_handles"),
+            from_date=args.get("from_date", ""),
+            to_date=args.get("to_date", ""),
+            enable_image_understanding=bool(args.get("enable_image_understanding", False)),
+            enable_video_understanding=bool(args.get("enable_video_understanding", False)),
+        ),
+        ensure_ascii=False, indent=2,
+    )
+
+
+async def _wrap_x_search(args: dict) -> Any:
+    return await asyncio.to_thread(_do_x_search, args)
+
+
+def _do_vision_analyze(image: str, prompt: str) -> str:
+    from tool.tool_vision import vision_analyze
+
+    return json.dumps(
+        vision_analyze(image=image, prompt=prompt),
+        ensure_ascii=False, indent=2,
+    )
+
+
+async def _wrap_vision_analyze(args: dict) -> Any:
+    return await asyncio.to_thread(
+        _do_vision_analyze,
+        args["image"],
+        args.get("prompt", "Describe this image in detail."),
+    )
+
+
+def _do_mixture_of_agents(user_prompt, reference_models, aggregator_model) -> str:
+    from tool.tool_moa import mixture_of_agents
+
+    return json.dumps(
+        mixture_of_agents(
+            user_prompt=user_prompt,
+            reference_models=reference_models,
+            aggregator_model=aggregator_model,
+        ),
+        ensure_ascii=False, indent=2,
+    )
+
+
+async def _wrap_mixture_of_agents(args: dict) -> Any:
+    return await asyncio.to_thread(
+        _do_mixture_of_agents,
+        args["user_prompt"],
+        args.get("reference_models"),
+        args.get("aggregator_model"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool map
 # ---------------------------------------------------------------------------
@@ -577,6 +728,152 @@ _TOOL_MAP: dict[str, tuple] = {
         "Ask the user a clarifying question. Use when the request is ambiguous "
         "or has meaningful trade-offs the model cannot resolve. Returns the "
         "user's answer as JSON.",
+    ),
+    "calculator": (
+        _wrap_calculator,
+        {
+            "type": "object",
+            "required": ["expression"],
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression, e.g. '2 + 3 * 4', 'sqrt(144)', 'sin(pi / 2)'.",
+                },
+            },
+        },
+        "Evaluate a math expression (arithmetic, powers, common math functions, pi/e).",
+    ),
+    "current_datetime": (
+        _wrap_current_datetime,
+        {"type": "object", "required": [], "properties": {}},
+        "Return the current local date and time. Use only for explicit "
+        "date/time/now/today questions.",
+    ),
+    "sleep": (
+        _wrap_sleep,
+        {
+            "type": "object",
+            "required": ["duration_ms"],
+            "properties": {
+                "duration_ms": {"type": "integer", "description": "How long to wait, in milliseconds."},
+            },
+        },
+        "Wait for a specified duration in milliseconds.",
+    ),
+    "edit_file": (
+        _wrap_edit_file,
+        {
+            "type": "object",
+            "required": ["path", "old_string", "new_string"],
+            "properties": {
+                "path": {"type": "string", "description": "Workspace file to edit."},
+                "old_string": {"type": "string", "description": "Exact text to replace."},
+                "new_string": {"type": "string", "description": "Replacement text (must differ from old_string)."},
+                "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)."},
+            },
+        },
+        "Replace text in a workspace file. Prefer this over write_file for "
+        "targeted single-spot edits.",
+    ),
+    "apply_patch": (
+        _wrap_apply_patch,
+        {
+            "type": "object",
+            "required": ["patch"],
+            "properties": {
+                "patch": {
+                    "type": "string",
+                    "description": (
+                        "V4A patch between '*** Begin Patch' / '*** End Patch', "
+                        "with '*** Update/Add/Delete/Move File:' sections."
+                    ),
+                },
+            },
+        },
+        "Apply a V4A unified-diff patch across multiple files (validated "
+        "atomically; nothing is written if any hunk fails). Prefer edit_file "
+        "for a single replacement.",
+    ),
+    "osv_check": (
+        _wrap_osv_check,
+        {
+            "type": "object",
+            "required": ["package"],
+            "properties": {
+                "package": {"type": "string", "description": "Package name to look up."},
+                "ecosystem": {
+                    "type": "string",
+                    "description": "OSV ecosystem (npm, PyPI, Go, crates.io, Maven, ...). Default npm.",
+                },
+                "version": {"type": "string", "description": "Optional specific version to check."},
+                "malware_only": {"type": "boolean", "description": "Only confirmed MAL-* advisories (skip CVEs)."},
+            },
+        },
+        "Query the OSV API for malware/CVE advisories on a package.",
+    ),
+    "home_assistant": (
+        _wrap_home_assistant,
+        {
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list_entities", "get_state", "list_services", "call_service"],
+                    "description": "Operation to perform.",
+                },
+                "domain": {"type": "string", "description": "HA domain filter / target (e.g. 'light')."},
+                "area": {"type": "string", "description": "Area filter for list_entities."},
+                "entity_id": {"type": "string", "description": "Target entity (required for get_state)."},
+                "service": {"type": "string", "description": "Service name (required for call_service)."},
+                "data": {"type": ["object", "string"], "description": "Service payload (dict or JSON string)."},
+            },
+        },
+        "Control / inspect Home Assistant via REST API (HASS_TOKEN required).",
+    ),
+    "x_search": (
+        _wrap_x_search,
+        {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "description": "What to search for on X (Twitter)."},
+                "allowed_x_handles": {"type": "array", "items": {"type": "string"}, "description": "Restrict to up to 10 handles."},
+                "excluded_x_handles": {"type": "array", "items": {"type": "string"}, "description": "Exclude up to 10 handles (mutually exclusive with allowed)."},
+                "from_date": {"type": "string", "description": "YYYY-MM-DD lower bound."},
+                "to_date": {"type": "string", "description": "YYYY-MM-DD upper bound."},
+                "enable_image_understanding": {"type": "boolean"},
+                "enable_video_understanding": {"type": "boolean"},
+            },
+        },
+        "Search X (Twitter) via xAI's hosted x_search (XAI_API_KEY required). "
+        "Use for X discussion/reactions, not general web search.",
+    ),
+    "vision_analyze": (
+        _wrap_vision_analyze,
+        {
+            "type": "object",
+            "required": ["image"],
+            "properties": {
+                "image": {"type": "string", "description": "http(s) URL or local file path of the image."},
+                "prompt": {"type": "string", "description": "What to ask about the image (default: describe it)."},
+            },
+        },
+        "Send an image (URL or path) and a prompt to a vision-capable chat model.",
+    ),
+    "mixture_of_agents": (
+        _wrap_mixture_of_agents,
+        {
+            "type": "object",
+            "required": ["user_prompt"],
+            "properties": {
+                "user_prompt": {"type": "string", "description": "The hard reasoning/coding task to solve."},
+                "reference_models": {"type": "array", "items": {"type": "string"}, "description": "Model names to run in parallel."},
+                "aggregator_model": {"type": "string", "description": "Model that synthesizes the final answer."},
+            },
+        },
+        "Run a Mixture-of-Agents collaboration across multiple LLMs. Use only "
+        "for hard tasks where models can disagree productively (4-5x cost).",
     ),
 }
 

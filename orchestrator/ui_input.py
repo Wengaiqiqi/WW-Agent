@@ -1,11 +1,7 @@
 """Inline boxed input prompt (Claude Code style).
 
-Extracted from ``legacy/single_agent_loop.py`` so the multi-agent REPL no
-longer has to reach back into the deprecated single-agent module to read a
-line. The new home also makes the helper accept the slash-command dict as a
-parameter, so the orchestrator can pass its OWN command catalog rather than
-inheriting the legacy single-agent one (a small bug fix that fell out of the
-extraction).
+The helper accepts the slash-command dict as a parameter, so the orchestrator
+passes its OWN command catalog when reading a line of input.
 """
 from __future__ import annotations
 

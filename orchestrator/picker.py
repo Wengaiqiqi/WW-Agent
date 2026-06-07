@@ -1,10 +1,6 @@
-"""Inline arrow-key picker shared by /model (legacy) and /gateway.
+"""Inline arrow-key picker shared by /model and /gateway.
 
-Extracted from ``legacy/single_agent_loop.py`` so the multi-agent REPL can
-reuse the same UX for new slash commands without depending on the legacy
-single-agent module. The legacy module continues to ship its own copy until
-it gets refactored — keeping two copies is cheap and avoids reaching across
-the legacy/orchestrator boundary at import time.
+Gives the REPL a reusable arrow-key selection UX for slash commands.
 
 Public API:
     can_use_interactive_picker() -> bool

@@ -4,12 +4,10 @@ These guard against the duplicate-drift bug that motivated the extraction:
 legacy and orchestrator had separate inline copies of TOOL_ARG_PRIMARY_KEY
 with slightly different entries (and ``memory`` was even mismapped to
 ``operation`` in one of them). Single source of truth now lives in
-``agent_display``; these tests pin the key mappings against the real
-``@tool`` signatures in ``tool/tools.py``.
+``agent_display``; these tests pin the key mappings against the real tool
+schemas in ``tool_executor._TOOL_MAP`` (the live dispatch surface).
 """
 from __future__ import annotations
-
-import inspect
 
 import pytest
 
@@ -19,48 +17,35 @@ from agent_display import (
     has_raw_tool_markup,
     is_langgraph_tool_chunk,
 )
+from agents.tool_agent.tool_executor import _TOOL_MAP
 
 
 # ---------------------------------------------------------------------------
-# Primary-key mapping vs. real tool signatures
+# Primary-key mapping vs. real tool schemas
 # ---------------------------------------------------------------------------
 
 
-def _first_param(tool_callable) -> str:
-    """Return the first positional argument name of a LangChain @tool callable."""
-    fn = getattr(tool_callable, "func", None) or tool_callable
-    sig = inspect.signature(fn)
-    params = [
-        p for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-    ]
-    return params[0].name if params else ""
-
-
-@pytest.mark.parametrize("tool_name", [
-    "read_file", "write_file", "edit_file",
-    "list_directory", "glob_search", "grep_search",
-    "apply_patch", "run_command", "run_python",
-    "web_search", "web_extract", "web_crawl",
-    "memory", "clarify", "todo_write", "calculator",
-    "osv_check", "home_assistant", "x_search",
-    "vision_analyze", "mixture_of_agents",
-])
-def test_primary_key_matches_tool_signature(tool_name):
-    """The primary-arg name in TOOL_ARG_PRIMARY_KEY must actually exist on the
-    tool's signature. Regression for the previous ``memory → operation``
-    mismapping (real signature is ``memory(action=..., ...)``)."""
-    from tool import tools as tools_mod
-
-    tool_callable = getattr(tools_mod, tool_name)
-    fn = getattr(tool_callable, "func", None) or tool_callable
-    sig = inspect.signature(fn)
-    declared = TOOL_ARG_PRIMARY_KEY.get(tool_name)
-    assert declared, f"{tool_name} not in TOOL_ARG_PRIMARY_KEY"
-    assert declared in sig.parameters, (
-        f"TOOL_ARG_PRIMARY_KEY[{tool_name!r}] = {declared!r} but the real "
-        f"signature is {tool_name}({', '.join(sig.parameters)})"
+@pytest.mark.parametrize(
+    "tool_name", sorted(set(TOOL_ARG_PRIMARY_KEY) & set(_TOOL_MAP))
+)
+def test_primary_key_matches_tool_schema(tool_name):
+    """The primary-arg name in TOOL_ARG_PRIMARY_KEY must be a real parameter in
+    the tool's input schema. Regression for the previous ``memory → operation``
+    mismapping (real schema property is ``action``)."""
+    _handler, schema, _desc = _TOOL_MAP[tool_name]
+    props = schema.get("properties", {})
+    declared = TOOL_ARG_PRIMARY_KEY[tool_name]
+    assert declared in props, (
+        f"TOOL_ARG_PRIMARY_KEY[{tool_name!r}] = {declared!r} but the tool's "
+        f"schema properties are {sorted(props)}"
     )
+
+
+def test_every_primary_key_tool_exists_in_dispatch_map():
+    """No stale display entries: every tool named in TOOL_ARG_PRIMARY_KEY must
+    still be a real dispatchable tool (catches retired tools left behind)."""
+    stale = set(TOOL_ARG_PRIMARY_KEY) - set(_TOOL_MAP)
+    assert not stale, f"TOOL_ARG_PRIMARY_KEY names tools no longer in _TOOL_MAP: {sorted(stale)}"
 
 
 # ---------------------------------------------------------------------------

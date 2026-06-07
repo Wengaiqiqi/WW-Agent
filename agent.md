@@ -6,13 +6,10 @@ single file.
 
 ## Project shape
 
-Two runtime modes share one codebase:
-
-- **Multi-agent (default)** — `cli.py` → `orchestrator/main.py` boots the
-  orchestrator process, spawns `tool-agent` + `skill-agent` subprocesses,
-  routes turns over MCP stdio + A2A streaming.
-- **Single-agent (`--single`)** — `cli.py` → `legacy/single_agent_loop.py`
-  in-process LangGraph ReAct loop.
+`cli.py` → `orchestrator/main.py` boots the orchestrator process, spawns
+`tool-agent` + `skill-agent` subprocesses, and routes turns over MCP stdio +
+A2A streaming. (The earlier in-process single-agent loop under `legacy/` and
+its `--single` flag were removed — see "Removed".)
 
 Key modules:
 
@@ -28,8 +25,12 @@ Key modules:
   whitelists, telemetry sidecar, mock chat model.
 - `agents/tool_agent/` — workspace + web ReAct specialist.
 - `agents/skill_agent/` — SKILL.md JSON-envelope executor.
-- `tool/` — tool implementations (one source of truth — both legacy and
-  multi-agent surface the same underlying functions).
+- `tool/` — tool implementations (`tool/tool_*.py`) are the one source of
+  truth. The multi-agent `_wrap_*` surface in
+  `agents/tool_agent/tool_executor.py` (`_TOOL_MAP`) is the only adapter:
+  each entry pairs a handler with a hand-written MCP JSON schema. Pure
+  compute that has no other home lives in `tool/tool_basic.py`
+  (`evaluate_expression`, `current_datetime_str`).
 - `skills/<slug>/SKILL.md` — domain workflow definitions + `_meta.json`.
 - `tests/` — 77 test files; e2e under `tests/test_e2e_multi_agent/`
   marker `e2e`.
@@ -67,7 +68,6 @@ python cli.py prompt "/tools"
 python cli.py prompt "/skills"
 python cli.py prompt "/status"
 python cli.py prompt "/config"
-python cli.py --single prompt "/tools"
 ```
 
 Test suite:
@@ -86,15 +86,16 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
 
 ## Working agreements
 
-- **Tool source of truth lives in `tool/`.** Both surfaces (legacy `@tool`
-  in `tool/tools.py` and multi-agent `_wrap_*` in
-  `agents/tool_agent/tool_executor.py`) call the same underlying
-  functions. A bug fix in the underlying tool fixes both paths.
+- **Tool source of truth lives in `tool/tool_*.py`.** The multi-agent
+  `_wrap_*` surface in `agents/tool_agent/tool_executor.py` calls those
+  underlying functions, so a bug fix there fixes the live path. The
+  `@tool` wrappers in `tool/tools.py` call the same functions but are now
+  only imported by tests.
 - **Don't read `LANGCHAIN_AGENT_PERMISSION_MODE` from anything that runs
   inside a spawned agent subprocess.** The orchestrator's JWT grant is
   the authoritative gate via `agents.shared.authz.verify_grant`. The env
-  var only governs `tool/tools.py`'s `@tool` decorator wrappers, which
-  are imported by the legacy single-agent process, not by specialists.
+  var only governs `tool/tools.py`'s `@tool` decorator wrappers, which are
+  imported only by tests, not by specialists.
 - **CLI behavior stays generic.** Skill-specific behavior belongs in
   `skills/<name>/SKILL.md` (instructions) or `skills/<name>/scripts/`
   (helpers).
@@ -112,6 +113,25 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
   `LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1` to opt out during local dev.
 - **Prefer small, focused changes.** Run the relevant test file after
   each edit; full `pytest` before pushing.
+
+## Removed
+
+- **Single-agent mode (`--single`, `legacy/`).** Deleted in favour of the
+  multi-agent orchestrator: the `legacy/single_agent_loop.py` loop, the
+  `--single`/`--output-format` CLI args, and the `test_e2e_legacy_mode.py`
+  e2e check are gone. `orchestrator/picker.py` and `orchestrator/ui_input.py`
+  hold the input/picker UX that was originally extracted from that loop.
+- **`tool/tools.py` + `tool/tool_registry.py` (the `@tool`/`ALL_TOOLS`
+  surface).** Retired after the single-agent loop (their only consumer) went
+  away. Before deleting them, `tool_executor._TOOL_MAP` absorbed the 10
+  capabilities that were only on that surface (`edit_file`, `apply_patch`,
+  `calculator`, `current_datetime`, `sleep`, `osv_check`, `home_assistant`,
+  `x_search`, `vision_analyze`, `mixture_of_agents`) — wired to their
+  `tool/tool_*.py` impls, with `calculator`/`current_datetime` logic moved to
+  `tool/tool_basic.py`. Three meta-tools were dropped entirely (`config`,
+  `tool_manifest`, `todo_write`): never reachable in the multi-agent path.
+  Permission placement: the read-class/compute absorbed tools are in
+  `read-only`/`workspace-write`; `home_assistant` is danger-only.
 
 ## Design docs
 
