@@ -50,7 +50,6 @@ TOOL_ARG_PRIMARY_KEY: dict[str, str] = {
     # other
     "memory": "action",   # the @tool signature is (action, target, content, old_text)
     "clarify": "question",
-    "todo_write": "todos",
     "calculator": "expression",
     # hermes-agent ports
     "osv_check": "package",

@@ -49,6 +49,30 @@ def test_danger_full_access_exposes_everything():
     assert "clarify" in names
 
 
+def test_read_only_includes_safe_absorbed_tools():
+    """Pure-compute and read-class capabilities absorbed from the old
+    single-agent surface must be usable even under read-only."""
+    names = set(tools_for_mode("read-only"))
+    for t in (
+        "calculator", "current_datetime", "sleep",
+        "osv_check", "x_search", "vision_analyze", "mixture_of_agents",
+    ):
+        assert t in names, f"{t!r} should be in read-only: {sorted(names)}"
+    # State-mutating / danger absorbed tools must NOT be in read-only.
+    for forbidden in ("edit_file", "apply_patch", "home_assistant"):
+        assert forbidden not in names, f"{forbidden!r} leaked into read-only"
+
+
+def test_workspace_write_adds_edit_and_patch():
+    names = set(tools_for_mode("workspace-write"))
+    for added in ("edit_file", "apply_patch"):
+        assert added in names, f"workspace-write missing {added!r}"
+    # The read-only-safe absorbed tools carry through to workspace-write too.
+    assert "calculator" in names
+    # home_assistant is danger-only.
+    assert "home_assistant" not in names
+
+
 def test_unknown_mode_falls_back_to_empty():
     """A typo/unknown mode must NOT escalate. Empty set is the safe default —
     the ReAct loop will refuse to use any tools and the user gets a clear

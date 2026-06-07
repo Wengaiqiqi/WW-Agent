@@ -190,3 +190,58 @@ async def test_execute_run_command_emits_stdout():
         "_meta": {"authz_grant": _grant("run_command")},
     })
     assert "hello-shell" in str(result)
+
+
+# --- Absorbed tools (formerly only on the removed tool/tools.py surface) -----
+
+def test_absorbed_tools_registered_as_mcp_specs():
+    """The 10 tools moved over from the single-agent surface must be
+    planner-dispatchable MCP capabilities (none are _INTERNAL_ONLY)."""
+    names = {s.name for s in build_tool_specs()}
+    for t in (
+        "calculator", "current_datetime", "sleep", "edit_file", "apply_patch",
+        "osv_check", "home_assistant", "x_search", "vision_analyze",
+        "mixture_of_agents",
+    ):
+        assert t in names, f"{t} missing from build_tool_specs()"
+
+
+@pytest.mark.asyncio
+async def test_execute_calculator():
+    result = await execute_tool("calculator", {
+        "expression": "2 + 3 * 4",
+        "_meta": {"authz_grant": _grant("calculator")},
+    })
+    assert str(result) == "14"
+
+
+@pytest.mark.asyncio
+async def test_execute_current_datetime():
+    import re
+    result = await execute_tool("current_datetime", {
+        "_meta": {"authz_grant": _grant("current_datetime")},
+    })
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \([A-Za-z]+\)$", str(result))
+
+
+@pytest.mark.asyncio
+async def test_execute_sleep_returns_confirmation():
+    result = await execute_tool("sleep", {
+        "duration_ms": 1,
+        "_meta": {"authz_grant": _grant("sleep")},
+    })
+    assert "1ms" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_execute_edit_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANGCHAIN_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    target = tmp_path / "edit_me.txt"
+    target.write_text("hello world", encoding="utf-8")
+    await execute_tool("edit_file", {
+        "path": str(target),
+        "old_string": "world",
+        "new_string": "there",
+        "_meta": {"authz_grant": _grant("edit_file")},
+    })
+    assert target.read_text(encoding="utf-8") == "hello there"

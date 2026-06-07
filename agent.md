@@ -26,9 +26,11 @@ Key modules:
 - `agents/tool_agent/` — workspace + web ReAct specialist.
 - `agents/skill_agent/` — SKILL.md JSON-envelope executor.
 - `tool/` — tool implementations (`tool/tool_*.py`) are the one source of
-  truth; the multi-agent `_wrap_*` surface in
-  `agents/tool_agent/tool_executor.py` calls them. The `@tool`/`ALL_TOOLS`
-  surface in `tool/tools.py` is now exercised only by tests (see "Removed").
+  truth. The multi-agent `_wrap_*` surface in
+  `agents/tool_agent/tool_executor.py` (`_TOOL_MAP`) is the only adapter:
+  each entry pairs a handler with a hand-written MCP JSON schema. Pure
+  compute that has no other home lives in `tool/tool_basic.py`
+  (`evaluate_expression`, `current_datetime_str`).
 - `skills/<slug>/SKILL.md` — domain workflow definitions + `_meta.json`.
 - `tests/` — 77 test files; e2e under `tests/test_e2e_multi_agent/`
   marker `e2e`.
@@ -119,12 +121,17 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
   `--single`/`--output-format` CLI args, and the `test_e2e_legacy_mode.py`
   e2e check are gone. `orchestrator/picker.py` and `orchestrator/ui_input.py`
   hold the input/picker UX that was originally extracted from that loop.
-- **Follow-up — `tool/tools.py`.** Its `@tool`/`ALL_TOOLS` surface lost its
-  only production consumer (the legacy loop) and is now imported solely by
-  tests. The underlying `tool/tool_*.py` implementations remain live via
-  `agents/tool_agent/tool_executor.py`. Decide whether to keep `tool/tools.py`
-  as a tested-but-unwired surface or retire it and point those tests at the
-  underlying functions.
+- **`tool/tools.py` + `tool/tool_registry.py` (the `@tool`/`ALL_TOOLS`
+  surface).** Retired after the single-agent loop (their only consumer) went
+  away. Before deleting them, `tool_executor._TOOL_MAP` absorbed the 10
+  capabilities that were only on that surface (`edit_file`, `apply_patch`,
+  `calculator`, `current_datetime`, `sleep`, `osv_check`, `home_assistant`,
+  `x_search`, `vision_analyze`, `mixture_of_agents`) — wired to their
+  `tool/tool_*.py` impls, with `calculator`/`current_datetime` logic moved to
+  `tool/tool_basic.py`. Three meta-tools were dropped entirely (`config`,
+  `tool_manifest`, `todo_write`): never reachable in the multi-agent path.
+  Permission placement: the read-class/compute absorbed tools are in
+  `read-only`/`workspace-write`; `home_assistant` is danger-only.
 
 ## Design docs
 
