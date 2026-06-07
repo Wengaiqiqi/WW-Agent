@@ -176,7 +176,7 @@ def test_model_command_requires_tty(tmp_path):
     # Non-TTY harness path: no provider hint -> reaches the TTY check
     # before any blocking input would be needed.
     assert _call(handler, "/model") == LoopAction.CONTINUE
-    assert "requires a TTY" in buf.getvalue() or "--single" in buf.getvalue()
+    assert "requires a TTY" in buf.getvalue()
 
 
 def test_skills_renders_when_empty(tmp_path):

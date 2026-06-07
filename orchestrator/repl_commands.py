@@ -208,9 +208,8 @@ class ReplCommandHandler:
     async def _cmd_model(self, line: str) -> LoopAction:
         """Interactive 4-step wizard: provider -> model -> key -> URL.
 
-        Mirrors ``legacy/single_agent_loop.run_model_wizard`` but uses the
-        async picker so gateway tasks keep ticking through the dialog.
-        ``/model <provider>`` skips Step 1 just like the single-agent path.
+        Uses the async picker so gateway tasks keep ticking through the dialog.
+        ``/model <provider>`` skips Step 1.
         """
         import os
         from config import (
@@ -230,8 +229,7 @@ class ReplCommandHandler:
         if not can_use_interactive_picker():
             self.ui.render_command_error(
                 "/model requires a TTY",
-                "Run agent in an interactive terminal, or use "
-                "`python cli.py --single /model` for the legacy text fallback.",
+                "Run the agent in an interactive terminal to use /model.",
             )
             return LoopAction.CONTINUE
 

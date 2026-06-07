@@ -6,13 +6,10 @@ single file.
 
 ## Project shape
 
-Two runtime modes share one codebase:
-
-- **Multi-agent (default)** — `cli.py` → `orchestrator/main.py` boots the
-  orchestrator process, spawns `tool-agent` + `skill-agent` subprocesses,
-  routes turns over MCP stdio + A2A streaming.
-- **Single-agent (`--single`)** — `cli.py` → `legacy/single_agent_loop.py`
-  in-process LangGraph ReAct loop. **Deprecated** — see "Deprecations".
+`cli.py` → `orchestrator/main.py` boots the orchestrator process, spawns
+`tool-agent` + `skill-agent` subprocesses, and routes turns over MCP stdio +
+A2A streaming. (The earlier in-process single-agent loop under `legacy/` and
+its `--single` flag were removed — see "Removed".)
 
 Key modules:
 
@@ -28,8 +25,10 @@ Key modules:
   whitelists, telemetry sidecar, mock chat model.
 - `agents/tool_agent/` — workspace + web ReAct specialist.
 - `agents/skill_agent/` — SKILL.md JSON-envelope executor.
-- `tool/` — tool implementations (one source of truth — both legacy and
-  multi-agent surface the same underlying functions).
+- `tool/` — tool implementations (`tool/tool_*.py`) are the one source of
+  truth; the multi-agent `_wrap_*` surface in
+  `agents/tool_agent/tool_executor.py` calls them. The `@tool`/`ALL_TOOLS`
+  surface in `tool/tools.py` is now exercised only by tests (see "Removed").
 - `skills/<slug>/SKILL.md` — domain workflow definitions + `_meta.json`.
 - `tests/` — 77 test files; e2e under `tests/test_e2e_multi_agent/`
   marker `e2e`.
@@ -67,7 +66,6 @@ python cli.py prompt "/tools"
 python cli.py prompt "/skills"
 python cli.py prompt "/status"
 python cli.py prompt "/config"
-python cli.py --single prompt "/tools"
 ```
 
 Test suite:
@@ -86,15 +84,16 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
 
 ## Working agreements
 
-- **Tool source of truth lives in `tool/`.** Both surfaces (legacy `@tool`
-  in `tool/tools.py` and multi-agent `_wrap_*` in
-  `agents/tool_agent/tool_executor.py`) call the same underlying
-  functions. A bug fix in the underlying tool fixes both paths.
+- **Tool source of truth lives in `tool/tool_*.py`.** The multi-agent
+  `_wrap_*` surface in `agents/tool_agent/tool_executor.py` calls those
+  underlying functions, so a bug fix there fixes the live path. The
+  `@tool` wrappers in `tool/tools.py` call the same functions but are now
+  only imported by tests.
 - **Don't read `LANGCHAIN_AGENT_PERMISSION_MODE` from anything that runs
   inside a spawned agent subprocess.** The orchestrator's JWT grant is
   the authoritative gate via `agents.shared.authz.verify_grant`. The env
-  var only governs `tool/tools.py`'s `@tool` decorator wrappers, which
-  are imported by the legacy single-agent process, not by specialists.
+  var only governs `tool/tools.py`'s `@tool` decorator wrappers, which are
+  imported only by tests, not by specialists.
 - **CLI behavior stays generic.** Skill-specific behavior belongs in
   `skills/<name>/SKILL.md` (instructions) or `skills/<name>/scripts/`
   (helpers).
@@ -113,18 +112,19 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
 - **Prefer small, focused changes.** Run the relevant test file after
   each edit; full `pytest` before pushing.
 
-## Deprecations
+## Removed
 
-- **Single-agent mode (`--single` / `legacy/single_agent_loop.py`).** The
-  multi-agent orchestrator is the supported path; `--single` now prints a
-  deprecation notice on stderr and is slated for removal. Removal is gated on
-  nothing using the legacy entrypoint at runtime — current audit: the only
-  runtime import is `cli.py`'s `--single` branch, plus the
-  `test_e2e_legacy_mode.py` e2e check (spawns `cli.py --single` as a
-  subprocess). `orchestrator/picker.py` and `orchestrator/ui_input.py` only
-  reference legacy in docstrings (code was extracted out, no import). When
-  removing: delete `legacy/`, the `--single`/`--output-format` args in
-  `cli.py`, and `tests/test_e2e_multi_agent/test_e2e_legacy_mode.py`.
+- **Single-agent mode (`--single`, `legacy/`).** Deleted in favour of the
+  multi-agent orchestrator: the `legacy/single_agent_loop.py` loop, the
+  `--single`/`--output-format` CLI args, and the `test_e2e_legacy_mode.py`
+  e2e check are gone. `orchestrator/picker.py` and `orchestrator/ui_input.py`
+  hold the input/picker UX that was originally extracted from that loop.
+- **Follow-up — `tool/tools.py`.** Its `@tool`/`ALL_TOOLS` surface lost its
+  only production consumer (the legacy loop) and is now imported solely by
+  tests. The underlying `tool/tool_*.py` implementations remain live via
+  `agents/tool_agent/tool_executor.py`. Decide whether to keep `tool/tools.py`
+  as a tested-but-unwired surface or retire it and point those tests at the
+  underlying functions.
 
 ## Design docs
 

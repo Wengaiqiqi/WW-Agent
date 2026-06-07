@@ -165,7 +165,7 @@ class ReplUI:
         self.console.print()
 
     def render_markdown(self, text: str) -> None:
-        """Render unboxed Markdown — used for LLM responses like --single mode."""
+        """Render unboxed Markdown — used for plain LLM text responses."""
         from rich.markdown import Markdown
         self.console.print()
         self.console.print(Markdown(text or ""))
