@@ -17,7 +17,7 @@ def verify_grant(token: str, *, key: str, requested_tool: str) -> dict[str, Any]
     via `allowed_tools` containment.
     """
     try:
-        claims = pyjwt.decode(token, key, algorithms=["HS256"])
+        claims: dict[str, Any] = pyjwt.decode(token, key, algorithms=["HS256"])
     except pyjwt.ExpiredSignatureError:
         raise AuthzError("authz_grant expired") from None
     except pyjwt.InvalidSignatureError:
@@ -82,7 +82,7 @@ def verify_cross_machine_grant(
     skip the cache lookup on tampered grants.
     """
     try:
-        claims = pyjwt.decode(token, key, algorithms=["HS256"])
+        claims: dict[str, Any] = pyjwt.decode(token, key, algorithms=["HS256"])
     except pyjwt.ExpiredSignatureError:
         raise AuthzError("cross-machine grant expired") from None
     except pyjwt.InvalidSignatureError:

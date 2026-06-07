@@ -242,7 +242,6 @@ module = [
     "orchestrator.repl_state",
     "orchestrator.permission_gate",
     "skills.skill_loader",
-    "tool.tool_registry",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

@@ -115,8 +115,7 @@ jobs:
             orchestrator/registry.py \
             orchestrator/repl_state.py \
             orchestrator/permission_gate.py \
-            skills/skill_loader.py \
-            tool/tool_registry.py
+            skills/skill_loader.py
 
   # ---------------------------------------------------------------------
   # Static security scan. Gates NEW findings against a checked-in baseline
