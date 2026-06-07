@@ -36,7 +36,8 @@ def main() -> int:
     parser.add_argument(
         "--single",
         action="store_true",
-        help="Use the legacy single-agent loop instead of the multi-agent orchestrator.",
+        help="[DEPRECATED] Use the legacy single-agent loop instead of the "
+        "multi-agent orchestrator. Slated for removal — prefer the default mode.",
     )
     parser.add_argument(
         "--output-format",
@@ -51,6 +52,15 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.single:
+        # Deprecation notice on stderr only — stdout may be piped/captured and
+        # must stay clean (see _force_utf8_when_piped). The legacy single-agent
+        # loop is slated for removal; the multi-agent default is the supported
+        # path. Tracked in agent.md "Deprecations".
+        print(
+            "[deprecated] --single (legacy single-agent loop) is slated for "
+            "removal; use the default multi-agent mode.",
+            file=sys.stderr,
+        )
         from legacy.single_agent_loop import run_repl, run_prompt
         if args.command == "prompt":
             return run_prompt(" ".join(args.prompt))

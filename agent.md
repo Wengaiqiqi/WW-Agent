@@ -12,7 +12,7 @@ Two runtime modes share one codebase:
   orchestrator process, spawns `tool-agent` + `skill-agent` subprocesses,
   routes turns over MCP stdio + A2A streaming.
 - **Single-agent (`--single`)** — `cli.py` → `legacy/single_agent_loop.py`
-  in-process LangGraph ReAct loop.
+  in-process LangGraph ReAct loop. **Deprecated** — see "Deprecations".
 
 Key modules:
 
@@ -112,6 +112,19 @@ coverage (`pip install trustme` or `pip install -e '.[dev]'`).
   `LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS=1` to opt out during local dev.
 - **Prefer small, focused changes.** Run the relevant test file after
   each edit; full `pytest` before pushing.
+
+## Deprecations
+
+- **Single-agent mode (`--single` / `legacy/single_agent_loop.py`).** The
+  multi-agent orchestrator is the supported path; `--single` now prints a
+  deprecation notice on stderr and is slated for removal. Removal is gated on
+  nothing using the legacy entrypoint at runtime — current audit: the only
+  runtime import is `cli.py`'s `--single` branch, plus the
+  `test_e2e_legacy_mode.py` e2e check (spawns `cli.py --single` as a
+  subprocess). `orchestrator/picker.py` and `orchestrator/ui_input.py` only
+  reference legacy in docstrings (code was extracted out, no import). When
+  removing: delete `legacy/`, the `--single`/`--output-format` args in
+  `cli.py`, and `tests/test_e2e_multi_agent/test_e2e_legacy_mode.py`.
 
 ## Design docs
 
