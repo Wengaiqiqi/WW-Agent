@@ -57,7 +57,9 @@ ask() {
 
 ask MY_PEER_ID   "Remote (this machine) peer id" "hermes-home"
 ask YOUR_PEER_ID "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent"
-ask PUBLIC_HOST  "Public host name (e.g. home.example.com)" ""
+while [[ -z "$PUBLIC_HOST" ]] && have_tty; do
+  read -r -p "Public host name (e.g. home.example.com): " PUBLIC_HOST < /dev/tty || true
+done
 if [[ -z "$HMAC_SECRET" ]] && have_tty; then
   read -r -p "HMAC secret (blank = auto-generate): " HMAC_SECRET < /dev/tty || true
 fi
@@ -70,7 +72,7 @@ if [[ -z "$HMAC_SECRET" ]]; then
   echo "  generated HMAC secret: $HMAC_SECRET"
 fi
 if [[ -z "$PUBLIC_HOST" ]]; then
-  echo "ERROR: --public-host is required (no value given and no TTY to prompt)." >&2
+  echo "ERROR: --public-host is required (pass --public-host or run interactively)." >&2
   exit 2
 fi
 

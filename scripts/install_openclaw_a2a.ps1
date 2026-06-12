@@ -30,17 +30,23 @@ function Read-WithDefault($Prompt, $Default) {
     }
 }
 
+function New-HmacSecret {
+    # 32 random bytes -> 64 hex chars (256-bit), matches `openssl rand -hex 32`.
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
 if (-not $MyPeerId)   { $MyPeerId   = Read-WithDefault "Remote (this machine) peer id" "openclaw-home" }
 if (-not $YourPeerId) { $YourPeerId = Read-WithDefault "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent" }
-if (-not $PublicHost) { $PublicHost = Read-WithDefault "Public host name (e.g. home.example.com)" "" }
+while (-not $PublicHost) { $PublicHost = Read-Host "Public host name (e.g. home.example.com)" }
 if (-not $HmacSecret) {
     $HmacSecret = Read-Host "HMAC secret (blank = auto-generate)"
     if ([string]::IsNullOrWhiteSpace($HmacSecret)) {
-        $HmacSecret = -join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})
+        $HmacSecret = New-HmacSecret
         Write-Host "  generated HMAC secret: $HmacSecret"
     }
 }
-if (-not $PublicHost) { Write-Error "PublicHost is required."; exit 2 }
 
 Write-Host "==> [1/7] Checking OpenClaw is installed"
 if (-not (Get-Command $OpenclawBin -ErrorAction SilentlyContinue)) {
