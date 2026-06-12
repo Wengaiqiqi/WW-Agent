@@ -36,7 +36,7 @@
 | **远程 Agent 协作** | HMAC 签名 A2A 协议，支持跨机器任务委托 |
 | **Web 界面** | FastAPI + SPA 前端，支持 SSE 流式响应和会话管理 |
 | **中文优先** | 完整 UTF-8 支持，界面与文档均有中文版 |
-| **安全加固** | SSRF 防护、命令输出敏感信息过滤、凭据 AES-256 加密存储 |
+| **安全加固** | SSRF 防护、命令输出敏感信息过滤、凭据文件 0600 权限 + 自动 .gitignore 防提交 |
 
 ---
 
@@ -98,7 +98,7 @@ uv sync
 python cli.py
 ```
 
-**首次启动**会自动弹出模型配置向导（四步：选供应商 → 选模型 → 填 API Key → 填 base URL）。API Key 加密保存后，后续启动无需重填。
+**首次启动**会自动弹出模型配置向导（四步：选供应商 → 选模型 → 填 API Key → 填 base URL）。API Key 保存到本地凭据文件后，后续启动无需重填。
 
 ### 示例对话
 
@@ -137,7 +137,7 @@ export LANGCHAIN_AGENT_MODEL="openai/gpt-4o"
 export LANGCHAIN_AGENT_MODEL="deepseek/deepseek-chat"
 ```
 
-配置文件存储在 `.langchain-agent/settings.json`，API Key 加密存储在 `.langchain-agent/credentials.json`。
+配置文件存储在 `.langchain-agent/settings.json`，API Key 存储在 `.langchain-agent/credentials.json`（文件设为 0600 权限，并自动写入同目录 .gitignore 防止误提交）。
 
 ---
 
@@ -328,7 +328,7 @@ ww-agent> /gateway
 python -m gateway qq
 ```
 
-> 凭据加密保存在 `.langchain-agent/gateways.json`。
+> 凭据保存在 `.langchain-agent/gateways.json`（自动写入同目录 .gitignore 防止误提交）。
 
 ---
 
@@ -406,7 +406,7 @@ python web/__main__.py
 | `DEEPSEEK_API_KEY` | DeepSeek |
 | `XIAOMI_API_KEY` | 小米 MiMo |
 
-> API Key 优先从加密的 `credentials.json` 读取，也可直接设置环境变量覆盖。
+> API Key 优先从 `credentials.json` 读取，也可直接设置环境变量覆盖。
 
 ### 搜索工具
 
@@ -496,7 +496,7 @@ W&W Agent/
 ├── config/                     # 模型配置与凭据管理
 │   ├── _providers.py           # Provider 注册表
 │   ├── _settings.py            # settings.json 读写
-│   ├── _credentials.py         # AES-256 加密凭据存储
+│   ├── _credentials.py         # 凭据存储（0600 权限 + .gitignore 防提交）
 │   └── _llm.py                 # LangChain ChatModel 工厂
 │
 ├── orchestrator/               # 中心编排器
