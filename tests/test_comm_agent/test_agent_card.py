@@ -10,13 +10,13 @@ from agents.comm_agent.agent_card import (
 
 def test_build_self_card_minimal() -> None:
     card = build_self_card(
-        name="agent-last-comm",
+        name="ww-agent-comm",
         description="test",
         public_url="https://example.com:8443",
         version="1.0.0",
     )
     assert card["schemaVersion"] == "0.3"
-    assert card["name"] == "agent-last-comm"
+    assert card["name"] == "ww-agent-comm"
     assert card["url"] == "https://example.com:8443"
     assert card["capabilities"]["streaming"] is True
     assert card["capabilities"]["pushNotifications"] is False

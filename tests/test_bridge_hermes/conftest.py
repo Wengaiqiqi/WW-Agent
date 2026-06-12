@@ -12,7 +12,7 @@ def fake_acp_argv() -> list[str]:
     """argv list that launches the fake `hermes acp` stub with the test python.
 
     Returned as a list (not a string) so paths containing spaces — e.g.
-    'D:\\Claude Code\\agent-last' — never go through shlex.split.
+    'D:\\Claude Code\\W&W Agent' — never go through shlex.split.
     """
     stub = Path(__file__).parent / "fake_hermes_acp.py"
     return [sys.executable, str(stub)]

@@ -1,4 +1,4 @@
-"""End-to-end: agent-last's real A2AClient drives the bridge's build_app over an
+"""End-to-end: W&W Agent's real A2AClient drives the bridge's build_app over an
 in-process ASGI transport (no TLS, no real Hermes — CI-friendly). The ACP side
 is the fake `hermes acp` stub. Exercises the full grant/auth/SSE path."""
 from __future__ import annotations
@@ -23,7 +23,7 @@ def _make_client(app) -> A2AClient:
         added_at="", last_seen=None,
     )
     transport = httpx.ASGITransport(app=app)
-    return A2AClient(peer, secret=SECRET, my_peer_id="agent-last-laptop", transport=transport)
+    return A2AClient(peer, secret=SECRET, my_peer_id="ww-agent", transport=transport)
 
 
 def _build_app(fake_acp_argv):
@@ -96,7 +96,7 @@ async def test_bad_secret_is_refused(fake_acp_argv):
         peer = Peer(peer_id=PEER_ID, display_name="h", url="https://hermes-home",
                     hmac_secret_ref="X", tls_verify=True, tls_pinned_sha256=None,
                     added_at="", last_seen=None)
-        bad = A2AClient(peer, secret="WRONG", my_peer_id="agent-last-laptop",
+        bad = A2AClient(peer, secret="WRONG", my_peer_id="ww-agent",
                         transport=httpx.ASGITransport(app=app))
         from agents.comm_agent.a2a_protocol import A2AClientError
         with pytest.raises(A2AClientError):
