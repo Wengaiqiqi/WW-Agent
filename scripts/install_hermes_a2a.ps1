@@ -1,23 +1,47 @@
 # scripts/install_hermes_a2a.ps1
 # Windows equivalent of install_hermes_a2a.sh.
 #
-# Usage:
-#   $secret = -join ((48..57)+(97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-#   iex "& { $(iwr -useb <raw-url>) } -MyPeerId hermes-home -YourPeerId agent-last-laptop -PublicHost home.example.com -HmacSecret $secret"
+# Two ways to run:
+#   1) Interactive (no params): prompts for each value (Enter accepts the default).
+#        .\install_hermes_a2a.ps1
+#   2) Non-interactive: pass params explicitly.
+#        .\install_hermes_a2a.ps1 -MyPeerId hermes-home -YourPeerId ww-agent `
+#            -PublicHost home.example.com -HmacSecret <secret>
 
 param(
-    [Parameter(Mandatory=$true)][string]$MyPeerId,
-    [Parameter(Mandatory=$true)][string]$YourPeerId,
-    [Parameter(Mandatory=$true)][string]$PublicHost,
-    [Parameter(Mandatory=$true)][string]$HmacSecret,
+    [string]$MyPeerId,
+    [string]$YourPeerId,
+    [string]$PublicHost,
+    [string]$HmacSecret,
     [string]$HermesBin = $(if ($env:HERMES_BIN) { $env:HERMES_BIN } else { "hermes" }),
-    [string]$AgentLastRepo = $(if ($env:AGENT_LAST_REPO) { $env:AGENT_LAST_REPO } else { "https://github.com/<your-repo>/agent-last.git" }),
-    [string]$AgentLastDir = $(if ($env:AGENT_LAST_DIR) { $env:AGENT_LAST_DIR } else { "$env:USERPROFILE\.hermes-a2a\agent-last" }),
+    [string]$WwAgentRepo = $(if ($env:WW_AGENT_REPO) { $env:WW_AGENT_REPO } else { "https://github.com/ww-agent/ww-agent.git" }),
+    [string]$WwAgentDir = $(if ($env:WW_AGENT_DIR) { $env:WW_AGENT_DIR } else { "$env:USERPROFILE\.hermes-a2a\ww-agent" }),
     [int]$CaddyPort = 8443,
     [int]$BridgePort = 19444
 )
 
 $ErrorActionPreference = "Stop"
+
+function Read-WithDefault($Prompt, $Default) {
+    if ($Default) {
+        $ans = Read-Host "$Prompt [$Default]"
+        if ([string]::IsNullOrWhiteSpace($ans)) { return $Default } else { return $ans }
+    } else {
+        return Read-Host $Prompt
+    }
+}
+
+if (-not $MyPeerId)   { $MyPeerId   = Read-WithDefault "Remote (this machine) peer id" "hermes-home" }
+if (-not $YourPeerId) { $YourPeerId = Read-WithDefault "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent" }
+if (-not $PublicHost) { $PublicHost = Read-WithDefault "Public host name (e.g. home.example.com)" "" }
+if (-not $HmacSecret) {
+    $HmacSecret = Read-Host "HMAC secret (blank = auto-generate)"
+    if ([string]::IsNullOrWhiteSpace($HmacSecret)) {
+        $HmacSecret = -join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})
+        Write-Host "  generated HMAC secret: $HmacSecret"
+    }
+}
+if (-not $PublicHost) { Write-Error "PublicHost is required."; exit 2 }
 
 Write-Host "==> [1/7] Checking Hermes ACP is available"
 if (-not (Get-Command $HermesBin -ErrorAction SilentlyContinue)) {
@@ -28,12 +52,12 @@ try { & python -c "import acp" 2>$null } catch {
     Write-Host "  NOTE: python package 'acp' not importable; in the Hermes checkout run: pip install -e '.[acp]'"
 }
 
-Write-Host "==> [2/7] Fetching agent-last (reused A2A server modules)"
-if (Test-Path "$AgentLastDir\.git") {
-    git -C $AgentLastDir pull --ff-only
+Write-Host "==> [2/7] Fetching W&W Agent (reused A2A server modules)"
+if (Test-Path "$WwAgentDir\.git") {
+    git -C $WwAgentDir pull --ff-only
 } else {
-    New-Item -ItemType Directory -Force -Path (Split-Path $AgentLastDir) | Out-Null
-    git clone --depth 1 $AgentLastRepo $AgentLastDir
+    New-Item -ItemType Directory -Force -Path (Split-Path $WwAgentDir) | Out-Null
+    git clone --depth 1 $WwAgentRepo $WwAgentDir
 }
 
 Write-Host "==> [3/7] Installing bridge python deps"
@@ -70,8 +94,8 @@ ${PublicHost}:${CaddyPort} {
 Write-Host "  wrote $CaddyDir\hermes-a2a.caddy"
 
 Write-Host "==> [6/7] Start the bridge + reload Caddy"
-Write-Host "  Start the bridge from the agent-last checkout:"
-Write-Host "    cd $AgentLastDir; Get-Content $EnvFile | ForEach-Object { if (`$_ -match '^(.+?)=(.*)$') { [Environment]::SetEnvironmentVariable(`$Matches[1], `$Matches[2]) } }; python -m bridge.hermes_a2a"
+Write-Host "  Start the bridge from the W&W Agent checkout:"
+Write-Host "    cd $WwAgentDir; Get-Content $EnvFile | ForEach-Object { if (`$_ -match '^(.+?)=(.*)$') { [Environment]::SetEnvironmentVariable(`$Matches[1], `$Matches[2]) } }; python -m bridge.hermes_a2a"
 if (Get-Service -Name "caddy" -ErrorAction SilentlyContinue) {
     Restart-Service -Name "caddy"; Write-Host "  caddy service restarted"
 } else {
@@ -83,6 +107,12 @@ Write-Host "  After starting bridge + caddy: curl -sk https://localhost:$CaddyPo
 
 Write-Host ""
 Write-Host "[OK] Bridge files installed."
-Write-Host "Next step on your agent-last machine — register this peer:"
+Write-Host ""
+Write-Host "IMPORTANT - peer id must match:"
+Write-Host "  On your laptop, COMM_AGENT_MY_PEER_ID must equal '$YourPeerId'"
+Write-Host "  (its default is already 'ww-agent'). Otherwise the bridge rejects"
+Write-Host "  the call with 'caller peer not allowed'."
+Write-Host ""
+Write-Host "Next step on your W&W Agent machine - register this peer:"
 Write-Host "    comm.add_peer peer_id=$MyPeerId url=https://${PublicHost}:${CaddyPort} hmac_secret_value=$HmacSecret"
-Write-Host "(Keep that HMAC secret safe — it's the only copy printed.)"
+Write-Host "(Keep that HMAC secret safe - it's the only copy printed.)"
