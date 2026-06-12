@@ -355,7 +355,7 @@ def test_comm_add_execute_sets_current(tmp_path):
         "fetched_card": None,
         "note": "persist env var: export COMM_PEER_NEW_PEER_HMAC=<value>",
     })
-    result = asyncio.run(handler._comm_add_execute(
+    result = asyncio.run(handler._remote._comm_add_execute(
         peer_id="new-peer", url="https://n.test",
         display_name="New Peer", hmac_secret="s3cr3t",
     ))
@@ -372,7 +372,7 @@ def test_comm_add_execute_with_pinned_sha256(tmp_path):
         "ok": True, "peer_id": "pinned", "env_var_name": "COMM_PEER_PINNED_HMAC",
         "fetched_card": None, "note": "persist env var: ...",
     })
-    asyncio.run(handler._comm_add_execute(
+    asyncio.run(handler._remote._comm_add_execute(
         peer_id="pinned", url="https://p.test",
         display_name="Pinned", hmac_secret="key",
         tls_verify=False, tls_pinned_sha256="abcdef123456",
