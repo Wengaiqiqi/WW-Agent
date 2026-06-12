@@ -1,14 +1,18 @@
 # scripts/install_openclaw_a2a.ps1
 # Windows equivalent of install_openclaw_a2a.sh.
 #
-# Usage:
-#   iex "& { $(iwr -useb <raw-url>) } -MyPeerId openclaw-home -YourPeerId agent-last-laptop -PublicHost home.example.com -HmacSecret (-join ((48..57) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_}))"
+# Two ways to run:
+#   1) Interactive (no params): prompts for each value (Enter accepts the default).
+#        .\install_openclaw_a2a.ps1
+#   2) Non-interactive: pass params explicitly.
+#        .\install_openclaw_a2a.ps1 -MyPeerId openclaw-home -YourPeerId ww-agent `
+#            -PublicHost home.example.com -HmacSecret <secret>
 
 param(
-    [Parameter(Mandatory=$true)][string]$MyPeerId,
-    [Parameter(Mandatory=$true)][string]$YourPeerId,
-    [Parameter(Mandatory=$true)][string]$PublicHost,
-    [Parameter(Mandatory=$true)][string]$HmacSecret,
+    [string]$MyPeerId,
+    [string]$YourPeerId,
+    [string]$PublicHost,
+    [string]$HmacSecret,
     [string]$OpenclawBin = $(if ($env:OPENCLAW_BIN) { $env:OPENCLAW_BIN } else { "openclaw" }),
     [string]$A2APluginVersion = "v0.3.0",
     [int]$CaddyPort = 8443,
@@ -16,6 +20,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Read-WithDefault($Prompt, $Default) {
+    if ($Default) {
+        $ans = Read-Host "$Prompt [$Default]"
+        if ([string]::IsNullOrWhiteSpace($ans)) { return $Default } else { return $ans }
+    } else {
+        return Read-Host $Prompt
+    }
+}
+
+if (-not $MyPeerId)   { $MyPeerId   = Read-WithDefault "Remote (this machine) peer id" "openclaw-home" }
+if (-not $YourPeerId) { $YourPeerId = Read-WithDefault "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent" }
+if (-not $PublicHost) { $PublicHost = Read-WithDefault "Public host name (e.g. home.example.com)" "" }
+if (-not $HmacSecret) {
+    $HmacSecret = Read-Host "HMAC secret (blank = auto-generate)"
+    if ([string]::IsNullOrWhiteSpace($HmacSecret)) {
+        $HmacSecret = -join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})
+        Write-Host "  generated HMAC secret: $HmacSecret"
+    }
+}
+if (-not $PublicHost) { Write-Error "PublicHost is required."; exit 2 }
 
 Write-Host "==> [1/7] Checking OpenClaw is installed"
 if (-not (Get-Command $OpenclawBin -ErrorAction SilentlyContinue)) {
@@ -45,7 +70,6 @@ Write-Host "  wrote $OpenclawConfigDir\a2a.yaml"
 Write-Host "==> [4/7] Persisting HMAC secret to env file"
 $EnvFile = "$OpenclawConfigDir\a2a.env"
 "A2A_HMAC_SECRET=$HmacSecret" | Out-File -FilePath $EnvFile -Encoding utf8
-# Lock to current user
 $Acl = Get-Acl $EnvFile
 $Acl.SetAccessRuleProtection($true, $false)
 $Acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
@@ -88,10 +112,12 @@ try {
 Write-Host ""
 Write-Host "[OK] Install complete."
 Write-Host ""
+Write-Host "IMPORTANT - peer id must match:"
+Write-Host "  On your laptop, COMM_AGENT_MY_PEER_ID must equal '$YourPeerId'"
+Write-Host "  (its default is already 'ww-agent'), or calls fail with 'caller peer not allowed'."
+Write-Host ""
 Write-Host "Next step on your laptop:"
 Write-Host "  In the comm-agent REPL, register this peer:"
-Write-Host "    comm.add_peer peer_id=$MyPeerId \"
-Write-Host "                  url=https://${PublicHost}:${CaddyPort} \"
-Write-Host "                  hmac_secret_value=$HmacSecret"
+Write-Host "    comm.add_peer peer_id=$MyPeerId url=https://${PublicHost}:${CaddyPort} hmac_secret_value=$HmacSecret"
 Write-Host ""
-Write-Host "(Keep that HMAC secret safe — it's the only copy printed.)"
+Write-Host "(Keep that HMAC secret safe - it's the only copy printed.)"
