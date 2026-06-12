@@ -209,7 +209,7 @@ def test_command_exception_is_caught(tmp_path):
 
 
 def test_parse_concurrency():
-    from orchestrator.repl_commands import ReplCommandHandler as H
+    from orchestrator.repl_gateway_commands import GatewayCommands as H
 
     # empty / whitespace -> keep current
     assert H._parse_concurrency("", 3) == 3
