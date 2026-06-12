@@ -1,11 +1,11 @@
 """Bridge entrypoint.
 
-Run from the agent-last repo root so `agents.*` and `bridge.*` are importable:
+Run from the W&W Agent repo root so `agents.*` and `bridge.*` are importable:
 
     python -m bridge.hermes_a2a
 
 Environment:
-  HERMES_A2A_HMAC          (required) shared HMAC secret with the agent-last caller
+  HERMES_A2A_HMAC          (required) shared HMAC secret with the W&W Agent caller
   HERMES_A2A_MY_PEER_ID    self peer id (default: hermes-home)
   HERMES_A2A_ALLOWED_PEER  optional caller peer_id allowlist (one peer)
   HERMES_A2A_PORT          local HTTP port uvicorn binds (default: 19444)
@@ -35,7 +35,7 @@ def build():
     """Assemble and return the FastAPI app (does not start the ACP subprocess)."""
     hmac_secret = os.environ.get("HERMES_A2A_HMAC", "")
     if not hmac_secret:
-        raise SystemExit("HERMES_A2A_HMAC is required (the shared secret with agent-last)")
+        raise SystemExit("HERMES_A2A_HMAC is required (the shared secret with W&W Agent)")
 
     my_peer_id = os.environ.get("HERMES_A2A_MY_PEER_ID", "hermes-home")
     allowed_peer = os.environ.get("HERMES_A2A_ALLOWED_PEER") or None

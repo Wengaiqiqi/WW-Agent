@@ -266,7 +266,7 @@ def build_app(
     a dispatcher-level ``allowed_peer`` filter buys nothing. For per-peer
     isolation, provision a DISTINCT inbound secret per relationship (run one
     app/secret per peer) rather than a shared one. The 1:1 case
-    (agent-last ↔ a single Hermes/OpenClaw) is safe with one secret.
+    (W&W Agent ↔ a single Hermes/OpenClaw) is safe with one secret.
     """
     app = FastAPI()
     cache = nonce_cache or NonceCache()

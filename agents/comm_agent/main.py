@@ -9,7 +9,7 @@ Exposes:
 
 Optional environment:
   COMM_AGENT_MY_PEER_ID     — our self-identity for outbound grants
-                              (default: "agent-last-laptop")
+                              (default: "ww-agent")
   COMM_AGENT_PUBLIC_HOST    — host name in Caddyfile (default: None → :8443 + tls internal)
   COMM_AGENT_PUBLIC_PORT    — Caddy listen port (default: 8443)
   COMM_AGENT_SELF_HMAC      — env var name holding our inbound HMAC secret
@@ -60,7 +60,7 @@ def _pick_free_port() -> int:
 
 
 async def amain() -> int:
-    my_peer_id = os.environ.get("COMM_AGENT_MY_PEER_ID", "agent-last-laptop")
+    my_peer_id = os.environ.get("COMM_AGENT_MY_PEER_ID", "ww-agent")
     public_host = os.environ.get("COMM_AGENT_PUBLIC_HOST") or None
     public_port = int(os.environ.get("COMM_AGENT_PUBLIC_PORT", "8443"))
     self_secret_env = os.environ.get("COMM_AGENT_SELF_HMAC", "COMM_AGENT_SELF_HMAC")
@@ -80,7 +80,7 @@ async def amain() -> int:
     )
     self_card = build_self_card(
         name=f"comm-{my_peer_id}",
-        description="agent-last comm-agent (A2A v0.3)",
+        description="W&W Agent comm-agent (A2A v0.3)",
         public_url=public_url,
         version="1.0.0",
     )

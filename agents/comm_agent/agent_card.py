@@ -32,8 +32,8 @@ def build_self_card(
         "url": public_url,
         "version": version,
         "provider": {
-            "organization": "agent-last",
-            "url": "https://github.com/agent-last/agent-last",
+            "organization": "W&W Agent",
+            "url": "https://github.com/ww-agent/ww-agent",
         },
         "capabilities": {
             "streaming": True,
