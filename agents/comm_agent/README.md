@@ -182,7 +182,7 @@ comm-agent 作为 specialist 随 orchestrator 自动 spawn（前提是 `.agent/a
 curl -sSL https://raw.githubusercontent.com/<your-repo>/main/scripts/install_openclaw_a2a.sh \
   | bash -s -- \
       --my-peer-id    openclaw-home \
-      --your-peer-id  agent-last-laptop \
+      --your-peer-id  ww-agent \
       --public-host   home.example.com \
       --hmac-secret   "$(openssl rand -hex 32)"
 ```
@@ -192,7 +192,7 @@ curl -sSL https://raw.githubusercontent.com/<your-repo>/main/scripts/install_ope
 ```powershell
 $secret = -join ((48..57)+(97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
 iex "& { $(iwr -useb https://raw.githubusercontent.com/<your-repo>/main/scripts/install_openclaw_a2a.ps1) } `
-  -MyPeerId openclaw-home -YourPeerId agent-last-laptop -PublicHost home.example.com -HmacSecret $secret"
+  -MyPeerId openclaw-home -YourPeerId ww-agent -PublicHost home.example.com -HmacSecret $secret"
 ```
 
 ### 参数说明
@@ -200,7 +200,7 @@ iex "& { $(iwr -useb https://raw.githubusercontent.com/<your-repo>/main/scripts/
 | 参数（bash / PowerShell） | 含义 | 必填 |
 |---|---|---|
 | `--my-peer-id` / `-MyPeerId` | **远端**自报的 peer_id，你将在主机端用它注册（如 `openclaw-home`） | ✅ |
-| `--your-peer-id` / `-YourPeerId` | **本机** comm-agent 的 peer_id，写进远端白名单。必须等于本机 `COMM_AGENT_MY_PEER_ID`（默认 `agent-last-laptop`） | ✅ |
+| `--your-peer-id` / `-YourPeerId` | **本机** comm-agent 的 peer_id，写进远端白名单。必须等于本机 `COMM_AGENT_MY_PEER_ID`（默认 `ww-agent`） | ✅ |
 | `--public-host` / `-PublicHost` | 远端对外的主机名 / 域名，写进远端 Caddyfile | ✅ |
 | `--hmac-secret` / `-HmacSecret` | 双方共享的 HMAC 密钥。**建议现场用 `openssl rand -hex 32` 生成**，脚本结尾会原样回显一次让你拷到主机端 | ✅ |
 
@@ -217,7 +217,7 @@ iex "& { $(iwr -useb https://raw.githubusercontent.com/<your-repo>/main/scripts/
      listen_port: 19443
      hmac_secret_env: A2A_HMAC_SECRET
      allowed_peers:
-       - peer_id: "agent-last-laptop"     # ← 只允许这个 peer 呼叫
+       - peer_id: "ww-agent"     # ← 只允许这个 peer 呼叫
          hmac_secret_env: A2A_HMAC_SECRET
    ```
 4. **持久化密钥**：把 `A2A_HMAC_SECRET=<密钥>` 写进 `a2a.env`（Linux `chmod 600`；Windows 用 ACL 锁到当前用户），不裸放进 shell history。
@@ -263,7 +263,7 @@ Next step on your laptop:
 
 ### 对接 Hermes（A2A↔ACP 桥接）
 
-Hermes 那台机器上要跑一个**桥接进程**：对外说 comm-agent 的 A2A v0.3，对内 spawn 本地 `hermes acp` 用 stdio ACP 驱动 Hermes。agent-last 侧零改动——注册个 peer 就能用。
+Hermes 那台机器上要跑一个**桥接进程**：对外说 comm-agent 的 A2A v0.3，对内 spawn 本地 `hermes acp` 用 stdio ACP 驱动 Hermes。W&W Agent 侧零改动——注册个 peer 就能用。
 
 **前置（Hermes 机器）**：装好 Hermes 且 `hermes` 在 PATH；Hermes 的 ACP 依赖已装（`pip install -e '.[acp]'`）；装好 Caddy；有公网主机名。
 
@@ -273,12 +273,12 @@ Hermes 那台机器上要跑一个**桥接进程**：对外说 comm-agent 的 A2
 curl -sSL https://raw.githubusercontent.com/<your-repo>/main/scripts/install_hermes_a2a.sh \
   | bash -s -- \
       --my-peer-id    hermes-home \
-      --your-peer-id  agent-last-laptop \
+      --your-peer-id  ww-agent \
       --public-host   home.example.com \
       --hmac-secret   "$(openssl rand -hex 32)"
 ```
 
-Windows 用 `scripts/install_hermes_a2a.ps1`（参数同名）。脚本会：拉 agent-last（复用其 A2A 服务端模块）、装桥接依赖、写 `~/.hermes-a2a/bridge.env`、渲染 Caddyfile，并打印主机端要跑的 `comm.add_peer` 行。
+Windows 用 `scripts/install_hermes_a2a.ps1`（参数同名）。脚本会：拉 W&W Agent（复用其 A2A 服务端模块）、装桥接依赖、写 `~/.hermes-a2a/bridge.env`、渲染 Caddyfile，并打印主机端要跑的 `comm.add_peer` 行。
 
 **协议映射**：`task.delegate`→ACP `session/new`+`session/prompt`（流式）；`chat.message`→复用 ACP session（`context_id`↔`sessionId`）；`status.query`→桥接自记运行态。
 
@@ -372,7 +372,7 @@ comm.list_peers                        # 列出所有已注册远端
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `COMM_AGENT_MY_PEER_ID` | `agent-last-laptop` | 本机自报家门的 peer_id，**必须等于远端白名单里的 `your-peer-id`** |
+| `COMM_AGENT_MY_PEER_ID` | `ww-agent` | 本机自报家门的 peer_id，**必须等于远端白名单里的 `your-peer-id`** |
 | `COMM_AGENT_PUBLIC_HOST` | 空 | 设了 → Caddy 走 ACME 给该域名签证书；不设 → 监听 `:8443` 用内部自签证书（仅 LAN/VPN） |
 | `COMM_AGENT_PUBLIC_PORT` | `8443` | Caddy 对外监听端口（写进对外 URL 与 Caddyfile） |
 | `COMM_AGENT_SELF_HMAC` | `COMM_AGENT_SELF_HMAC` | **存放入站密钥的环境变量的"名字"**（间接引用）。详见[快速开始第 3 步的坑](#3-配置入站密钥仅入站需要) |
@@ -401,7 +401,7 @@ comm.list_peers                        # 列出所有已注册远端
 ```jsonc
 // agents/shared/authz.py :: sign_cross_machine_grant
 {
-  "peer_id":         "agent-last-laptop",  // 调用方自报家门
+  "peer_id":         "ww-agent",  // 调用方自报家门
   "target_peer_id":  "openclaw-home",      // 目标必须是它（防 grant 被劫持转发）
   "requested_skill": "task.delegate",      // 绑定到 A2A skill id，不是裸方法名
   "nonce":           "<16字节 hex 随机>",   // 防重放
