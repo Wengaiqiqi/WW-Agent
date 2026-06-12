@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # scripts/install_hermes_a2a.sh
-# Provision the Hermes A2A<->ACP bridge on a remote machine so the agent-last
-# comm-agent can delegate to / chat with a local `hermes acp` over A2A v0.3.
+# Provision the W&W Agent Hermes A2A<->ACP bridge on a remote machine so the
+# W&W Agent comm-agent can delegate to / chat with a local `hermes acp` over A2A v0.3.
 #
-# Usage:
-#   curl -sSL <raw-url> | bash -s -- \
-#       --my-peer-id hermes-home \
-#       --your-peer-id agent-last-laptop \
-#       --public-host home.example.com \
-#       --hmac-secret "$(openssl rand -hex 32)"
+# Two ways to run:
+#   1) Interactive (no flags): prompts for each value (Enter accepts the default).
+#        bash install_hermes_a2a.sh
+#   2) Non-interactive (flags / piped): pass values explicitly.
+#        curl -sSL <raw-url> | bash -s -- \
+#            --my-peer-id hermes-home \
+#            --your-peer-id ww-agent \
+#            --public-host home.example.com \
+#            --hmac-secret "$(openssl rand -hex 32)"
 
 set -euo pipefail
 
@@ -17,8 +20,8 @@ YOUR_PEER_ID=""
 PUBLIC_HOST=""
 HMAC_SECRET=""
 HERMES_BIN="${HERMES_BIN:-hermes}"
-AGENT_LAST_REPO="${AGENT_LAST_REPO:-https://github.com/<your-repo>/agent-last.git}"
-AGENT_LAST_DIR="${AGENT_LAST_DIR:-$HOME/.hermes-a2a/agent-last}"
+WW_AGENT_REPO="${WW_AGENT_REPO:-https://github.com/ww-agent/ww-agent.git}"
+WW_AGENT_DIR="${WW_AGENT_DIR:-$HOME/.hermes-a2a/ww-agent}"
 CADDY_PORT="${CADDY_PORT:-8443}"
 BRIDGE_PORT="${BRIDGE_PORT:-19444}"
 
@@ -28,14 +31,48 @@ while [[ $# -gt 0 ]]; do
     --your-peer-id) YOUR_PEER_ID="$2"; shift 2;;
     --public-host) PUBLIC_HOST="$2"; shift 2;;
     --hmac-secret) HMAC_SECRET="$2"; shift 2;;
+    -h|--help)
+      echo "usage: install_hermes_a2a.sh [--my-peer-id X] [--your-peer-id X] [--public-host X] [--hmac-secret X]"
+      echo "  run with no flags for interactive prompts."
+      exit 0;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
 done
 
-[[ -z "$MY_PEER_ID" || -z "$YOUR_PEER_ID" || -z "$PUBLIC_HOST" || -z "$HMAC_SECRET" ]] && {
-  echo "missing required flag(s); see header for usage" >&2
-  exit 2
+have_tty() { [[ -e /dev/tty ]]; }
+
+# ask VARNAME "prompt" "default" — only prompts if the var is still empty and a TTY exists.
+ask() {
+  local __var="$1" __prompt="$2" __default="$3" __ans=""
+  if [[ -n "${!__var}" ]]; then return 0; fi
+  if ! have_tty; then return 0; fi
+  if [[ -n "$__default" ]]; then
+    read -r -p "$__prompt [$__default]: " __ans < /dev/tty || true
+    printf -v "$__var" '%s' "${__ans:-$__default}"
+  else
+    read -r -p "$__prompt: " __ans < /dev/tty || true
+    printf -v "$__var" '%s' "$__ans"
+  fi
 }
+
+ask MY_PEER_ID   "Remote (this machine) peer id" "hermes-home"
+ask YOUR_PEER_ID "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent"
+ask PUBLIC_HOST  "Public host name (e.g. home.example.com)" ""
+if [[ -z "$HMAC_SECRET" ]] && have_tty; then
+  read -r -p "HMAC secret (blank = auto-generate): " HMAC_SECRET < /dev/tty || true
+fi
+
+# Defaults for any value still empty (non-interactive path).
+MY_PEER_ID="${MY_PEER_ID:-hermes-home}"
+YOUR_PEER_ID="${YOUR_PEER_ID:-ww-agent}"
+if [[ -z "$HMAC_SECRET" ]]; then
+  HMAC_SECRET="$(openssl rand -hex 32)"
+  echo "  generated HMAC secret: $HMAC_SECRET"
+fi
+if [[ -z "$PUBLIC_HOST" ]]; then
+  echo "ERROR: --public-host is required (no value given and no TTY to prompt)." >&2
+  exit 2
+fi
 
 echo "==> [1/7] Checking Hermes ACP is available"
 command -v "$HERMES_BIN" >/dev/null 2>&1 || {
@@ -48,12 +85,12 @@ python3 -c "import acp" 2>/dev/null || {
   echo "  (the bridge itself does not need it, but \`hermes acp\` does)"
 }
 
-echo "==> [2/7] Fetching agent-last (for the reused A2A server modules)"
-if [[ -d "$AGENT_LAST_DIR/.git" ]]; then
-  git -C "$AGENT_LAST_DIR" pull --ff-only || echo "  (pull skipped)"
+echo "==> [2/7] Fetching W&W Agent (for the reused A2A server modules)"
+if [[ -d "$WW_AGENT_DIR/.git" ]]; then
+  git -C "$WW_AGENT_DIR" pull --ff-only || echo "  (pull skipped)"
 else
-  mkdir -p "$(dirname "$AGENT_LAST_DIR")"
-  git clone --depth 1 "$AGENT_LAST_REPO" "$AGENT_LAST_DIR"
+  mkdir -p "$(dirname "$WW_AGENT_DIR")"
+  git clone --depth 1 "$WW_AGENT_REPO" "$WW_AGENT_DIR"
 fi
 
 echo "==> [3/7] Installing bridge python deps"
@@ -87,8 +124,8 @@ EOF
 echo "  wrote $CADDY_DIR/hermes-a2a.caddy"
 
 echo "==> [6/7] Starting the bridge + reloading Caddy"
-echo "  Start the bridge (loads env, runs from the agent-last checkout):"
-echo "    cd $AGENT_LAST_DIR && set -a && . $ENV_FILE && set +a && python3 -m bridge.hermes_a2a"
+echo "  Start the bridge (loads env, runs from the W&W Agent checkout):"
+echo "    cd $WW_AGENT_DIR && set -a && . $ENV_FILE && set +a && python3 -m bridge.hermes_a2a"
 echo "  (For a long-running service, wrap that in a systemd unit or 'nohup ... &'.)"
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
   sudo systemctl reload caddy && echo "  caddy reloaded via systemctl"
@@ -105,7 +142,12 @@ cat <<EOF
 
 ✅ Bridge files installed.
 
-Next step on your agent-last machine — register this peer:
+IMPORTANT — peer id must match:
+  On your laptop, COMM_AGENT_MY_PEER_ID must equal '$YOUR_PEER_ID'
+  (its default is already 'ww-agent'). If it differs, the bridge will reject
+  the call with 'caller peer not allowed'.
+
+Next step on your W&W Agent machine — register this peer:
     comm.add_peer peer_id=$MY_PEER_ID \\
                   url=https://$PUBLIC_HOST:$CADDY_PORT \\
                   hmac_secret_value=$HMAC_SECRET
