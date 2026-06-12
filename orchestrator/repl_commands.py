@@ -65,6 +65,10 @@ class ReplCommandHandler:
     def _chat_contexts(self) -> dict[str, str]:
         return self._remote._chat_contexts
 
+    @_chat_contexts.setter
+    def _chat_contexts(self, value: dict[str, str]) -> None:
+        self._remote._chat_contexts = value
+
     async def handle(self, line: str) -> LoopAction | None:
         """Returns LoopAction for recognized slash commands, None for non-commands."""
         command = line.split(maxsplit=1)[0].lower()
