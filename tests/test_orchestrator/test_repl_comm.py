@@ -9,7 +9,8 @@ import os
 from rich.console import Console
 
 from orchestrator.registry import Card
-from orchestrator.repl_commands import ReplCommandHandler, _unwrap
+from orchestrator.mcp_host import unwrap_tool_result as _unwrap
+from orchestrator.repl_commands import ReplCommandHandler
 from orchestrator.repl_state import MultiAgentSessionState
 from orchestrator.repl_types import LoopAction
 from orchestrator.repl_ui import ReplUI

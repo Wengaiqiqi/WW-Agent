@@ -193,19 +193,15 @@ def test_instructions_renders_when_empty(tmp_path):
 
 def test_command_exception_is_caught(tmp_path):
     handler, ui, state, buf = _handler(tmp_path)
-    # Monkey-patch a command to raise, verifying Exception is caught
-    original = handler._cmd_help
 
-    def _broken():
+    # Patch the dispatch entry to raise, verifying handle() catches it.
+    def _broken(line):
         raise ValueError("boom")
 
-    handler._cmd_help = _broken
-    try:
-        result = _call(handler,"/help")
-        assert result == LoopAction.CONTINUE
-        assert "boom" in buf.getvalue()
-    finally:
-        handler._cmd_help = original
+    handler._routes["/help"] = _broken
+    result = _call(handler, "/help")
+    assert result == LoopAction.CONTINUE
+    assert "boom" in buf.getvalue()
 
 
 def test_parse_concurrency():
