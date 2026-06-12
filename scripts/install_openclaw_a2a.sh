@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # scripts/install_openclaw_a2a.sh
-# Install the openclaw-a2a plugin on a remote machine so the agent-last
+# Install the openclaw-a2a plugin on a remote machine so the W&W Agent
 # comm-agent can talk to it over Google A2A v0.3.
 #
-# Usage:
-#   curl -sSL <raw-url> | bash -s -- \
-#       --my-peer-id openclaw-home \
-#       --your-peer-id agent-last-laptop \
-#       --public-host home.example.com \
-#       --hmac-secret "$(openssl rand -hex 32)"
+# Two ways to run:
+#   1) Interactive (no flags): prompts for each value (Enter accepts the default).
+#        bash install_openclaw_a2a.sh
+#   2) Non-interactive (flags / piped):
+#        curl -sSL <raw-url> | bash -s -- \
+#            --my-peer-id openclaw-home \
+#            --your-peer-id ww-agent \
+#            --public-host home.example.com \
+#            --hmac-secret "$(openssl rand -hex 32)"
 
 set -euo pipefail
 
@@ -27,14 +30,46 @@ while [[ $# -gt 0 ]]; do
     --your-peer-id) YOUR_PEER_ID="$2"; shift 2;;
     --public-host) PUBLIC_HOST="$2"; shift 2;;
     --hmac-secret) HMAC_SECRET="$2"; shift 2;;
+    -h|--help)
+      echo "usage: install_openclaw_a2a.sh [--my-peer-id X] [--your-peer-id X] [--public-host X] [--hmac-secret X]"
+      echo "  run with no flags for interactive prompts."
+      exit 0;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
 done
 
-[[ -z "$MY_PEER_ID" || -z "$YOUR_PEER_ID" || -z "$PUBLIC_HOST" || -z "$HMAC_SECRET" ]] && {
-  echo "missing required flag(s); see header for usage" >&2
-  exit 2
+have_tty() { [[ -e /dev/tty ]]; }
+
+ask() {
+  local __var="$1" __prompt="$2" __default="$3" __ans=""
+  if [[ -n "${!__var}" ]]; then return 0; fi
+  if ! have_tty; then return 0; fi
+  if [[ -n "$__default" ]]; then
+    read -r -p "$__prompt [$__default]: " __ans < /dev/tty || true
+    printf -v "$__var" '%s' "${__ans:-$__default}"
+  else
+    read -r -p "$__prompt: " __ans < /dev/tty || true
+    printf -v "$__var" '%s' "$__ans"
+  fi
 }
+
+ask MY_PEER_ID   "Remote (this machine) peer id" "openclaw-home"
+ask YOUR_PEER_ID "Your laptop's W&W Agent peer id (must equal its COMM_AGENT_MY_PEER_ID)" "ww-agent"
+ask PUBLIC_HOST  "Public host name (e.g. home.example.com)" ""
+if [[ -z "$HMAC_SECRET" ]] && have_tty; then
+  read -r -p "HMAC secret (blank = auto-generate): " HMAC_SECRET < /dev/tty || true
+fi
+
+MY_PEER_ID="${MY_PEER_ID:-openclaw-home}"
+YOUR_PEER_ID="${YOUR_PEER_ID:-ww-agent}"
+if [[ -z "$HMAC_SECRET" ]]; then
+  HMAC_SECRET="$(openssl rand -hex 32)"
+  echo "  generated HMAC secret: $HMAC_SECRET"
+fi
+if [[ -z "$PUBLIC_HOST" ]]; then
+  echo "ERROR: --public-host is required (no value given and no TTY to prompt)." >&2
+  exit 2
+fi
 
 echo "==> [1/7] Checking OpenClaw is installed"
 command -v "$OPENCLAW_BIN" >/dev/null 2>&1 || {
@@ -96,6 +131,10 @@ fi
 cat <<EOF
 
 ✅ Install complete.
+
+IMPORTANT — peer id must match:
+  On your laptop, COMM_AGENT_MY_PEER_ID must equal '$YOUR_PEER_ID'
+  (its default is already 'ww-agent'), or calls fail with 'caller peer not allowed'.
 
 Next step on your laptop:
   In the comm-agent REPL, register this peer:
