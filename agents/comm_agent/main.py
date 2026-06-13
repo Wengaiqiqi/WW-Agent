@@ -142,6 +142,8 @@ async def amain() -> int:
     (rt_dir / f"{agent_id}.a2a-url").write_text(public_url, encoding="utf-8")
 
     # 5. Build the comm.* MCP tool list backed by the on-disk peer registry.
+    from agents.comm_agent.mcp_tools import load_persisted_secrets
+    load_persisted_secrets()
     reg = PeerRegistry(config_dir() / "comm_peers.json")
     tools = build_comm_tool_specs(reg=reg, my_peer_id=my_peer_id)
     _proxy, runner = build_server(name="comm-agent", tools=tools)

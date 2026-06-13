@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from pathlib import Path
+
 import httpx
 
 from agents.comm_agent.a2a_protocol import A2AClient, A2AClientError
@@ -50,6 +52,81 @@ def _err(msg: str) -> str:
 
 def _make_client_for(peer: Peer, secret: str, my_peer_id: str, transport=None) -> A2AClient:
     return A2AClient(peer, secret=secret, my_peer_id=my_peer_id, transport=transport)
+
+
+# ---------------------------------------------------------------------------
+# Secret persistence — HMAC secrets survive process restarts.
+# ---------------------------------------------------------------------------
+
+def _secrets_path() -> Path:
+    """Return the path to the on-disk secrets file."""
+    from agent_paths import config_dir
+    return config_dir() / "comm_secrets.env"
+
+
+def load_persisted_secrets() -> None:
+    """Load persisted HMAC secrets into ``os.environ``.
+
+    Called once at comm-agent startup (before building tools) so that
+    ``resolve_secret`` can find secrets that were saved by a previous run.
+    """
+    path = _secrets_path()
+    if not path.exists():
+        return
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _persist_secret(env_name: str, value: str) -> None:
+    """Append or update a secret in the on-disk secrets file."""
+    path = _secrets_path()
+    lines: list[str] = []
+    if path.exists():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+    found = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(f"{env_name}="):
+            lines[i] = f"{env_name}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{env_name}={value}")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not persist secret to %s: %s", path, exc)
+
+
+def _remove_secret(env_name: str) -> None:
+    """Remove a secret from the on-disk secrets file."""
+    path = _secrets_path()
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    filtered = [l for l in lines if not l.strip().startswith(f"{env_name}=")]
+    try:
+        path.write_text("\n".join(filtered) + ("\n" if filtered else ""), encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not update secrets file %s: %s", path, exc)
 
 
 def build_comm_tool_specs(
@@ -122,6 +199,7 @@ def build_comm_tool_specs(
                     "just punctuation)"
                 )
         os.environ[env_name] = secret_value
+        _persist_secret(env_name, secret_value)
         peer = Peer(
             peer_id=peer_id,
             display_name=display_name,
@@ -148,7 +226,7 @@ def build_comm_tool_specs(
             reg.update_last_seen(peer_id, _now_iso())
         except (httpx.HTTPError, A2AClientError) as exc:
             log.info("could not fetch agent card for %s: %s", peer_id, exc)
-        note = f"persist env var: export {env_name}=<value> in your shell profile"
+        note = f"secret persisted to {_secrets_path()}"
         if warnings:
             note = " | ".join(warnings) + " | " + note
         return _ok({
@@ -164,6 +242,9 @@ def build_comm_tool_specs(
         peer_id = args.get("peer_id", "")
         if not peer_id:
             return _err("peer_id is required")
+        peer = reg.get(peer_id)
+        if peer is not None:
+            _remove_secret(peer.hmac_secret_ref)
         removed = reg.remove(peer_id)
         return _ok({"peer_id": peer_id, "removed": removed})
 
