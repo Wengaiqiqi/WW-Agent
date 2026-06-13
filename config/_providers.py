@@ -127,7 +127,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     # key is provisioned against, without juggling base_url + protocol by
     # hand in settings.json.
     "xiaomi-anthropic": {
-        "label": "Xiaomi MiMo (Anthropic)",
+        "label": "Xiaomi MiMo",
         "protocol": "anthropic",
         "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
         "api_key_env": "XIAOMI_API_KEY",

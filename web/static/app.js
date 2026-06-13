@@ -61,7 +61,16 @@ async function loadModels() {
 function renderModelSelect() {
   const sel = $("model-select");
   const prev = sel.value;
-  const presets = state.models
+
+  // Deduplicate models by model name, keeping only the first provider for each model
+  const seen = new Set();
+  const uniqueModels = state.models.filter((m) => {
+    if (seen.has(m.model)) return false;
+    seen.add(m.model);
+    return true;
+  });
+
+  const presets = uniqueModels
     .map((m) => `<option value="preset:${m.id}">${escapeHtml(m.label)} · ${escapeHtml(m.model)}</option>`)
     .join("");
   const customs = state.endpoints

@@ -85,18 +85,52 @@ def _resolve_base_config(model_choice: str = "") -> ActiveConfig:
         else:
             prov_name, model_name = env_choice, ""
         if prov_name in PROVIDERS:
+            # Auto-detect xiaomi provider based on API key
+            if prov_name in ("xiaomi", "xiaomi-anthropic"):
+                cfg = make_config(prov_name, model=model_name)
+                detected = _detect_xiaomi_provider(cfg.api_key_env, prov_name)
+                if detected != prov_name:
+                    cfg = make_config(detected, model=model_name)
+                return cfg
             return make_config(prov_name, model=model_name)
 
     settings = _read_settings()
     model_block = settings.get("model")
     if isinstance(model_block, dict):
         prov_name = str(model_block.get("provider") or "")
+        base_url = str(model_block.get("base_url") or "")
+        api_key_env = str(model_block.get("api_key_env") or "")
+        model_name = str(model_block.get("model") or "")
+
+        # Auto-detect provider for xiaomi/xiaomi-anthropic:
+        # Test which endpoint accepts the API key and use that provider.
+        # Also fix mismatched base_url (e.g. token-plan-cn with /v1 path).
+        if prov_name in ("xiaomi", "xiaomi-anthropic"):
+            detected = _detect_xiaomi_provider(api_key_env, prov_name)
+            if detected != prov_name:
+                logger.info(
+                    "Auto-switching provider %r -> %r based on API key test",
+                    prov_name, detected,
+                )
+                prov_name = detected
+            # Fix mismatched base_url for xiaomi providers
+            if prov_name == "xiaomi-anthropic" and "token-plan-cn" in base_url:
+                # Ensure correct Anthropic path
+                if not base_url.endswith("/anthropic"):
+                    base_url = "https://token-plan-cn.xiaomimimo.com/anthropic"
+                    logger.info("Corrected base_url to %s", base_url)
+            elif prov_name == "xiaomi" and "api.xiaomimimo.com" in base_url:
+                # Ensure correct OpenAI path
+                if not base_url.endswith("/v1"):
+                    base_url = "https://api.xiaomimimo.com/v1"
+                    logger.info("Corrected base_url to %s", base_url)
+
         if prov_name in PROVIDERS:
             return make_config(
                 prov_name,
-                model=str(model_block.get("model") or ""),
-                base_url=str(model_block.get("base_url") or ""),
-                api_key_env=str(model_block.get("api_key_env") or ""),
+                model=model_name,
+                base_url=base_url,
+                api_key_env=api_key_env,
             )
     elif isinstance(model_block, str) and model_block:
         logger.warning(
@@ -106,6 +140,62 @@ def _resolve_base_config(model_choice: str = "") -> ActiveConfig:
         )
 
     return make_config(DEFAULT_PROVIDER)
+
+
+def _detect_xiaomi_provider(api_key_env: str, fallback: str = "xiaomi-anthropic") -> str:
+    """Detect which Xiaomi endpoint accepts the API key.
+
+    Tests both ``xiaomi`` (OpenAI protocol) and ``xiaomi-anthropic`` (Anthropic
+    protocol) endpoints and returns the one that accepts the key. Falls back to
+    *fallback* if neither works or if the check times out.
+    """
+    import os
+
+    from ._credentials import load_credentials
+
+    api_key = os.getenv(api_key_env) or load_credentials().get(api_key_env, "")
+    if not api_key:
+        return fallback
+
+    import requests
+
+    # Test xiaomi-anthropic first (Anthropic protocol)
+    try:
+        resp = requests.post(
+            "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={"model": "mimo-v2.5-pro", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            logger.info("xiaomi-anthropic endpoint accepted the API key")
+            return "xiaomi-anthropic"
+    except Exception:
+        pass
+
+    # Test xiaomi (OpenAI protocol)
+    try:
+        resp = requests.post(
+            "https://api.xiaomimimo.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": "mimo-v2.5-pro", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            logger.info("xiaomi endpoint accepted the API key")
+            return "xiaomi"
+    except Exception:
+        pass
+
+    logger.warning("Neither xiaomi endpoint accepted the API key, using %s", fallback)
+    return fallback
 
 
 def save_active_config(cfg: ActiveConfig) -> None:
