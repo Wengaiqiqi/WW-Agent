@@ -1,8 +1,8 @@
 {
   "errors": [],
-  "generated_at": "2026-06-02T10:47:20Z",
+  "generated_at": "2026-06-13T17:47:06Z",
   "metrics": {
-    "./.langchain-agent/web/workspaces/b6f7208a68a09b4dc8864b2f96183637/\u6768\u8f89\u4e09\u89d2.py": {
+    "./langchain-agent/web/workspaces/462083d7c7ec82c07d7c32f148f8d826/杨辉三角.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -11,11 +11,24 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 25,
+      "loc": 26,
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/diag_delegate.py": {
+    "./langchain-agent/web/workspaces/b6f7208a68a09b4dc8864b2f96183637/倒杨辉三角.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 27,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "./tmp/diag_delegate.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -28,7 +41,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/diag_sse.py": {
+    "./tmp/diag_sse.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -41,7 +54,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/smoke_full.py": {
+    "./tmp/smoke_full.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -54,7 +67,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/time_phases.py": {
+    "./tmp/time_phases.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -67,7 +80,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/verify_anaconda.py": {
+    "./tmp/verify_anaconda.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -80,7 +93,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./.tmp/verify_mock_react.py": {
+    "./tmp/verify_mock_react.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -102,7 +115,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 89,
+      "loc": 112,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -115,7 +128,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 39,
+      "loc": 43,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -193,7 +206,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 134,
+      "loc": 136,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -206,7 +219,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 360,
+      "loc": 427,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -297,7 +310,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 46,
+      "loc": 51,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -388,7 +401,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 550,
+      "loc": 546,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -427,7 +440,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 533,
+      "loc": 779,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -505,7 +518,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 54,
+      "loc": 36,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -562,15 +575,15 @@
       "skipped_tests": 0
     },
     "./config/_settings.py": {
-      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.HIGH": 2,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
       "CONFIDENCE.UNDEFINED": 0,
       "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 0,
+      "SEVERITY.LOW": 2,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 107,
+      "loc": 177,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -687,7 +700,7 @@
       "SEVERITY.LOW": 1,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 364,
+      "loc": 372,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -739,7 +752,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 330,
+      "loc": 364,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -769,32 +782,6 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./legacy/__init__.py": {
-      "CONFIDENCE.HIGH": 0,
-      "CONFIDENCE.LOW": 0,
-      "CONFIDENCE.MEDIUM": 0,
-      "CONFIDENCE.UNDEFINED": 0,
-      "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 0,
-      "SEVERITY.MEDIUM": 0,
-      "SEVERITY.UNDEFINED": 0,
-      "loc": 0,
-      "nosec": 0,
-      "skipped_tests": 0
-    },
-    "./legacy/single_agent_loop.py": {
-      "CONFIDENCE.HIGH": 4,
-      "CONFIDENCE.LOW": 1,
-      "CONFIDENCE.MEDIUM": 0,
-      "CONFIDENCE.UNDEFINED": 0,
-      "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 4,
-      "SEVERITY.MEDIUM": 1,
-      "SEVERITY.UNDEFINED": 0,
-      "loc": 1527,
-      "nosec": 0,
-      "skipped_tests": 0
-    },
     "./orchestrator/__init__.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
@@ -817,7 +804,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 111,
+      "loc": 130,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -830,7 +817,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 110,
+      "loc": 123,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -869,7 +856,7 @@
       "SEVERITY.LOW": 4,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 273,
+      "loc": 272,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -882,7 +869,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 226,
+      "loc": 243,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -908,7 +895,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 263,
+      "loc": 259,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -927,14 +914,14 @@
     },
     "./orchestrator/repl_commands.py": {
       "CONFIDENCE.HIGH": 0,
-      "CONFIDENCE.LOW": 1,
-      "CONFIDENCE.MEDIUM": 3,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
       "CONFIDENCE.UNDEFINED": 0,
       "SEVERITY.HIGH": 0,
       "SEVERITY.LOW": 0,
-      "SEVERITY.MEDIUM": 4,
+      "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 1117,
+      "loc": 79,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -948,6 +935,58 @@
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
       "loc": 540,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "./orchestrator/repl_core_commands.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 160,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "./orchestrator/repl_gateway_commands.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 3,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 3,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 433,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "./orchestrator/repl_model_wizard.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 1,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 1,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 239,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "./orchestrator/repl_remote_commands.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 341,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -986,7 +1025,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 169,
+      "loc": 168,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1064,7 +1103,7 @@
       "SEVERITY.LOW": 1,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 471,
+      "loc": 482,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1077,7 +1116,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 199,
+      "loc": 195,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1094,7 +1133,7 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./projects/\u6768\u8f89\u4e09\u89d2.py": {
+    "./projects/杨辉三角.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
       "CONFIDENCE.MEDIUM": 0,
@@ -1276,6 +1315,19 @@
       "nosec": 0,
       "skipped_tests": 0
     },
+    "./tool/tool_basic.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 76,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
     "./tool/tool_clarify.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
@@ -1380,19 +1432,6 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "./tool/tool_registry.py": {
-      "CONFIDENCE.HIGH": 0,
-      "CONFIDENCE.LOW": 0,
-      "CONFIDENCE.MEDIUM": 0,
-      "CONFIDENCE.UNDEFINED": 0,
-      "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 0,
-      "SEVERITY.MEDIUM": 0,
-      "SEVERITY.UNDEFINED": 0,
-      "loc": 45,
-      "nosec": 0,
-      "skipped_tests": 0
-    },
     "./tool/tool_shell.py": {
       "CONFIDENCE.HIGH": 1,
       "CONFIDENCE.LOW": 1,
@@ -1442,19 +1481,6 @@
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
       "loc": 180,
-      "nosec": 0,
-      "skipped_tests": 0
-    },
-    "./tool/tools.py": {
-      "CONFIDENCE.HIGH": 0,
-      "CONFIDENCE.LOW": 0,
-      "CONFIDENCE.MEDIUM": 0,
-      "CONFIDENCE.UNDEFINED": 0,
-      "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 0,
-      "SEVERITY.MEDIUM": 0,
-      "SEVERITY.UNDEFINED": 0,
-      "loc": 608,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1519,7 +1545,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 468,
+      "loc": 507,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1532,7 +1558,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 123,
+      "loc": 141,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1558,7 +1584,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 27,
+      "loc": 46,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1601,16 +1627,16 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "_totals": {
+    "./_totals": {
       "CONFIDENCE.HIGH": 23,
-      "CONFIDENCE.LOW": 3,
-      "CONFIDENCE.MEDIUM": 8,
+      "CONFIDENCE.LOW": 2,
+      "CONFIDENCE.MEDIUM": 9,
       "CONFIDENCE.UNDEFINED": 0,
       "SEVERITY.HIGH": 2,
       "SEVERITY.LOW": 22,
       "SEVERITY.MEDIUM": 10,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 19002,
+      "loc": 17707,
       "nosec": 0,
       "skipped_tests": 0
     }
@@ -1635,6 +1661,48 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b311-random",
       "test_id": "B311",
       "test_name": "blacklist"
+    },
+    {
+      "code": "176             return \"xiaomi-anthropic\"\n177     except Exception:\n178         pass\n179 \n",
+      "col_offset": 4,
+      "end_col_offset": 12,
+      "filename": "./config/_settings.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 703,
+        "link": "https://cwe.mitre.org/data/definitions/703.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Try, Except, Pass detected.",
+      "line_number": 177,
+      "line_range": [
+        177,
+        178
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
+      "test_id": "B110",
+      "test_name": "try_except_pass"
+    },
+    {
+      "code": "193             return \"xiaomi\"\n194     except Exception:\n195         pass\n196 \n",
+      "col_offset": 4,
+      "end_col_offset": 12,
+      "filename": "./config/_settings.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 703,
+        "link": "https://cwe.mitre.org/data/definitions/703.html"
+      },
+      "issue_severity": "LOW",
+      "issue_text": "Try, Except, Pass detected.",
+      "line_number": 194,
+      "line_range": [
+        194,
+        195
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
+      "test_id": "B110",
+      "test_name": "try_except_pass"
     },
     {
       "code": "27         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n28     except Exception:  # noqa: BLE001 - very old Python without the policy\n29         pass\n30 \n",
@@ -1701,7 +1769,7 @@
       "test_name": "hardcoded_bind_all_interfaces"
     },
     {
-      "code": "421             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n422         except Exception:  # noqa: BLE001\n423             pass\n424 \n",
+      "code": "431             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n432         except Exception:  # noqa: BLE001\n433             pass\n434 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./gateway/feishu_ws.py",
@@ -1712,10 +1780,10 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 422,
+      "line_number": 432,
       "line_range": [
-        422,
-        423
+        432,
+        433
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
@@ -1850,111 +1918,7 @@
       "test_name": "try_except_pass"
     },
     {
-      "code": "734                     live.stop()\n735                 except Exception:\n736                     pass\n737                 live = None\n",
-      "col_offset": 16,
-      "end_col_offset": 24,
-      "filename": "./legacy/single_agent_loop.py",
-      "issue_confidence": "HIGH",
-      "issue_cwe": {
-        "id": 703,
-        "link": "https://cwe.mitre.org/data/definitions/703.html"
-      },
-      "issue_severity": "LOW",
-      "issue_text": "Try, Except, Pass detected.",
-      "line_number": 735,
-      "line_range": [
-        735,
-        736
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
-      "test_id": "B110",
-      "test_name": "try_except_pass"
-    },
-    {
-      "code": "827                 spinner.stop()\n828             except Exception:\n829                 pass\n830             console.print(Panel(str(exc), title=\"Agent Error\", border_style=\"red\"))\n",
-      "col_offset": 12,
-      "end_col_offset": 20,
-      "filename": "./legacy/single_agent_loop.py",
-      "issue_confidence": "HIGH",
-      "issue_cwe": {
-        "id": 703,
-        "link": "https://cwe.mitre.org/data/definitions/703.html"
-      },
-      "issue_severity": "LOW",
-      "issue_text": "Try, Except, Pass detected.",
-      "line_number": 828,
-      "line_range": [
-        828,
-        829
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
-      "test_id": "B110",
-      "test_name": "try_except_pass"
-    },
-    {
-      "code": "835                 spinner.stop()\n836             except Exception:\n837                 pass\n838 \n",
-      "col_offset": 12,
-      "end_col_offset": 20,
-      "filename": "./legacy/single_agent_loop.py",
-      "issue_confidence": "HIGH",
-      "issue_cwe": {
-        "id": 703,
-        "link": "https://cwe.mitre.org/data/definitions/703.html"
-      },
-      "issue_severity": "LOW",
-      "issue_text": "Try, Except, Pass detected.",
-      "line_number": 836,
-      "line_range": [
-        836,
-        837
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
-      "test_id": "B110",
-      "test_name": "try_except_pass"
-    },
-    {
-      "code": "1025                     return True\n1026         except Exception:\n1027             pass\n1028 \n",
-      "col_offset": 8,
-      "end_col_offset": 16,
-      "filename": "./legacy/single_agent_loop.py",
-      "issue_confidence": "HIGH",
-      "issue_cwe": {
-        "id": 703,
-        "link": "https://cwe.mitre.org/data/definitions/703.html"
-      },
-      "issue_severity": "LOW",
-      "issue_text": "Try, Except, Pass detected.",
-      "line_number": 1026,
-      "line_range": [
-        1026,
-        1027
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
-      "test_id": "B110",
-      "test_name": "try_except_pass"
-    },
-    {
-      "code": "1415         console.print()\n1416         console.print(f\"[bold cyan]Step 2 / 4 \u2014 Select model from {provider_name}[/bold cyan]\")\n1417 \n",
-      "col_offset": 24,
-      "end_col_offset": 68,
-      "filename": "./legacy/single_agent_loop.py",
-      "issue_confidence": "LOW",
-      "issue_cwe": {
-        "id": 89,
-        "link": "https://cwe.mitre.org/data/definitions/89.html"
-      },
-      "issue_severity": "MEDIUM",
-      "issue_text": "Possible SQL injection vector through string-based query construction.",
-      "line_number": 1416,
-      "line_range": [
-        1416
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
-      "test_id": "B608",
-      "test_name": "hardcoded_sql_expressions"
-    },
-    {
-      "code": "215             memory_snapshot = tool_memory.snapshot_for_system_prompt()\n216         except Exception:\n217             pass\n218 \n",
+      "code": "218             memory_snapshot = tool_memory.snapshot_for_system_prompt()\n219         except Exception:\n220             pass\n221 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -1965,17 +1929,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 216,
+      "line_number": 219,
       "line_range": [
-        216,
-        217
+        219,
+        220
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "222             skills_list = load_skills()\n223         except Exception:\n224             pass\n225 \n",
+      "code": "225             skills_list = load_skills()\n226         except Exception:\n227             pass\n228 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -1986,17 +1950,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 223,
+      "line_number": 226,
       "line_range": [
-        223,
-        224
+        226,
+        227
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "229             instruction_files = discover_instruction_files()\n230         except Exception:\n231             pass\n232 \n",
+      "code": "232             instruction_files = discover_instruction_files()\n233         except Exception:\n234             pass\n235 \n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -2007,17 +1971,17 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 230,
+      "line_number": 233,
       "line_range": [
-        230,
-        231
+        233,
+        234
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "300             await get_manager().shutdown_all()\n301         except Exception:  # noqa: BLE001 - shutdown is best-effort\n302             pass\n303         await host.shutdown_all()\n",
+      "code": "303             await get_manager().shutdown_all()\n304         except Exception:  # noqa: BLE001 - shutdown is best-effort\n305             pass\n306         await host.shutdown_all()\n",
       "col_offset": 8,
       "end_col_offset": 16,
       "filename": "./orchestrator/main.py",
@@ -2028,40 +1992,20 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 301,
+      "line_number": 304,
       "line_range": [
-        301,
-        302
+        304,
+        305
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
       "test_name": "try_except_pass"
     },
     {
-      "code": "357         idx = await interactive_select_async(\n358             f\"Step 2/4 - Select model from {provider_name}\",\n359             rows,\n",
-      "col_offset": 14,
-      "end_col_offset": 43,
-      "filename": "./orchestrator/repl_commands.py",
-      "issue_confidence": "LOW",
-      "issue_cwe": {
-        "id": 89,
-        "link": "https://cwe.mitre.org/data/definitions/89.html"
-      },
-      "issue_severity": "MEDIUM",
-      "issue_text": "Possible SQL injection vector through string-based query construction.",
-      "line_number": 358,
-      "line_range": [
-        358
-      ],
-      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
-      "test_id": "B608",
-      "test_name": "hardcoded_sql_expressions"
-    },
-    {
-      "code": "681                 elif configured:\n682                     host = cfg.get(\"host\") or \"0.0.0.0\"\n683                     port = cfg.get(\"port\") or 8765\n",
+      "code": "211                 elif configured:\n212                     host = cfg.get(\"host\") or \"0.0.0.0\"\n213                     port = cfg.get(\"port\") or 8765\n",
       "col_offset": 46,
       "end_col_offset": 55,
-      "filename": "./orchestrator/repl_commands.py",
+      "filename": "./orchestrator/repl_gateway_commands.py",
       "issue_confidence": "MEDIUM",
       "issue_cwe": {
         "id": 605,
@@ -2069,19 +2013,19 @@
       },
       "issue_severity": "MEDIUM",
       "issue_text": "Possible binding to all interfaces.",
-      "line_number": 682,
+      "line_number": 212,
       "line_range": [
-        682
+        212
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
       "test_id": "B104",
       "test_name": "hardcoded_bind_all_interfaces"
     },
     {
-      "code": "752         if platform == \"feishu\" and merged.get(\"mode\") == \"webhook\":\n753             merged.setdefault(\"host\", \"0.0.0.0\")\n754             merged.setdefault(\"port\", 8765)\n",
+      "code": "282         if platform == \"feishu\" and merged.get(\"mode\") == \"webhook\":\n283             merged.setdefault(\"host\", \"0.0.0.0\")\n284             merged.setdefault(\"port\", 8765)\n",
       "col_offset": 38,
       "end_col_offset": 47,
-      "filename": "./orchestrator/repl_commands.py",
+      "filename": "./orchestrator/repl_gateway_commands.py",
       "issue_confidence": "MEDIUM",
       "issue_cwe": {
         "id": 605,
@@ -2089,19 +2033,19 @@
       },
       "issue_severity": "MEDIUM",
       "issue_text": "Possible binding to all interfaces.",
-      "line_number": 753,
+      "line_number": 283,
       "line_range": [
-        753
+        283
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
       "test_id": "B104",
       "test_name": "hardcoded_bind_all_interfaces"
     },
     {
-      "code": "801             if platform == \"feishu\":\n802                 host = str(cfg.get(\"host\") or \"0.0.0.0\")\n803                 port = int(cfg.get(\"port\") or 8765)\n",
+      "code": "377             if platform == \"feishu\":\n378                 host = str(cfg.get(\"host\") or \"0.0.0.0\")\n379                 port = int(cfg.get(\"port\") or 8765)\n",
       "col_offset": 46,
       "end_col_offset": 55,
-      "filename": "./orchestrator/repl_commands.py",
+      "filename": "./orchestrator/repl_gateway_commands.py",
       "issue_confidence": "MEDIUM",
       "issue_cwe": {
         "id": 605,
@@ -2109,16 +2053,36 @@
       },
       "issue_severity": "MEDIUM",
       "issue_text": "Possible binding to all interfaces.",
-      "line_number": 802,
+      "line_number": 378,
       "line_range": [
-        802
+        378
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
       "test_id": "B104",
       "test_name": "hardcoded_bind_all_interfaces"
     },
     {
-      "code": "574                 return TurnResult(capability=capability, owner=\"orchestrator\", text=synthesized, error=None)\n575             except Exception:\n576                 pass  # fall through to raw text\n577         return TurnResult(capability=capability, owner=owner, text=raw_text, error=None)\n",
+      "code": "200         idx = await interactive_select_async(\n201             f\"Step 2/4 - Select model from {provider_name}\",\n202             rows,\n",
+      "col_offset": 14,
+      "end_col_offset": 43,
+      "filename": "./orchestrator/repl_model_wizard.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 201,
+      "line_range": [
+        201
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "593                 return TurnResult(capability=capability, owner=\"orchestrator\", text=synthesized, error=None)\n594             except Exception:\n595                 pass  # fall through to raw text\n596         return TurnResult(capability=capability, owner=owner, text=raw_text, error=None)\n",
       "col_offset": 12,
       "end_col_offset": 20,
       "filename": "./orchestrator/turns.py",
@@ -2129,10 +2093,10 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Try, Except, Pass detected.",
-      "line_number": 575,
+      "line_number": 594,
       "line_range": [
-        575,
-        576
+        594,
+        595
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html",
       "test_id": "B110",
@@ -2180,7 +2144,7 @@
       "test_name": "try_except_pass"
     },
     {
-      "code": "61 ]\n62 _INVISIBLE = {\"\u200b\", \"\u200c\", \"\u200d\", \"\u2060\", \"\ufeff\", \"\u202a\", \"\u202b\", \"\u202c\", \"\u202d\", \"\u202e\"}\n63 \n",
+      "code": "61 ]\n62 _INVISIBLE = {\"​\", \"‌\", \"‍\", \"⁠\", \"﻿\", \"‪\", \"‫\", \"‬\", \"‭\", \"‮\"}\n63 \n",
       "col_offset": 41,
       "end_col_offset": 0,
       "filename": "./tool/tool_memory.py",
@@ -2273,7 +2237,7 @@
       "test_name": "subprocess_popen_with_shell_equals_true"
     },
     {
-      "code": "199         # because cmd.exe then tries to invoke the literal `\\\"C:\\\\\u2026\\\\\"` token.\n200         return run_subprocess(command, timeout=timeout, shell=True)\n201     # ``-c`` (not ``-lc``): a login shell would re-source ``~/.profile`` /\n",
+      "code": "199         # because cmd.exe then tries to invoke the literal `\\\"C:\\\\…\\\\\"` token.\n200         return run_subprocess(command, timeout=timeout, shell=True)\n201     # ``-c`` (not ``-lc``): a login shell would re-source ``~/.profile`` /\n",
       "col_offset": 15,
       "end_col_offset": 67,
       "filename": "./tool/tool_shell.py",
