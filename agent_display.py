@@ -92,6 +92,34 @@ def is_langgraph_tool_chunk(chunk: object) -> bool:
     return "tool" in chunk.__class__.__name__.lower()
 
 
+def extract_message_text(content: object) -> str:
+    """Return user-visible text from a LangChain message content value.
+
+    Providers may return a plain string or a list of typed content blocks.
+    Only ``text`` blocks belong in the rendered answer; reasoning, signatures,
+    tool payloads, and other provider metadata must stay out of the UI.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, (list, tuple)):
+        return "" if content is None else str(content)
+
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+            continue
+        if isinstance(block, dict):
+            block_type = block.get("type")
+            text = block.get("text")
+        else:
+            block_type = getattr(block, "type", None)
+            text = getattr(block, "text", None)
+        if block_type in (None, "text") and isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
 def format_tool_arg_summary(name: str, args: dict, *, max_width: int = 80) -> str:
     """Produce a single-line argument summary for a tool-call header.
 

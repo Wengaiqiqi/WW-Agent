@@ -515,8 +515,15 @@ const truncate = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
 // DOMPurify before assigning to innerHTML; otherwise an attacker-controlled
 // endpoint can stream <img onerror=…> and execute JS in the auth'd session.
 function safeMarkdown(text) {
-  const html = marked.parse(text || "");
-  return window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(text || "");
+  const source = typeof text === "string" ? text : String(text ?? "");
+  try {
+    if (!window.marked || typeof marked.parse !== "function") return escapeHtml(source);
+    const html = marked.parse(source);
+    return window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(source);
+  } catch (err) {
+    console.warn("Markdown rendering failed; falling back to plain text.", err);
+    return escapeHtml(source).replace(/\n/g, "<br>");
+  }
 }
 
 // Wire events

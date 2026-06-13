@@ -13,6 +13,7 @@ import pytest
 
 from agent_display import (
     TOOL_ARG_PRIMARY_KEY,
+    extract_message_text,
     format_tool_arg_summary,
     has_raw_tool_markup,
     is_langgraph_tool_chunk,
@@ -129,3 +130,17 @@ def test_is_not_tool_chunk_for_ai_message():
     class _AIChunk:
         type = "AIMessageChunk"
     assert not is_langgraph_tool_chunk(_AIChunk())
+
+
+def test_extract_message_text_ignores_non_text_content_blocks():
+    class TextBlock:
+        type = "text"
+        text = "second"
+
+    content = [
+        {"type": "thinking", "thinking": "private", "signature": "signed"},
+        {"type": "text", "text": "first"},
+        TextBlock(),
+    ]
+
+    assert extract_message_text(content) == "firstsecond"

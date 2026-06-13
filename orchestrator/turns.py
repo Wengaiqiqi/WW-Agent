@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Callable
 
 from pydantic import BaseModel, Field, ValidationError
 
+from agent_display import extract_message_text
 from orchestrator.delegation import delegate_via_a2a
 from orchestrator.fast_route import fast_route
 from orchestrator.graph import build_graph
@@ -248,7 +249,7 @@ Reply: A transformer is a neural-network architecture that uses self-attention.
 
     def __call__(self, state) -> dict:
         out = self._llm.invoke(self._build_messages(state))
-        return self._parse_decision(str(out.content))
+        return self._parse_decision(extract_message_text(out.content))
 
     async def astream_plan(self, state) -> AsyncIterator[dict[str, Any]]:
         """Stream the planner LLM call, yielding text chunks for prose responses.
@@ -431,7 +432,7 @@ Reply: A transformer is a neural-network architecture that uses self-attention.
                 {"role": "user", "content": prompt},
             ]
         )
-        return str(out.content).strip()
+        return extract_message_text(out.content).strip()
 
 
 def _stub_planner(state):
@@ -447,20 +448,7 @@ def _stub_planner(state):
 
 def _extract_chunk_text(chunk) -> str:
     """Pull the textual content out of a LangChain streaming chunk."""
-    content = getattr(chunk, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(item.get("text", ""))
-            elif item is not None:
-                parts.append(str(item))
-        return "".join(parts)
-    if content is None:
-        return ""
-    return str(content)
+    return extract_message_text(getattr(chunk, "content", None))
 
 
 def extract_text(call_result) -> str:

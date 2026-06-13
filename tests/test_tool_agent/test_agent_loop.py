@@ -67,6 +67,35 @@ async def test_run_consumes_astream_with_async_for():
 
 
 @pytest.mark.asyncio
+async def test_run_extracts_final_text_from_anthropic_content_blocks():
+    blocks = [
+        {
+            "type": "thinking",
+            "thinking": "Internal reasoning must not reach the user.",
+            "signature": "signed",
+            "index": 0,
+        },
+        {"type": "text", "text": "脚本已保存并运行成功。", "index": 1},
+    ]
+    final_msg = AIMessage(content=blocks)
+    agent = _FakeReactAgent(events=[
+        ("messages", (final_msg, {})),
+        ("values", {"messages": [HumanMessage(content="task"), final_msg]}),
+    ])
+
+    loop = ToolAgentLoop(llm=None, tools=[])
+    loop._agent = agent
+
+    events = [event async for event in loop.run("task")]
+
+    assert [e["chunk"] for e in events if e["type"] == "text"] == [
+        "脚本已保存并运行成功。",
+    ]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["text"] == "脚本已保存并运行成功。"
+
+
+@pytest.mark.asyncio
 async def test_run_dedupes_tool_call_and_result_across_values_snapshots():
     """Regression: stream_mode='values' yields the WHOLE message list at every
     state update, so the same tool_call/ToolMessage shows up in N successive

@@ -14,7 +14,11 @@ from typing import Any, AsyncIterator, Callable, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from agent_display import has_raw_tool_markup, is_langgraph_tool_chunk
+from agent_display import (
+    extract_message_text,
+    has_raw_tool_markup,
+    is_langgraph_tool_chunk,
+)
 from prompt_rules import (
     CONCISE_RULE,
     LANGUAGE_RULE,
@@ -463,7 +467,7 @@ class ToolAgentLoop:
 
                     for msg in messages:
                         if isinstance(msg, AIMessage) and msg.content and not getattr(msg, "tool_calls", None):
-                            final_text = str(msg.content)
+                            final_text = extract_message_text(msg.content)
                             terminal_answer_seen = True
 
         except Exception as exc:
@@ -573,15 +577,7 @@ class ToolAgentLoop:
 
     @staticmethod
     def _chunk_text(chunk: object) -> str:
-        content = getattr(chunk, "content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(
-                (item.get("text", "") if isinstance(item, dict) else str(item))
-                for item in content
-            )
-        return str(content or "")
+        return extract_message_text(getattr(chunk, "content", None))
 
 
 def _no_answer_diagnostic(tool_calls_count: int, *, reason: str) -> str:

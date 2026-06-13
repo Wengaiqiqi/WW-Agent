@@ -1,5 +1,6 @@
 # tests/test_orchestrator/test_llm_planner.py
 import pytest
+from types import SimpleNamespace
 
 from orchestrator.turns import LLMPlanner
 from agents.shared.mock_chat_model import MockChatModel
@@ -248,3 +249,42 @@ def test_llm_planner_synthesize_returns_natural_response():
         tool_result='{"type":"text","file":{"filePath":"hello.txt","content":"hello\\n","numLines":1}}',
     )
     assert "hello" in result
+
+
+def test_llm_planner_extracts_text_from_anthropic_content_blocks():
+    blocks = [
+        {
+            "type": "thinking",
+            "thinking": "Internal reasoning must not reach the user.",
+            "signature": "signed",
+            "index": 0,
+        },
+        {"type": "text", "text": "脚本已保存并运行成功。", "index": 1},
+    ]
+
+    class BlockLLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(content=blocks)
+
+    planner = LLMPlanner(llm=BlockLLM(), available_capabilities=["read_file"])
+    decision = planner({"user_input": "你好", "trace_id": "t"})
+
+    assert decision == {
+        "capability": "",
+        "response": "脚本已保存并运行成功。",
+    }
+
+
+def test_llm_planner_synthesize_extracts_text_from_anthropic_content_blocks():
+    blocks = [
+        {"type": "thinking", "thinking": "Private chain of thought", "index": 0},
+        {"type": "text", "text": "文件内容是 hello。", "index": 1},
+    ]
+
+    class BlockLLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(content=blocks)
+
+    planner = LLMPlanner(llm=BlockLLM(), available_capabilities=["read_file"])
+
+    assert planner.synthesize("读取文件", "read_file", "hello") == "文件内容是 hello。"
