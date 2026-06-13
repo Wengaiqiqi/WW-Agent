@@ -272,6 +272,7 @@ class RemoteCommands:
         if not ok:
             return LoopAction.CONTINUE
         self._current_peer = peer_id
+        _persist_peer(peer_id)
         note = data.get("note", "")
         self.ui.render_text(
             title="Peer registered",
