@@ -106,7 +106,7 @@ class GatewayCommands:
             last_lines = read_tail(
                 log_path,
                 platform=platform,  # type: ignore[arg-type]
-                max_lines=8,
+                max_lines=4,
                 max_width=max(20, self.ui.console.width - 4),
             )
             last_sig = sig
@@ -152,7 +152,7 @@ class GatewayCommands:
                 default_index=0,
                 instruction="up/down move - enter run - esc back",
                 footer_lines=_footer,
-                footer_title="Recent log (last 8 lines, filtered)",
+                footer_title="Recent log (last 4 lines, filtered)",
                 footer_refresh_seconds=0.2,
                 footer_empty_message="(no log yet — start the gateway to see activity)",
             )

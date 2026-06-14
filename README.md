@@ -280,16 +280,37 @@ skills/<slug>/
 
 ### 飞书/Lark 机器人
 
-**所需环境变量**：
+通过 `/gateway` → 选择飞书 → **Setup credentials** 进入交互式配置向导。
 
-```bash
-FEISHU_APP_ID=cli_xxxx
-FEISHU_APP_SECRET=your_secret
-FEISHU_VERIFICATION_TOKEN=your_token
-FEISHU_ENCRYPT_KEY=your_key        # 可选，启用消息加密
-```
+#### 第一步：选择连接模式
 
-**启动方式**：
+| 模式 | 说明 |
+|------|------|
+| **ws**（推荐） | WebSocket 长连接，机器人主动连出，无需公网地址 |
+| **webhook** | 飞书将事件 POST 到你的服务器，需要公网可访问的 URL |
+
+#### 第二步：填写凭据
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `app_id` | ✅ | 飞书开放平台的 App ID（`cli_xxxx`） |
+| `app_secret` | ✅ | App Secret |
+| `domain` | ❌ | `open.feishu.cn`（国内）或 `open.larksuite.com`（海外），默认前者 |
+| `allowed_users` | ❌ | 逗号分隔的授权 open_id 列表；留空则无人可用 `/chat` `/task` |
+
+#### Webhook 模式额外字段
+
+仅当连接模式选为 `webhook` 时才需要填写：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `verify_token` | ✅ | 事件订阅的 Verification Token（在飞书开放平台「事件订阅」页面获取） |
+| `encrypt_key` | ❌ | Encrypt Key（留空表示不加密） |
+| `reply_in_thread` | ❌ | 是否在话题中回复（`y`/`n`），默认否 |
+| `host` | ❌ | Webhook 监听地址，默认 `0.0.0.0` |
+| `port` | ❌ | Webhook 监听端口，默认 `8765` |
+
+#### 启动
 
 ```
 ww-agent> /gateway
@@ -302,20 +323,23 @@ ww-agent> /gateway
 python -m gateway feishu --port 8765
 ```
 
-支持 **Webhook** 和 **WebSocket 长连接**两种模式。
-
 ---
 
 ### QQ 官方机器人
 
-**所需环境变量**：
+通过 `/gateway` → 选择 QQ → **Setup credentials** 进入交互式配置向导。
 
-```bash
-QQ_BOT_ID=your_bot_id
-QQ_BOT_TOKEN=your_bot_token
-```
+#### 字段说明
 
-**启动方式**：
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `app_id` | ✅ | QQ 开放平台的 Bot AppID |
+| `client_secret` | ✅ | Bot Client Secret |
+| `intents` | ❌ | Intents 位掩码，**留空使用默认值**即可。默认 = `C2C+Group@+Channel@`（接收私聊、群聊和频道中 @机器人的消息）。仅当需要接收频道私信时才需手动填写 |
+| `sandbox` | ❌ | 是否使用沙箱测试环境（`y`/`n`），**默认 `n`（正式环境）**。除非你在使用腾讯的沙箱测试频道，否则填 `n` |
+| `allowed_users` | ❌ | 逗号分隔的授权 openid 列表；留空则无人可用 `/chat` `/task` |
+
+#### 启动
 
 ```
 ww-agent> /gateway
@@ -340,8 +364,19 @@ python -m gateway qq
 
 ```
 ww-agent> /comm add
-# 输入对端名称和 URL
 ```
+
+会逐项提示填写（Ctrl+C 取消）：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `peer_id` | ✅ | 对端唯一标识，例如 `hermes-server` |
+| `url` | ✅ | 对端地址，例如 `https://8.163.112.21:8443`（优先 https） |
+| `display_name` | | 显示名，留空则同 `peer_id` |
+| `Self-signed certificate?` | | 对端用自签证书才选 `y`，然后填 SHA-256 指纹 |
+| `HMAC secret` | ✅ | 和对端约定的共享密钥（输入时隐藏） |
+
+> **HMAC 密钥不落盘**，只写入当前进程环境变量。注册成功时会提示一条 `export COMM_PEER_<名>_HMAC=<值>`，重启后想免重填就把这条加到 shell profile。
 
 ### 使用远程 Agent
 
@@ -413,6 +448,17 @@ python web/__main__.py
 | 变量 | 说明 |
 |------|------|
 | `TAVILY_API_KEY` | Tavily 搜索引擎（可选，与 DuckDuckGo 并联） |
+
+### 聊天平台（Gateway）
+
+| 变量 | 说明 |
+|------|------|
+| `QQ_APP_ID` | QQ 机器人 AppID（对应配置中的 `app_id`） |
+| `QQ_CLIENT_SECRET` | QQ 机器人 Client Secret（对应配置中的 `client_secret`） |
+| `QQ_INTENTS` | QQ Intents 位掩码（可选，对应配置中的 `intents`） |
+| `QQ_SANDBOX` | 设为 `1` 使用 QQ 沙箱环境（可选，对应配置中的 `sandbox`） |
+
+> 优先从 `/gateway` 交互式配置读取，环境变量仅作为备用。飞书凭据仅通过 `/gateway` 配置，不使用环境变量。
 
 ---
 

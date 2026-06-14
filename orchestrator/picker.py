@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 
 _PICKER_VIEWPORT_ROWS = 18
-_PICKER_FOOTER_ROWS = 8  # number of body rows reserved for the footer pane
+_PICKER_FOOTER_ROWS = 4  # number of body rows reserved for the footer pane
 
 
 def _run_blocking_app(app) -> None:
@@ -220,7 +220,7 @@ def interactive_select(
         Window(content=FormattedTextControl(render_title), height=2),
         Window(
             content=FormattedTextControl(render_body),
-            height=D(preferred=body_height, max=body_height),
+            height=D(preferred=body_height, min=3, max=body_height),
         ),
     ]
 
@@ -243,7 +243,7 @@ def interactive_select(
             windows.append(Window(content=FormattedTextControl(render_footer_title), height=1))
         windows.append(Window(
             content=FormattedTextControl(render_footer_body),
-            height=D(preferred=_PICKER_FOOTER_ROWS, max=_PICKER_FOOTER_ROWS),
+            height=D(preferred=_PICKER_FOOTER_ROWS, min=0, max=_PICKER_FOOTER_ROWS),
         ))
 
     layout = Layout(HSplit(windows))
