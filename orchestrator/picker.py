@@ -220,7 +220,7 @@ def interactive_select(
         Window(content=FormattedTextControl(render_title), height=2),
         Window(
             content=FormattedTextControl(render_body),
-            height=D(preferred=body_height, min=3, max=body_height),
+            height=D(preferred=body_height, min=3, max=max(body_height, 3)),
         ),
     ]
 
