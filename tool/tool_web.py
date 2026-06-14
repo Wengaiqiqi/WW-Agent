@@ -1,8 +1,10 @@
 """
 Web tools: web_search and web_extract.
 
-- ``web_search``  — DuckDuckGo HTML endpoint (no API key required) with an
-  optional Tavily provider when ``TAVILY_API_KEY`` is set.
+- ``web_search``  — Baidu / Startpage (Google proxy) / DuckDuckGo HTML
+  endpoints (no API key required) with an optional Tavily provider when
+  ``TAVILY_API_KEY`` is set.  ``"google"`` is accepted as an alias for
+  ``"startpage"``.  Auto mode tries Baidu first and falls back on CAPTCHA.
 - ``web_extract`` — fetch a URL and return readable plain text (best-effort
   HTML stripping; no JS rendering).
 
@@ -29,11 +31,11 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-# 30s (was 15s): 15s was too tight for users behind cross-border links to
-# duckduckgo.com / tavily.com — the call would routinely time out and the
-# user saw "web_search always fails". 30s still bounds the tool round trip
-# below the orchestrator's status-spinner attention budget.
-_DEFAULT_TIMEOUT = 30
+# 40s (was 30s, was 15s): 15s was too tight for users behind cross-border
+# links to duckduckgo.com / tavily.com; 30s still caused occasional timeouts
+# for Google searches from mainland China.  40s gives enough headroom while
+# still bounding the round trip below the orchestrator's attention budget.
+_DEFAULT_TIMEOUT = 40
 _MAX_BYTES = 2_000_000
 
 
@@ -382,8 +384,121 @@ def _search_tavily(query: str, limit: int, api_key: str) -> List[dict]:
     ]
 
 
+_BAUID_TITLE_RE = re.compile(
+    r'<h3[^>]*class="t[^"]*"[^>]*>(.*?)</h3>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _search_baidu(query: str, limit: int) -> List[dict]:
+    """Scrape Baidu search results. Returns ``[{title, url, snippet}]``.
+
+    Baidu may return a CAPTCHA page when rate-limited — the caller should
+    treat an empty result list as a soft failure and fall back.
+    """
+    url = "https://www.baidu.com/s?" + urllib.parse.urlencode(
+        {"wd": query, "rn": limit, "ie": "utf-8"},
+    )
+    try:
+        body, _ = _http_get(url)
+    except Exception as exc:
+        raise RuntimeError(f"Baidu request failed: {exc}") from exc
+
+    html = _decode(body)
+
+    # Detect CAPTCHA / verification page (typically < 5 KB and contains
+    # "安全验证" or "verify").  Raise so the caller can fall back.
+    if len(body) < 5000 and ("安全验证" in html or "verify" in html.lower()):
+        raise RuntimeError("Baidu returned CAPTCHA page; try another provider")
+
+    results: List[dict] = []
+    for match in _BAUID_TITLE_RE.finditer(html):
+        inner = match.group(1)
+        title = re.sub(r"<[^>]+>", "", inner).strip()
+        if not title:
+            continue
+
+        # Extract URL from the <a> inside the <h3>.
+        href_m = re.search(r'href="(https?://[^"]+)"', inner)
+        link = href_m.group(1) if href_m else ""
+
+        # Walk forward for the snippet (class contains "summary-text").
+        after = html[match.end() : match.end() + 5000]
+        snippet = ""
+        for pat in (
+            r'class="[^"]*summary-text[^"]*"[^>]*>(.*?)</span>',
+            r'class="c-abstract[^"]*"[^>]*>(.*?)</(?:div|p)',
+        ):
+            sm = re.search(pat, after, re.DOTALL)
+            if sm:
+                snippet = re.sub(r"<[^>]+>", "", sm.group(1)).strip()[:200]
+                break
+
+        if not link:
+            continue
+        results.append({"title": title, "url": link, "snippet": snippet})
+        if len(results) >= limit:
+            break
+    return results
+
+
+_STARTPAGE_TITLE_RE = re.compile(
+    r'<h2[^>]*class="wgl-title[^"]*"[^>]*>(.*?)</h2>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _search_startpage(query: str, limit: int) -> List[dict]:
+    """Scrape Startpage (Google proxy) results. Returns ``[{title, url, snippet}]``."""
+    url = "https://www.startpage.com/sp/search?" + urllib.parse.urlencode(
+        {"query": query, "cat": "web"},
+    )
+    try:
+        body, _ = _http_get(url)
+    except Exception as exc:
+        raise RuntimeError(f"Startpage request failed: {exc}") from exc
+
+    html = _decode(body)
+    results: List[dict] = []
+    for match in _STARTPAGE_TITLE_RE.finditer(html):
+        title = _strip_tags(match.group(1)).strip()
+        if not title:
+            continue
+
+        # Walk backwards to find the enclosing <a href="…">.
+        before = html[max(0, match.start() - 2000) : match.start()]
+        href_match = None
+        for hm in re.finditer(
+            r'<a[^>]*href="(https?://[^"]+)"[^>]*>', before
+        ):
+            href_match = hm
+        link = href_match.group(1) if href_match else ""
+
+        # Walk forwards for the first <p>…</p> as the snippet.
+        after = html[match.end() : match.end() + 1000]
+        desc_m = re.search(r"<p[^>]*>(.*?)</p>", after, re.DOTALL)
+        snippet = _strip_tags(desc_m.group(1)).strip() if desc_m else ""
+
+        if not link:
+            continue
+        results.append({"title": title, "url": link, "snippet": snippet})
+        if len(results) >= limit:
+            break
+    return results
+
+
 def web_search(query: str, limit: int = 5, provider: str = "auto") -> dict:
-    """Search the web. ``provider`` is "duckduckgo", "tavily", or "auto"."""
+    """Search the web.
+
+    ``provider`` is "baidu", "startpage", "google", "duckduckgo", "tavily",
+    or "auto".  "google" is an alias for "startpage".
+
+    When ``provider="auto"``, the fallback order is:
+    Tavily (if key set) → Baidu → Startpage → DuckDuckGo.
+    Baidu may trigger CAPTCHA under heavy use; the function automatically
+    falls back to the next provider in the chain.
+    """
+
     query = (query or "").strip()
     if not query:
         return {"success": False, "error": "Empty query."}
@@ -392,29 +507,70 @@ def web_search(query: str, limit: int = 5, provider: str = "auto") -> dict:
     chosen = provider.lower()
     tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
 
+    # Env override: WEB_SEARCH_DEFAULT_PROVIDER forces the default when auto.
+    default_provider = os.getenv("WEB_SEARCH_DEFAULT_PROVIDER", "").strip().lower()
+
+    # "google" is an alias — Startpage proxies Google results.
+    if chosen == "google":
+        chosen = "startpage"
+
+    # Build the candidate list for auto / fallback.
     if chosen == "auto":
-        chosen = "tavily" if tavily_key else "duckduckgo"
+        candidates: list[str] = []
+        if tavily_key:
+            candidates.append("tavily")
+        # Env override puts the specified provider first.
+        if default_provider and default_provider not in candidates:
+            candidates.append(default_provider)
+        for _p in ("baidu", "startpage", "duckduckgo"):
+            if _p not in candidates:
+                candidates.append(_p)
+    else:
+        candidates = [chosen]
 
-    try:
-        if chosen == "tavily":
-            if not tavily_key:
-                return {"success": False, "error": "TAVILY_API_KEY not set."}
-            results = _search_tavily(query, limit, tavily_key)
-        elif chosen == "duckduckgo":
-            results = _search_duckduckgo(query, limit)
-        else:
-            return {"success": False, "error": f"Unknown provider: {provider!r}."}
-    except Exception as exc:
-        retryable, advice = _classify_fetch_failure(exc)
-        return {
-            "success": False,
-            "error": str(exc),
-            "provider": chosen,
-            "retryable": retryable,
-            "advice": advice,
-        }
+    last_exc: Exception | None = None
+    for prov in candidates:
+        try:
+            if prov == "tavily":
+                if not tavily_key:
+                    return {"success": False, "error": "TAVILY_API_KEY not set."}
+                results = _search_tavily(query, limit, tavily_key)
+            elif prov == "baidu":
+                results = _search_baidu(query, limit)
+            elif prov == "startpage":
+                results = _search_startpage(query, limit)
+            elif prov == "duckduckgo":
+                results = _search_duckduckgo(query, limit)
+            else:
+                return {"success": False, "error": f"Unknown provider: {provider!r}."}
+            # If we got results, return immediately.
+            if results:
+                return {"success": True, "provider": prov, "query": query, "results": results}
+            # Empty results — treat as soft failure and try next.
+            last_exc = RuntimeError(f"{prov} returned 0 results")
+        except Exception as exc:
+            last_exc = exc
+            # For explicit (non-auto) requests, fail immediately.
+            if len(candidates) == 1:
+                retryable, advice = _classify_fetch_failure(exc)
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "provider": prov,
+                    "retryable": retryable,
+                    "advice": advice,
+                }
+            # Auto mode — try next provider.
+            continue
 
-    return {"success": True, "provider": chosen, "query": query, "results": results}
+    # All candidates exhausted.
+    return {
+        "success": False,
+        "error": str(last_exc) if last_exc else "All search providers failed",
+        "provider": "auto",
+        "retryable": True,
+        "advice": "All providers failed; retry later.",
+    }
 
 
 # ---------------------------------------------------------------------------

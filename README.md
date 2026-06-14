@@ -184,7 +184,7 @@ export LANGCHAIN_AGENT_MODEL="deepseek/deepseek-chat"
 
 | 工具 | 说明 |
 |------|------|
-| `web_search` | 网络搜索（DuckDuckGo + Tavily 双引擎） |
+| `web_search` | 网络搜索（百度 / Startpage / DuckDuckGo / Tavily 四引擎，自动降级） |
 | `web_extract` | 提取网页正文内容 |
 | `web_crawl` | 深度抓取网页链接树 |
 

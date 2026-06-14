@@ -64,9 +64,15 @@ _OS_PASSTHROUGH = {
     # Python runtime
     "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUTF8",
     "PYTHONUNBUFFERED",
+    # HTTP proxy (Clash/V2Ray etc.) — without these, urllib/httpx in the
+    # subprocess cannot reach external services that require a proxy.
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     # App config (not secrets)
     "LANGCHAIN_AGENT_MODEL", "LANGCHAIN_AGENT_CONFIG_DIR",
     "LANGCHAIN_AGENT_ALLOW_PRIVATE_URLS",
+    # Search engine defaults (not secrets).
+    "WEB_SEARCH_DEFAULT_PROVIDER", "TAVILY_API_KEY",
     # Per-turn custom-endpoint overrides (set by the web UI). BASE_URL/PROTOCOL
     # are not secrets; API_KEY is the one key the user chose for THIS turn and
     # is only present in env while a custom endpoint is active — a deliberate,

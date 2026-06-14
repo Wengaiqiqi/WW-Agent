@@ -218,7 +218,7 @@ def _do_web_search(query: str, limit: int, provider: str) -> str:
 
 async def _wrap_web_search(args: dict) -> Any:
     # ``urllib`` HTTP fetch is fully synchronous and the default timeout is
-    # 30s — running it from this async function blocks every other coroutine
+    # 40s — running it from this async function blocks every other coroutine
     # in the tool-agent process. Offload.
     return await asyncio.to_thread(
         _do_web_search,
@@ -621,8 +621,8 @@ _TOOL_MAP: dict[str, tuple] = {
                 "limit": {"type": "integer", "description": "Max results (1-10, default 5)."},
                 "provider": {
                     "type": "string",
-                    "enum": ["auto", "duckduckgo", "tavily"],
-                    "description": "auto picks Tavily if TAVILY_API_KEY is set, else DuckDuckGo.",
+                    "enum": ["auto", "baidu", "startpage", "google", "duckduckgo", "tavily"],
+                    "description": "auto tries Tavily (if key set) → Baidu → Startpage → DuckDuckGo with automatic fallback.",
                 },
             },
         },

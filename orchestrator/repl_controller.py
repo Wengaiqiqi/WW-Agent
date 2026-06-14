@@ -31,6 +31,9 @@ def _tool_line_text(name: str, args: dict, *, bullet_style: str) -> Text:
     return t
 
 
+_SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 class _PulsingToolLine:
     """A running tool-call line whose bullet visibly throbs.
 
@@ -50,12 +53,16 @@ class _PulsingToolLine:
         self._args = args
 
     def __rich_console__(self, console, options):
-        # ~2 Hz: alternate the bullet between bright and dim each half-second.
-        bright = int(time.monotonic() * 2) % 2 == 0
-        yield _tool_line_text(
-            self._name, self._args,
-            bullet_style="bold green" if bright else "green dim",
-        )
+        # Cycle through braille spinner frames at ~10 fps (refresh is 4 fps,
+        # so we advance 2–3 frames per visible tick — smooth motion).
+        frame = _SPIN_FRAMES[int(time.monotonic() * 10) % len(_SPIN_FRAMES)]
+        summary = format_tool_arg_summary(self._name, self._args)
+        t = Text()
+        t.append(f"{frame} ", style="bold cyan")
+        t.append(self._name, style="bold")
+        if summary:
+            t.append(f"  {summary}", style="dim")
+        yield t
 
 
 def _build_tool_line(name: str, args: dict, *, active: bool):
